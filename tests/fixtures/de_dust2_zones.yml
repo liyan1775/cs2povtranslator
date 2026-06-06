@@ -1,0 +1,48 @@
+map: de_dust2
+version: "1.0.0"
+terms:
+  - aliases: ["A short", "A ramp", "catwalk", "cat"]
+    chinese: "A小道"
+    category: "zone"
+  - aliases: ["A long", "long A", "pit"]
+    chinese: "A大道"
+    category: "zone"
+  - aliases: ["B site", "B bombsite", "B"]
+    chinese: "B包点"
+    category: "bombsite"
+  - aliases: ["mid", "middle", "mid doors"]
+    chinese: "中路"
+    category: "zone"
+  - aliases: ["CT spawn", "CT base"]
+    chinese: "CT家"
+    category: "spawn"
+  - aliases: ["T spawn", "T base"]
+    chinese: "T家"
+    category: "spawn"
+  - aliases: ["A site", "A bombsite", "A"]
+    chinese: "A包点"
+    category: "bombsite"
+  - aliases: ["tunnels", "tuns", "upper tunnels", "upper tuns"]
+    chinese: "B通"
+    category: "zone"
+  - aliases: ["lower tunnels", "lower tuns", "lower B"]
+    chinese: "B下层"
+    category: "zone"
+  - aliases: ["suicide", "suicide ramp"]
+    chinese: "自杀坡"
+    category: "zone"
+  - aliases: ["car", "long car"]
+    chinese: "A大车"
+    category: "landmark"
+  - aliases: ["goose", "A goose", "site goose"]
+    chinese: "A鹅位"
+    category: "position"
+  - aliases: ["ninja", "A ninja"]
+    chinese: "A忍者位"
+    category: "position"
+  - aliases: ["doors", "mid doors"]
+    chinese: "中门"
+    category: "landmark"
+  - aliases: ["window", "mid window", "B window"]
+    chinese: "中窗"
+    category: "landmark"

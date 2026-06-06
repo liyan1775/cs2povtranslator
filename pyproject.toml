@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cs2povtranslator"
+version = "0.1.0"
+description = "CS2 POV subtitle translator: extract CS2 Faceit demo voice comms, transcribe with Whisper, and translate with esports terminology"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Yan Li" }
+]
+keywords = ["cs2", "counter-strike", "pov", "subtitles", "whisper", "translation", "esports"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+dependencies = [
+    "typer[all]>=0.15",
+    "faster-whisper>=1.0",
+    "awpy>=1.0",
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "rich>=13.0",
+    "gitpython>=3.1",
+    "platformdirs>=4.0",
+    "tiktoken>=0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-mock>=3.12",
+    "pytest-asyncio>=0.23",
+    "respx>=0.20",
+    "ruff>=0.3",
+    "mypy>=1.8",
+    "coverage>=7.4",
+]
+
+[project.scripts]
+cs2tl = "cs2tl.cli.main:app"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cs2tl"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

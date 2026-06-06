@@ -1,0 +1,75 @@
+map: de_mirage
+version: "1.0.0"
+terms:
+  - aliases: ["A site", "A bombsite", "A"]
+    chinese: "A包点"
+    category: bombsite
+  - aliases: ["B site", "B bombsite", "B"]
+    chinese: "B包点"
+    category: bombsite
+  - aliases: ["mid", "middle"]
+    chinese: "中路"
+    category: zone
+  - aliases: ["palace", "A palace", "palace A"]
+    chinese: "A宫殿"
+    category: zone
+  - aliases: ["ramp", "A ramp", "A slope"]
+    chinese: "A坡"
+    category: zone
+  - aliases: ["ticket booth", "ticket", "booth A"]
+    chinese: "A售票亭"
+    category: position
+  - aliases: ["firebox", "fire box", "A firebox"]
+    chinese: "A火箱"
+    category: position
+  - aliases: ["triple box", "triple", "triple A"]
+    chinese: "A三箱位"
+    category: position
+  - aliases: ["shadow", "A shadow", "under palace"]
+    chinese: "A宫殿阴影位"
+    category: position
+  - aliases: ["default A", "A default"]
+    chinese: "A默认位"
+    category: position
+  - aliases: ["connector", "conn", "mid connector", "cat"]
+    chinese: "连通道"
+    category: zone
+  - aliases: ["window", "mid window"]
+    chinese: "中窗"
+    category: landmark
+  - aliases: ["short", "B short", "kitchen"]
+    chinese: "B小"
+    category: zone
+  - aliases: ["apartments", "apps", "B apartments", "B apps"]
+    chinese: "B公寓"
+    category: zone
+  - aliases: ["market", "B market"]
+    chinese: "B市场"
+    category: zone
+  - aliases: ["bench", "B bench"]
+    chinese: "B长凳"
+    category: position
+  - aliases: ["underpass", "under"]
+    chinese: "地道"
+    category: zone
+  - aliases: ["ladder room", "ladder"]
+    chinese: "梯房"
+    category: zone
+  - aliases: ["jungle", "jungle A"]
+    chinese: "A丛林"
+    category: zone
+  - aliases: ["stairs", "CT stairs", "A stairs"]
+    chinese: "A楼梯"
+    category: zone
+  - aliases: ["CT spawn", "CT base"]
+    chinese: "CT家"
+    category: spawn
+  - aliases: ["T spawn", "T base"]
+    chinese: "T家"
+    category: spawn
+  - aliases: ["van", "B van"]
+    chinese: "B货车"
+    category: landmark
+  - aliases: ["sniper's nest", "nest", "mid nest"]
+    chinese: "狙击巢"
+    category: position
