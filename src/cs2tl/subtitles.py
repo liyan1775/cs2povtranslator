@@ -75,9 +75,11 @@ def _write_one_srt(path: Path, segments: list, encoding: str) -> None:
 
 
 def _build_srt_content(segments: list) -> str:
-    """Build the full SRT content string from segments."""
+    """Build the full SRT content string from segments.
+
+    Outputs bilingual format: original language on line 1, Chinese on line 2.
+    """
     if not segments:
-        # Empty team — produce a single placeholder entry
         return "1\n00:00:00,000 --> 00:00:01,000\n无语音通讯\n\n"
 
     entries: list[str] = []
@@ -85,9 +87,10 @@ def _build_srt_content(segments: list) -> str:
         player_name = getattr(seg, "player_name", "unknown")
         start = getattr(seg, "start_time", 0.0)
         end = getattr(seg, "end_time", start + 1.0)
-        text = getattr(seg, "translated_text", "") or getattr(seg, "original_text", "")
+        original = getattr(seg, "original_text", "")
+        translated = getattr(seg, "translated_text", "")
 
-        entry = format_srt_entry(i, start, end, player_name, text)
+        entry = format_srt_entry(i, start, end, player_name, original, translated)
         if entry:
             entries.append(entry)
 
@@ -109,25 +112,30 @@ def format_srt_entry(
     start_seconds: float,
     end_seconds: float,
     player_name: str,
-    text: str,
+    original_text: str,
+    translated_text: str,
 ) -> str:
-    """Format a single SRT subtitle entry.
+    """Format a single bilingual SRT subtitle entry.
 
-    Output format:
+    Output format (original language on top, Chinese below):
         1
         00:00:01,500 --> 00:00:03,200
-        donk: 我来架A小
+        donk: let's go A short
+        donk: 走A小
 
-    Args:
-        index: 1-based subtitle index.
-        start_seconds: Start time in seconds.
-        end_seconds: End time in seconds.
-        player_name: Player's in-game name (prefixed before text).
-        text: Translated subtitle text.
-
-    Returns:
-        Formatted SRT entry block.
+    If original and translated are identical (e.g. callsigns / untranslated
+    terms), only one line is emitted to avoid duplication.
     """
     start_ts = format_srt_timestamp(start_seconds)
     end_ts = format_srt_timestamp(end_seconds)
-    return f"{index}\n{start_ts} --> {end_ts}\n{player_name}: {text}\n"
+
+    lines: list[str] = []
+    if original_text:
+        lines.append(f"{player_name}: {original_text}")
+    if translated_text and translated_text != original_text:
+        lines.append(f"{player_name}: {translated_text}")
+
+    if not lines:
+        return ""
+
+    return f"{index}\n{start_ts} --> {end_ts}\n" + "\n".join(lines) + "\n"

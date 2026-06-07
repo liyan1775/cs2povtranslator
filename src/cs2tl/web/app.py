@@ -7,16 +7,28 @@ glossary, and exporting bilingual SRT subtitles.
 Launch via: cs2tl web   (or: python -m cs2tl.web.app)
 """
 
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 
-from cs2tl.web.routes import router
+from cs2tl.web.routes import job_store, router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # noqa: ARG001 — required by FastAPI
+    """Startup: load persisted job history.  Shutdown: no-op (store flushes on every write)."""
+    job_store.load()
+    yield
+
 
 app = FastAPI(
     title="CS2 POV Translator",
-    version="0.1.0",
+    version="0.2.0",
     description="CS2 Faceit demo voice comms → Chinese SRT subtitles",
+    lifespan=lifespan,
 )
 
 app.include_router(router)

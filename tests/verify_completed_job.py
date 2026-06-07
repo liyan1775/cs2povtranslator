@@ -45,8 +45,8 @@ def run():
     print("Verification of completed job:", JOB_ID)
     print("=" * 60)
 
-    # Must register the job in the in-memory _jobs dict
-    from cs2tl.web.routes import _jobs
+    # Register the job via JobStore so the Web UI can find it
+    from cs2tl.web.routes import job_store
     from cs2tl.config import default_cache_dir
     cache_dir = Path(default_cache_dir()) / JOB_ID
 
@@ -68,11 +68,11 @@ def run():
     demos = list(cache_dir.glob("*.dem.zst")) + list(cache_dir.glob("*.dem"))
     demo_path = str(demos[0]) if demos else "unknown"
 
-    _jobs[JOB_ID] = {
-        "demo_path": demo_path,
-        "pid": 0,
-        "cache_dir": str(cache_dir),
-    }
+    job_store.create(
+        demo_name=Path(demo_path).name if demo_path != "unknown" else "unknown.dem",
+        demo_path=demo_path,
+        cache_dir=str(cache_dir),
+    )
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -191,8 +191,7 @@ def run():
         finally:
             browser.close()
 
-    # Clean up the in-memory job
-    _jobs.pop(JOB_ID, None)
+    # Clean up — JobStore persists to disk, but test job is ephemeral
     server.should_exit = True
 
     # ── Summary ─────────────────────────────────────────

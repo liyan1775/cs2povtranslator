@@ -57,6 +57,7 @@ class ExtractionResult:
 
     wav_files: dict[str, Path] = field(default_factory=dict)
     voice_timestamps: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    voice_packet_info: dict[str, list[dict]] = field(default_factory=dict)
     output_dir: Path = Path()
     skipped_frames: int = 0
 
@@ -137,12 +138,15 @@ def run_extraction(
         pcm_buf = (ctypes.c_short * MAX_SAMPLES)()
         wav_files: dict[str, Path] = {}
         timestamps: dict[str, list[tuple[float, float]]] = {}
+        packet_info: dict[str, list[dict]] = {}
         skipped_frames = 0
 
         # 5. Decode per player (D5 decision — skip corrupt frames)
         for sid, packets in by_player.items():
             all_pcm = bytearray()
             player_ts: list[tuple[float, float]] = []
+            player_packets: list[dict] = []
+            wav_offset = 0.0  # cumulative seconds in the WAV
 
             for tick, opus_bytes in packets:
                 raw_buf = (ctypes.c_ubyte * len(opus_bytes))(*opus_bytes)
@@ -163,6 +167,14 @@ def run_extraction(
                     t_sec = tick / TICK_RATE
                     duration = samples / SAMPLE_RATE
                     player_ts.append((round(t_sec, 3), round(t_sec + duration, 3)))
+                    # Track per-packet WAV offset for timestamp alignment later
+                    player_packets.append({
+                        "demo_start": round(t_sec, 3),
+                        "demo_end": round(t_sec + duration, 3),
+                        "wav_offset": round(wav_offset, 3),
+                        "duration": round(duration, 3),
+                    })
+                    wav_offset += duration
                 elif samples < 0:
                     logger.warning(
                         "opus_decode error %d for steam_id=%s at tick=%d — skipping frame",
@@ -180,6 +192,7 @@ def run_extraction(
                     wf.writeframes(all_pcm)
                 wav_files[sid] = wav_path
                 timestamps[sid] = player_ts
+                packet_info[sid] = player_packets
                 logger.debug(
                     "Wrote %s: %d packets, %.2fs of audio",
                     wav_path.name, len(packets),
@@ -202,6 +215,7 @@ def run_extraction(
         return ExtractionResult(
             wav_files=wav_files,
             voice_timestamps=timestamps,
+            voice_packet_info=packet_info,
             output_dir=output_dir,
             skipped_frames=skipped_frames,
         )

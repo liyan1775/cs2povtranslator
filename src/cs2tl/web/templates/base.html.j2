@@ -206,19 +206,60 @@
       min-height: 80px;
       margin-bottom: var(--space-sm);
     }
+
+    /* Settings */
+    .settings-section {
+      background: var(--color-bg-secondary);
+      padding: var(--space-lg);
+      border-radius: var(--radius-md);
+      margin-bottom: var(--space-lg);
+    }
+    .settings-section h3 {
+      margin-top: 0;
+      margin-bottom: var(--space-md);
+    }
+    .settings-section .hint {
+      color: var(--color-text-secondary);
+      font-size: 0.85em;
+      margin-top: var(--space-sm);
+    }
+    .settings-section label {
+      display: block;
+      margin-bottom: var(--space-xs);
+      font-weight: 600;
+      font-size: 0.9em;
+    }
+    .settings-section input,
+    .settings-section select,
+    .settings-section textarea {
+      width: 100%;
+      margin-bottom: var(--space-sm);
+    }
+    .save-success {
+      color: var(--color-success);
+      padding: var(--space-sm);
+      font-weight: 600;
+    }
+    .save-error {
+      color: var(--color-accent);
+      padding: var(--space-sm);
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
   <nav class="tabs" role="tablist">
     <a href="/import" role="tab" {% if active_tab == 'import' %}class="active"{% endif %}>📥 导入</a>
-    {% if job_id %}
-    <a href="/preview/{{ job_id }}" role="tab" {% if active_tab == 'preview' %}class="active"{% endif %}>💬 预览</a>
-    <a href="/export/{{ job_id }}" role="tab" {% if active_tab == 'export' %}class="active"{% endif %}>📤 导出</a>
+    {% set nav_job_id = job_id if job_id else last_job_id %}
+    {% if nav_job_id %}
+    <a href="/preview/{{ nav_job_id }}" role="tab" {% if active_tab == 'preview' %}class="active"{% endif %}>💬 预览</a>
+    <a href="/export/{{ nav_job_id }}" role="tab" {% if active_tab == 'export' %}class="active"{% endif %}>📤 导出</a>
     {% else %}
     <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">💬 预览</a>
     <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">📤 导出</a>
     {% endif %}
     <a href="/glossary" role="tab" {% if active_tab == 'glossary' %}class="active"{% endif %}>📖 词典</a>
+    <a href="/settings" role="tab" {% if active_tab == 'settings' %}class="active"{% endif %}>⚙️ 设置</a>
   </nav>
   <main>
     {% block content %}{% endblock %}

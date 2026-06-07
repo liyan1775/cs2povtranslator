@@ -11,52 +11,61 @@
          style="width: 100%; max-width: 400px;">
 </div>
 
-<!-- Term table -->
+<!-- Term table (grouped by map) -->
 <div id="term-table">
-  {% if terms %}
-  <table>
-    <thead>
-      <tr>
-        <th>英文术语</th>
-        <th>中文翻译</th>
-        <th>分类</th>
-        <th>来源</th>
-        <th>别名</th>
-        <th style="width:60px;">操作</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for term in terms %}
-      <tr id="term-{{ loop.index0 }}">
-        <td><strong>{{ term.en }}</strong></td>
-        <td>{{ term.zh }}</td>
-        <td><span class="badge badge-{{ term.category }}">{{ term.category }}</span></td>
-        <td style="color:var(--color-text-secondary);font-size:0.85em;">
-          {% if term.source == 'user' %}✏️ 用户{% else %}{{ term.source }}{% endif %}
-        </td>
-        <td style="color:var(--color-text-secondary);font-size:0.9em;">{{ term.aliases | join(', ') }}</td>
-        <td>
-          {% if term.source == 'user' %}
-          <button hx-delete="/glossary/delete/{{ loop.index0 }}"
-                  hx-target="#term-{{ loop.index0 }}" hx-swap="outerHTML"
-                  hx-confirm="确定删除 '{{ term.en }}'？"
-                  style="background:transparent;color:var(--color-accent);">🗑</button>
-          {% else %}
-          <span style="color:var(--color-text-secondary);font-size:0.8em;" title="系统术语不可删除">🔒</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  <p style="color:var(--color-text-secondary);font-size:0.9em;">
-    共 {{ total }} 个术语
-    （系统词典：{{ terms | selectattr('source', 'ne', 'user') | list | length }} 个，
-    用户添加：{{ terms | selectattr('source', 'eq', 'user') | list | length }} 个）
-    {% if not terms|selectattr('source', 'eq', 'user')|list %}
-    <br>💡 系统术语（🔒）来自地图词典，不可删除。你可以新增自己的术语。
-    {% endif %}
-  </p>
+  {% if grouped_terms %}
+    {% for group_name, group_terms in grouped_terms %}
+    <details open style="margin-bottom:var(--space-lg);">
+      <summary style="cursor:pointer;font-weight:600;padding:var(--space-sm) 0;font-size:1.05em;">
+        {% if group_name == 'user' %}
+          ✏️ 用户自定义
+        {% elif group_name == '其他' %}
+          📁 其他
+        {% else %}
+          🗺️ {{ group_name }}
+        {% endif %}
+        <span style="color:var(--color-text-secondary);font-weight:400;">
+          · {{ group_terms|length }} 个术语
+        </span>
+      </summary>
+      <table style="margin-top:var(--space-sm);">
+        <thead>
+          <tr>
+            <th>英文术语</th>
+            <th>中文翻译</th>
+            <th>分类</th>
+            <th>别名</th>
+            <th style="width:60px;">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for term in group_terms %}
+          {# Use a unique ID: group_index + term_index #}
+          <tr id="term-{{ term._flat_idx }}">
+            <td><strong>{{ term.en }}</strong></td>
+            <td>{{ term.zh }}</td>
+            <td><span class="badge badge-{{ term.category }}">{{ term.category }}</span></td>
+            <td style="color:var(--color-text-secondary);font-size:0.9em;">{{ term.aliases | join(', ') }}</td>
+            <td>
+              {% if term.source == 'user' %}
+              <button hx-delete="/glossary/delete/{{ term._flat_idx }}"
+                      hx-target="#term-{{ term._flat_idx }}" hx-swap="outerHTML"
+                      hx-confirm="确定删除 '{{ term.en }}'？"
+                      style="background:transparent;color:var(--color-accent);">🗑</button>
+              {% else %}
+              <span style="color:var(--color-text-secondary);font-size:0.8em;" title="系统术语不可删除">🔒</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endfor %}
+
+    <p style="color:var(--color-text-secondary);font-size:0.9em;">
+      共 {{ total }} 个术语 · {{ grouped_terms|length }} 个分组
+    </p>
   {% else %}
   <div class="empty-state">
     {% if search %}

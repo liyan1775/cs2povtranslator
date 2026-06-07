@@ -4,24 +4,33 @@
   import → progress → preview + edit → glossary CRUD → export
 
 Uses HTMX for partial updates (progress polling, message lazy-load,
-inline editing, glossary CRUD). All state is file-based (progress.json,
-translated.jsonl, glossary YAML) — no database.
+inline editing, glossary CRUD).  Job state is persisted to
+~/.cs2tl/jobs.json via JobStore — survives server restarts.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 import threading
 import uuid
 from pathlib import Path
 
+import yaml
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader
 
-from cs2tl.config import default_cache_dir, default_dictionary_dir
+from cs2tl.config import (
+    AppConfig,
+    default_cache_dir,
+    default_dictionary_dir,
+    load_config,
+)
+from cs2tl.web.job_store import JobStatus, JobStore
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +45,10 @@ def _render(template_name: str, context: dict) -> HTMLResponse:
     template = _JINJA_ENV.get_template(template_name)
     return HTMLResponse(template.render(context))
 
-# In-memory job registry: {job_id: {demo_path, pid, cache_dir}}
-# v0.1: single-user, in-memory is fine. v0.2: consider SQLite or file-based.
-_jobs: dict[str, dict] = {}
+
+# Job registry — file-backed, survives restarts.
+# Call job_store.load() once at startup (handled by app lifespan).
+job_store = JobStore()
 
 # Total pipeline stages (matches CLI's 7-stage pipeline)
 TOTAL_STAGES = 7
@@ -53,6 +63,106 @@ STAGE_LABELS = {
     "subtitles": "生成字幕",
 }
 
+# Settings constants
+VALID_WHISPER_MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3"]
+VALID_LLM_PROVIDERS = ["openai", "anthropic", "openrouter"]
+PROMPT_TEMPLATE_PATH = Path.home() / ".cs2tl" / "prompt.txt"
+MAX_PROMPT_BYTES = 100_000  # ~100KB
+
+
+# ---------------------------------------------------------------------------
+# Config persistence helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_current_config() -> AppConfig:
+    """Read current config from disk.
+
+    On failure, logs a warning and returns defaults — the settings page
+    will show a warning banner so the user knows the config is unreadable.
+    """
+    try:
+        return load_config()
+    except Exception as e:
+        logger.warning("Cannot load config, falling back to defaults: %s", e)
+        return AppConfig()
+
+
+def _save_config(
+    whisper_model: str,
+    whisper_device: str,
+    llm_provider: str,
+    llm_api_key: str,
+    llm_model: str,
+    llm_base_url: str,
+) -> None:
+    """Atomically write config to ~/.cs2tl/config.yml.
+
+    Preserves existing ``api_key`` when the user leaves the field blank.
+    Uses tempfile + os.replace() for atomicity — same pattern as JobStore.
+    """
+    config_path = Path.home() / ".cs2tl" / "config.yml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    existing: dict = {}
+    if config_path.exists():
+        try:
+            existing = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            logger.warning("Existing config is unreadable — starting fresh")
+
+    # Preserve existing api_key if user left it blank (masked in UI)
+    if not llm_api_key.strip():
+        llm_api_key = existing.get("llm", {}).get("api_key", "")
+
+    data: dict = {
+        "whisper": {"model": whisper_model, "device": whisper_device},
+        "llm": {
+            "provider": llm_provider,
+            "api_key": llm_api_key,
+            "model": llm_model,
+        },
+    }
+    if llm_base_url.strip():
+        data["llm"]["base_url"] = llm_base_url.strip()
+
+    # Deep-merge with existing to preserve keys we don't manage (e.g. dictionaries)
+    merged = {**existing, **data}
+
+    # Atomic write: temp file → os.replace()
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        suffix=".yml", prefix="config-", dir=str(config_path.parent)
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            yaml.dump(merged, f, allow_unicode=True, default_flow_style=False)
+        os.replace(tmp_path, config_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _load_prompt_template() -> str:
+    """Read ~/.cs2tl/prompt.txt, falling back to the hardcoded default."""
+    if PROMPT_TEMPLATE_PATH.exists():
+        try:
+            return PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+        except Exception as e:
+            logger.warning("Cannot read prompt template, using default: %s", e)
+    from cs2tl.translator import DEFAULT_PROMPT_TEMPLATE
+    return DEFAULT_PROMPT_TEMPLATE
+
+
+def _save_prompt_template(template: str) -> None:
+    """Write prompt template to disk (atomic — temp + rename)."""
+    PROMPT_TEMPLATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = PROMPT_TEMPLATE_PATH.with_suffix(".txt.tmp")
+    tmp_path.write_text(template, encoding="utf-8")
+    os.replace(tmp_path, PROMPT_TEMPLATE_PATH)
+
 
 # ---------------------------------------------------------------------------
 # Route 1-2: Import page
@@ -66,12 +176,16 @@ async def index():
 
 @router.get("/import", response_class=HTMLResponse)
 async def import_page(request: Request):
-    """Import page — the starting point. No empty state needed."""
-    return _render("import.html.j2", {
+    """Import page — upload form at top, job history below."""
+    jobs = job_store.list_all()
+    response = _render("import.html.j2", {
         "request": request,
         "active_tab": "import",
         "job_id": None,
+        "jobs": jobs,
+        "last_job_id": request.cookies.get("last_job_id"),
     })
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -104,18 +218,17 @@ async def start_pipeline(demo: UploadFile = Form(...)):
     logger.info("Job %s: saved demo to %s (%d bytes)", job_id, demo_path, len(content))
 
     # Quick parse: extract player info for the first relief point
-    # (fast — only reads demo header, not the full voice data)
     demo_info = _quick_parse_demo_info(str(demo_path))
 
-    # Launch pipeline in a background thread (v0.1 single-user:
-    # simpler than subprocess — no PATH issues, no path mismatch).
+    # Register the job (CREATED), then transition to RUNNING
     output_dir = cache_dir / "subtitles"
-    _jobs[job_id] = {
-        "demo_path": str(demo_path),
-        "pid": 0,  # no subprocess
-        "cache_dir": str(cache_dir),
-        "demo_info": demo_info,
-    }
+    job_store.create(
+        demo_name=demo.filename,
+        demo_path=str(demo_path),
+        cache_dir=str(cache_dir),
+        demo_info=demo_info,
+        job_id=job_id,
+    )
 
     thread = threading.Thread(
         target=_run_pipeline,
@@ -123,6 +236,7 @@ async def start_pipeline(demo: UploadFile = Form(...)):
         daemon=True,
     )
     thread.start()
+    job_store.start(job_id)
 
     logger.info("Job %s: started pipeline thread for %s", job_id, demo.filename)
 
@@ -136,15 +250,23 @@ async def start_pipeline(demo: UploadFile = Form(...)):
 @router.get("/progress/{job_id}", response_class=HTMLResponse)
 async def progress_page(request: Request, job_id: str):
     """Progress page — 7-stage checklist with HTMX polling every 5 seconds."""
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         raise HTTPException(404, "任务不存在或已过期")
 
-    return _render("progress.html.j2", {
+    response = _render("progress.html.j2", {
         "request": request,
         "active_tab": "progress",
         "job_id": job_id,
-        "demo_info": _jobs[job_id].get("demo_info"),
+        "demo_info": {
+            "player_count": job.player_count,
+            "team_2": job.team_2_names,
+            "team_3": job.team_3_names,
+            "filename": job.demo_name,
+        } if job.player_count else None,
     })
+    response.set_cookie("last_job_id", job_id, max_age=3600 * 24 * 30)
+    return response
 
 
 @router.get("/progress/{job_id}/status", response_class=HTMLResponse)
@@ -155,12 +277,13 @@ async def progress_status(job_id: str):
     checklist. When the pipeline completes or errors, includes an HX-Trigger
     header so the frontend can auto-redirect.
     """
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         return HTMLResponse(
             '<div id="progress-panel" class="error">任务不存在或已过期</div>'
         )
 
-    cache_dir = Path(_jobs[job_id]["cache_dir"])
+    cache_dir = Path(job.cache_dir)
     progress_file = cache_dir / "progress.json"
 
     if not progress_file.exists():
@@ -257,12 +380,17 @@ async def preview_page(
         offset: starting message index
         limit:  messages per batch (default 50)
     """
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         raise HTTPException(404, "任务不存在")
 
-    cache_dir = Path(_jobs[job_id]["cache_dir"])
-    demo_name = Path(_jobs[job_id]["demo_path"]).stem
-    translated_file = cache_dir / f"{demo_name}.translated.jsonl"
+    cache_dir = Path(job.cache_dir)
+    demo_name = Path(job.demo_path).stem
+
+    # Prefer edited file if it exists (Bug 3 fix)
+    edited_file = cache_dir / "translated_edited.jsonl"
+    original_file = cache_dir / f"{demo_name}.translated.jsonl"
+    translated_file = edited_file if edited_file.exists() else original_file
 
     segments = _load_translated(translated_file, team)
     total = len(segments)
@@ -271,7 +399,11 @@ async def preview_page(
 
     is_htmx = request.headers.get("HX-Request") == "true"
     if is_htmx:
-        return HTMLResponse(_render_messages(batch))
+        # Bug 2 fix: include load-more sentinel so infinite scroll works
+        html = _render_messages(batch)
+        if has_more:
+            html += _render_load_more_sentinel(job_id, team, offset + limit, limit)
+        return HTMLResponse(html)
 
     # Count by team for the sidebar
     team_2_count = sum(
@@ -281,7 +413,7 @@ async def preview_page(
         1 for s in _load_translated(translated_file, "3")
     )
 
-    return _render("preview.html.j2", {
+    response = _render("preview.html.j2", {
         "request": request,
         "active_tab": "preview",
         "job_id": job_id,
@@ -293,6 +425,9 @@ async def preview_page(
         "team_2_count": team_2_count,
         "team_3_count": team_3_count,
     })
+    # Bug 5: persist last job_id so nav tabs work after visiting glossary
+    response.set_cookie("last_job_id", job_id, max_age=3600 * 24 * 30)
+    return response
 
 
 @router.post("/preview/{job_id}/edit/{seg_index}", response_class=HTMLResponse)
@@ -306,17 +441,18 @@ async def edit_segment(
     Writes the edit to a separate edited.jsonl file. Export reads edited
     versions preferentially.
     """
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         raise HTTPException(404)
 
-    cache_dir = Path(_jobs[job_id]["cache_dir"])
+    cache_dir = Path(job.cache_dir)
+    demo_name = Path(job.demo_path).stem
     edited_file = cache_dir / "translated_edited.jsonl"
-
-    # Read all segments, update the target, write back
-    demo_name = Path(_jobs[job_id]["demo_path"]).stem
     original_file = cache_dir / f"{demo_name}.translated.jsonl"
 
-    all_segs = _read_all_segments(original_file)
+    # Read from edited file if it exists (cumulative edits)
+    source_file = edited_file if edited_file.exists() else original_file
+    all_segs = _read_all_segments(source_file)
     if seg_index < 0 or seg_index >= len(all_segs):
         raise HTTPException(404, "片段不存在")
 
@@ -341,7 +477,7 @@ async def edit_segment(
 
 @router.get("/glossary", response_class=HTMLResponse)
 async def glossary_page(request: Request, search: str = ""):
-    """Glossary CRUD page (D10 decision — full CRUD editor)."""
+    """Glossary CRUD page — terms grouped by map with collapsible sections."""
     terms = _load_glossary_terms()
     if search:
         q = search.lower()
@@ -349,13 +485,33 @@ async def glossary_page(request: Request, search: str = ""):
             t for t in terms
             if q in t.get("en", "").lower() or q in t.get("zh", "")
         ]
+
+    # Group terms by source (map name or "user")
+    from collections import OrderedDict
+    grouped: dict[str, list] = OrderedDict()
+    for flat_idx, t in enumerate(terms):
+        src = t.get("source", "") or "其他"
+        t["_flat_idx"] = flat_idx  # for delete route compatibility
+        grouped.setdefault(src, []).append(t)
+
+    # Sort: system maps first (alphabetical), "user" / "其他" last
+    tail_keys = {"user", "其他"}
+    map_groups = sorted(
+        [(k, v) for k, v in grouped.items() if k not in tail_keys],
+        key=lambda x: x[0],
+    )
+    for tk in ("user", "其他"):
+        if tk in grouped:
+            map_groups.append((tk, grouped[tk]))
+
     return _render("glossary.html.j2", {
         "request": request,
         "active_tab": "glossary",
         "job_id": None,
-        "terms": terms,
+        "grouped_terms": map_groups,
         "search": search,
         "total": len(terms),
+        "last_job_id": request.cookies.get("last_job_id"),
     })
 
 
@@ -474,17 +630,120 @@ async def glossary_save():
 
 
 # ---------------------------------------------------------------------------
-# Route 13-14: Export page + SRT download
+# Route 13-14: Settings page
+# ---------------------------------------------------------------------------
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    """Settings page — Whisper model, LLM config, translation prompt."""
+    config = _load_current_config()
+    prompt_template = _load_prompt_template()
+    config_error = _detect_config_error(config)
+
+    return _render("settings.html.j2", {
+        "request": request,
+        "active_tab": "settings",
+        "job_id": None,
+        "last_job_id": request.cookies.get("last_job_id"),
+        "whisper_model": config.whisper.model,
+        "whisper_device": config.whisper.device,
+        "llm_provider": config.llm.provider,
+        "llm_model": config.llm.model,
+        "llm_base_url": config.llm.base_url or "",
+        "prompt_template": prompt_template,
+        "prompt_is_custom": PROMPT_TEMPLATE_PATH.exists(),
+        "valid_whisper_models": VALID_WHISPER_MODELS,
+        "valid_llm_providers": VALID_LLM_PROVIDERS,
+        "config_error": config_error,
+    })
+
+
+@router.post("/settings", response_class=HTMLResponse)
+async def settings_save(
+    request: Request,
+    whisper_model: str = Form(...),
+    whisper_device: str = Form("auto"),
+    llm_provider: str = Form(...),
+    llm_api_key: str = Form(""),
+    llm_model: str = Form(...),
+    llm_base_url: str = Form(""),
+    prompt_template: str = Form(...),
+    action: str = Form("save"),
+):
+    """Save settings to ~/.cs2tl/config.yml and ~/.cs2tl/prompt.txt."""
+    import html
+
+    # "reset" action: delete custom prompt, fall back to default
+    if action == "reset_prompt":
+        try:
+            if PROMPT_TEMPLATE_PATH.exists():
+                PROMPT_TEMPLATE_PATH.unlink()
+            from cs2tl.translator import DEFAULT_PROMPT_TEMPLATE
+            return HTMLResponse(
+                '<div class="save-success">✅ 已恢复默认提示词</div>'
+                f'<textarea name="prompt_template" style="display:none;">{html.escape(DEFAULT_PROMPT_TEMPLATE)}</textarea>'
+            )
+        except Exception as e:
+            return HTMLResponse(
+                f'<div class="save-error">❌ 恢复失败：{html.escape(str(e))}</div>'
+            )
+
+    # Validate prompt template
+    stripped = prompt_template.strip()
+    if not stripped:
+        return HTMLResponse(
+            '<div class="save-error">❌ 提示词不能为空。如需恢复默认，请点击"恢复默认"按钮。</div>'
+        )
+    if len(prompt_template.encode("utf-8")) > MAX_PROMPT_BYTES:
+        return HTMLResponse(
+            f'<div class="save-error">❌ 提示词过长（最大 {MAX_PROMPT_BYTES // 1000}KB）。请精简后重试。</div>'
+        )
+
+    # Validate placeholders
+    required_placeholders = ["{voice_lines}"]
+    missing = [p for p in required_placeholders if p not in prompt_template]
+    if missing:
+        return HTMLResponse(
+            f'<div class="save-error">❌ 提示词缺少必要占位符：{", ".join(missing)}</div>'
+        )
+
+    try:
+        _save_config(
+            whisper_model, whisper_device,
+            llm_provider, llm_api_key, llm_model, llm_base_url,
+        )
+        _save_prompt_template(prompt_template)
+        return HTMLResponse('<div class="save-success">✅ 设置已保存</div>')
+    except Exception as e:
+        logger.error("Failed to save settings: %s", e)
+        return HTMLResponse(
+            f'<div class="save-error">❌ 保存失败：{html.escape(str(e))}</div>'
+        )
+
+
+def _detect_config_error(config: AppConfig) -> str | None:
+    """Return a warning message if the config looks like a failed fallback."""
+    if config.llm.provider == "openai" and config.llm.model == "gpt-4o" and not config.llm.api_key:
+        # These are the pydantic defaults — config might be unreadable
+        config_path = Path.home() / ".cs2tl" / "config.yml"
+        if config_path.exists():
+            return "⚠️ 配置文件可能已损坏，当前显示的是默认值。请检查后重新保存。"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Route 15-16: Export page + SRT download
 # ---------------------------------------------------------------------------
 
 @router.get("/export/{job_id}", response_class=HTMLResponse)
 async def export_page(request: Request, job_id: str):
     """Export page — third relief point. Shows stats summary + download buttons."""
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         raise HTTPException(404, "任务不存在")
 
-    cache_dir = Path(_jobs[job_id]["cache_dir"])
-    demo_name = Path(_jobs[job_id]["demo_path"]).stem
+    cache_dir = Path(job.cache_dir)
+    demo_name = Path(job.demo_path).stem
     edited_file = cache_dir / "translated_edited.jsonl"
     original_file = cache_dir / f"{demo_name}.translated.jsonl"
 
@@ -519,22 +778,25 @@ async def export_page(request: Request, job_id: str):
         "preview": _build_srt_preview(source_file) if source_file.exists() else "",
     }
 
-    return _render("export.html.j2", {
+    response = _render("export.html.j2", {
         "request": request,
         "active_tab": "export",
         "job_id": job_id,
         "stats": stats,
     })
+    response.set_cookie("last_job_id", job_id, max_age=3600 * 24 * 30)
+    return response
 
 
 @router.get("/export/{job_id}/download/{team}", response_class=FileResponse)
 async def download_srt(job_id: str, team: str):
     """Download the SRT file for a specific team."""
-    if job_id not in _jobs:
+    job = job_store.get(job_id)
+    if job is None:
         raise HTTPException(404, "任务不存在")
 
-    cache_dir = Path(_jobs[job_id]["cache_dir"])
-    demo_name = Path(_jobs[job_id]["demo_path"]).stem
+    cache_dir = Path(job.cache_dir)
+    demo_name = Path(job.demo_path).stem
     srt_dir = cache_dir / "subtitles"
     srt_path = srt_dir / f"{demo_name}.team_{team}.srt"
 
@@ -596,6 +858,13 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
         )
         write_progress("transcribe", 2, f"转录完成，共 {len(partial_segs)} 段")
 
+        # Align Whisper's WAV-relative timestamps → demo-relative (Bug 4 fix)
+        if extraction.voice_packet_info:
+            partial_segs = _align_transcriber_timestamps(
+                partial_segs, extraction.voice_packet_info
+            )
+            logger.info("Aligned %d segments to demo timestamps", len(partial_segs))
+
         # Stage 3: Dictionary
         write_progress("dictionary", 2, "正在加载词典...")
         from cs2tl.dictionary import DictionaryManager
@@ -637,6 +906,9 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
         write_progress("translate", 5, "正在 LLM 翻译...")
         from cs2tl.translator import translate_all
         translated_cache = cache / f"{demo.stem}.translated.jsonl"
+        # Use custom prompt template if the user has saved one
+        custom_prompt = _load_prompt_template() if PROMPT_TEMPLATE_PATH.exists() else None
+
         translated = translate_all(
             segments=partial_segs,
             players=players,
@@ -646,7 +918,7 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
             llm_config=config.llm,
             target_language="zh",
             no_dictionary=False,
-            prompt_template=None,
+            prompt_template=custom_prompt,
             cache_path=translated_cache,
             dry_run=False,
         )
@@ -661,6 +933,11 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
         logger.info("Job %s: pipeline complete — %d segments, %d SRT files",
                      job_id, len(translated), len(srt_files))
 
+        try:
+            job_store.complete(job_id)
+        except (KeyError, ValueError) as e:
+            logger.warning("Job %s: failed to mark complete — %s", job_id, e)
+
     except Exception as e:
         logger.error("Job %s: pipeline failed — %s", job_id, e)
         # Try to write error progress — stage may not be set
@@ -668,6 +945,10 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
             write_progress("translate", 5, str(e)[:100], error=str(e))
         except Exception:
             pass
+        try:
+            job_store.fail(job_id, str(e)[:200])
+        except (KeyError, ValueError) as exc:
+            logger.warning("Job %s: failed to mark failed — %s", job_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +992,18 @@ def _render_messages(segments: list[dict]) -> str:
     return "\n".join(
         _render_one_message(seg, seg.get("_index", i))
         for i, seg in enumerate(segments)
+    )
+
+
+def _render_load_more_sentinel(job_id: str, team: str, offset: int, limit: int) -> str:
+    """Render the HTMX sentinel div for infinite scroll lazy loading."""
+    return (
+        f'\n<div hx-get="/preview/{job_id}?team={team}&offset={offset}&limit={limit}"'
+        f'\n     hx-trigger="revealed"'
+        f'\n     hx-swap="outerHTML"'
+        f'\n     style="text-align:center;padding:var(--space-md);color:var(--color-text-secondary);">'
+        f'\n  加载更多消息...'
+        f'\n</div>'
     )
 
 
@@ -904,19 +1197,23 @@ def _render_glossary_row(term: dict, index: int) -> str:
 
 
 def _build_srt_preview(jsonl_path: Path) -> str:
-    """Build a preview of the first 20 SRT entries."""
+    """Build a bilingual preview of the first 20 SRT entries."""
     segments = _read_all_segments(jsonl_path)[:20]
     lines = []
     for i, seg in enumerate(segments):
         player = seg.get("player_name", "unknown")
-        text = seg.get("translated_text", "") or seg.get("original_text", "")
+        original = seg.get("original_text", "")
+        translated = seg.get("translated_text", "")
         start = seg.get("start_time", 0)
         end = seg.get("end_time", start + 2.0)
         lines.append(f"{i + 1}")
-        lines.append(
-            f"{_format_ts(start)} --> {_format_ts(end)}"
-        )
-        lines.append(f"{player}: {text}")
+        lines.append(f"{_format_ts(start)} --> {_format_ts(end)}")
+        if original:
+            lines.append(f"{player}: {original}")
+        if translated and translated != original:
+            lines.append(f"{player}: {translated}")
+        if not original and not translated:
+            lines.append(f"{player}: ...")
         lines.append("")
     return "\n".join(lines)
 
@@ -929,6 +1226,68 @@ def _format_ts(seconds: float) -> str:
     whole = int(s)
     ms = int((s - whole) * 1000)
     return f"{h:02d}:{m:02d}:{whole:02d},{ms:03d}"
+
+
+def _align_transcriber_timestamps(
+    partial_segs: list,
+    voice_packet_info: dict[str, list[dict]],
+) -> list:
+    """Map Whisper's WAV-relative timestamps back to demo-relative time.
+
+    The transcriber sees concatenated voice packets as one WAV file, so its
+    timestamps are relative to WAV start (0:00).  Real demo timestamps come
+    from the extractor's per-packet ``voice_packet_info`` which records the
+    (demo_start, wav_offset, duration) of every decoded opus frame.
+
+    Algorithm:
+      For each segment, find the voice packet whose WAV range contains the
+      segment's ``start_time``, then apply:
+          offset = packet.demo_start - packet.wav_offset
+          segment.start_time += offset
+          segment.end_time   += offset
+
+    Segments that don't fall cleanly into any packet (edge cases like VAD
+    splitting a phrase across packet boundaries) are snapped to the nearest
+    packet — we use the packet whose WAV range overlaps the segment's start.
+    """
+    if not voice_packet_info:
+        return list(partial_segs)
+
+    aligned = []
+    for seg in partial_segs:
+        sid = getattr(seg, "steam_id", "")
+        packets = voice_packet_info.get(sid, [])
+        if not packets:
+            aligned.append(seg)
+            continue
+
+        wav_start = getattr(seg, "start_time", 0.0)
+        wav_end = getattr(seg, "end_time", wav_start + 1.0)
+
+        # Find the packet whose WAV range covers wav_start
+        best_pkt = None
+        for pkt in packets:
+            pkt_wav_end = pkt["wav_offset"] + pkt["duration"]
+            if pkt["wav_offset"] <= wav_start < pkt_wav_end + 0.05:
+                best_pkt = pkt
+                break
+
+        if best_pkt is None:
+            # Fallback: snap to the chronologically closest packet
+            if packets:
+                best_pkt = min(
+                    packets,
+                    key=lambda p: abs(p["wav_offset"] - wav_start),
+                )
+
+        if best_pkt is not None:
+            offset = best_pkt["demo_start"] - best_pkt["wav_offset"]
+            seg.start_time = round(wav_start + offset, 3)
+            seg.end_time = round(wav_end + offset, 3)
+
+        aligned.append(seg)
+
+    return aligned
 
 
 def _quick_parse_demo_info(demo_path: str) -> dict | None:

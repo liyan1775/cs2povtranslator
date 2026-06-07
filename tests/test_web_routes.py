@@ -307,7 +307,7 @@ class TestGlossaryCRUD:
 
     def test_delete_term(self):
         """DELETE /glossary/delete/0 → removes term."""
-        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": []}]
+        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "user"}]
         with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms), \
              patch("cs2tl.web.routes._save_glossary_terms") as mock_save:
             response = client.delete("/glossary/delete/0")
@@ -322,7 +322,7 @@ class TestGlossaryCRUD:
 
     def test_update_term(self):
         """POST /glossary/update/0 → updates zh."""
-        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": []}]
+        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "user"}]
         with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms), \
              patch("cs2tl.web.routes._save_glossary_terms") as mock_save:
             response = client.post(
@@ -353,7 +353,114 @@ class TestGlossarySave:
 
 
 # ---------------------------------------------------------------------------
-# Route 13-14: Export page + SRT download
+# Route 13-14: Settings page
+# ---------------------------------------------------------------------------
+
+class TestSettingsPage:
+    def test_settings_page_renders(self):
+        """GET /settings → 200 with form fields."""
+        with patch("cs2tl.web.routes._load_current_config") as mock_cfg, \
+             patch("cs2tl.web.routes._load_prompt_template", return_value="test prompt"):
+            from cs2tl.config import AppConfig
+            mock_cfg.return_value = AppConfig()
+            response = client.get("/settings")
+            assert response.status_code == 200
+            assert "设置" in response.text
+            assert "whisper_model" in response.text
+
+    def test_settings_page_has_nav(self):
+        """Settings page has nav tabs and settings form."""
+        with patch("cs2tl.web.routes._load_current_config") as mock_cfg, \
+             patch("cs2tl.web.routes._load_prompt_template", return_value="test"):
+            from cs2tl.config import AppConfig
+            mock_cfg.return_value = AppConfig()
+            response = client.get("/settings")
+            assert "⚙️" in response.text or "设置" in response.text
+
+    def test_save_settings_writes_config(self):
+        """POST /settings → saves config and prompt."""
+        with patch("cs2tl.web.routes._save_config") as mock_save_cfg, \
+             patch("cs2tl.web.routes._save_prompt_template") as mock_save_prompt:
+            response = client.post(
+                "/settings",
+                data={
+                    "whisper_model": "tiny",
+                    "whisper_device": "cpu",
+                    "llm_provider": "openai",
+                    "llm_api_key": "",
+                    "llm_model": "deepseek-chat",
+                    "llm_base_url": "https://api.deepseek.com/v1",
+                    "prompt_template": "test {voice_lines}",
+                    "action": "save",
+                },
+            )
+        assert response.status_code == 200
+        assert "已保存" in response.text
+        mock_save_cfg.assert_called_once()
+        mock_save_prompt.assert_called_once()
+
+    def test_save_rejects_empty_prompt(self):
+        """POST /settings → rejects empty prompt template."""
+        response = client.post(
+            "/settings",
+            data={
+                "whisper_model": "tiny",
+                "whisper_device": "auto",
+                "llm_provider": "openai",
+                "llm_api_key": "",
+                "llm_model": "gpt-4o",
+                "llm_base_url": "",
+                "prompt_template": "   ",
+                "action": "save",
+            },
+        )
+        assert response.status_code == 200
+        assert "不能为空" in response.text
+
+    def test_save_rejects_missing_placeholder(self):
+        """POST /settings → rejects prompt without {voice_lines}."""
+        with patch("cs2tl.web.routes._save_config"), \
+             patch("cs2tl.web.routes._save_prompt_template"):
+            response = client.post(
+                "/settings",
+                data={
+                    "whisper_model": "tiny",
+                    "whisper_device": "auto",
+                    "llm_provider": "openai",
+                    "llm_api_key": "",
+                    "llm_model": "gpt-4o",
+                    "llm_base_url": "",
+                    "prompt_template": "no placeholder here",
+                    "action": "save",
+                },
+            )
+        assert response.status_code == 200
+        assert "voice_lines" in response.text
+
+    def test_reset_prompt_deletes_file(self):
+        """POST /settings with action=reset_prompt → deletes custom prompt."""
+        with patch("cs2tl.web.routes.PROMPT_TEMPLATE_PATH") as mock_path:
+            mock_path.exists.return_value = True
+            response = client.post(
+                "/settings",
+                data={
+                    "whisper_model": "tiny",
+                    "whisper_device": "auto",
+                    "llm_provider": "openai",
+                    "llm_api_key": "",
+                    "llm_model": "gpt-4o",
+                    "llm_base_url": "",
+                    "prompt_template": "test",
+                    "action": "reset_prompt",
+                },
+            )
+        assert response.status_code == 200
+        assert "已恢复默认" in response.text
+        mock_path.unlink.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Route 15-16: Export page + SRT download
 # ---------------------------------------------------------------------------
 
 class TestExportPage:
@@ -402,7 +509,8 @@ class TestDownloadSrt:
         srt_dir.mkdir(parents=True)
 
         # Match the demo_name.stem pattern used in download_srt route
-        demo_name = Path(_routes_module._jobs[job_id]["demo_path"]).stem
+        job = _routes_module.job_store.get(job_id)
+        demo_name = Path(job.demo_path).stem
         srt_path = srt_dir / f"{demo_name}.team_2.srt"
         srt_path.write_text("1\n00:00:01,000 --> 00:00:03,000\ntest\n", encoding="utf-8")
 
@@ -441,37 +549,41 @@ class TestErrorHandling:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_jobs_fake: dict[str, dict] = {}
-
-# Import the module's _jobs dict so we can inject fake jobs
+# Import the module's job_store so tests can inspect state
 import cs2tl.web.routes as _routes_module
 
 
 def _register_fake_job() -> str:
-    """Register a fake job and return its ID."""
+    """Register a fake job via JobStore and return its ID."""
     import uuid
     job_id = uuid.uuid4().hex[:8]
     cache_dir = Path(_routes_module.default_cache_dir()) / job_id
     cache_dir.mkdir(parents=True, exist_ok=True)
-    _routes_module._jobs[job_id] = {
-        "demo_path": str(cache_dir / "test.dem"),
-        "pid": 0,
-        "cache_dir": str(cache_dir),
-    }
+    demo_path = cache_dir / "test.dem"
+    demo_path.write_text("fake demo")
+    _routes_module.job_store.create(
+        demo_name="test.dem",
+        demo_path=str(demo_path),
+        cache_dir=str(cache_dir),
+        job_id=job_id,
+    )
     return job_id
 
 
 def _register_fake_job_with_dir() -> tuple[str, Path]:
-    """Register a fake job and return (job_id, cache_dir)."""
+    """Register a fake job via JobStore and return (job_id, cache_dir)."""
     import uuid
     job_id = uuid.uuid4().hex[:8]
     cache_dir = Path(_routes_module.default_cache_dir()) / job_id
     cache_dir.mkdir(parents=True, exist_ok=True)
-    _routes_module._jobs[job_id] = {
-        "demo_path": str(cache_dir / "test.dem"),
-        "pid": 0,
-        "cache_dir": str(cache_dir),
-    }
+    demo_path = cache_dir / "test.dem"
+    demo_path.write_text("fake demo")
+    _routes_module.job_store.create(
+        demo_name="test.dem",
+        demo_path=str(demo_path),
+        cache_dir=str(cache_dir),
+        job_id=job_id,
+    )
     return job_id, cache_dir
 
 

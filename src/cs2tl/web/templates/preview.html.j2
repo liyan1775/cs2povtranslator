@@ -6,11 +6,13 @@
   <aside class="team-sidebar">
     <button hx-get="/preview/{{ job_id }}?team=2&offset=0&limit=50"
             hx-target="#message-flow" hx-swap="innerHTML"
+            onclick="document.querySelectorAll('.team-sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');"
             class="{% if team == '2' %}active{% endif %}">
       Team 2<br><small>{{ team_2_count }} 条</small>
     </button>
     <button hx-get="/preview/{{ job_id }}?team=3&offset=0&limit=50"
             hx-target="#message-flow" hx-swap="innerHTML"
+            onclick="document.querySelectorAll('.team-sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');"
             class="{% if team == '3' %}active{% endif %}">
       Team 3<br><small>{{ team_3_count }} 条</small>
     </button>
