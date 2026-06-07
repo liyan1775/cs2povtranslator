@@ -36,6 +36,7 @@ from cs2tl.round_detector import (
 from cs2tl.subtitles import write_srt
 from cs2tl.transcriber import transcribe_all
 from cs2tl.translator import translate_all
+from cs2tl.voice_aligner import align_segments
 
 console = Console()
 
@@ -46,7 +47,7 @@ KNOWN_MAPS = {
     "de_train", "de_cache", "de_cbble",
 }
 
-VALID_STAGES = {"extract", "transcribe", "dictionary", "rounds", "players", "translate", "subtitles"}
+VALID_STAGES = {"extract", "transcribe", "align", "dictionary", "rounds", "players", "translate", "subtitles"}
 
 
 def translate_cmd(
@@ -138,7 +139,21 @@ def translate_cmd(
                 exit_with_error(e)
             progress.remove_task(task)
 
-        # Stage 3: Dictionary
+        # Stage 3: Align timestamps (fix compacted-WAV times → real demo times)
+        if should_run("align"):
+            task = progress.add_task("Aligning voice timestamps...", total=None)
+            try:
+                partial_segs = align_segments(partial_segs, demo)
+                last_time = max((getattr(s, "end_time", 0) for s in partial_segs), default=0)
+                progress.update(
+                    task,
+                    description=f"Aligned {len(partial_segs)} segments across {last_time:.0f}s",
+                )
+            except Exception as e:
+                console.print(f"[yellow]Timestamp alignment failed: {e}[/yellow]")
+            progress.remove_task(task)
+
+        # Stage 4: Dictionary
         if should_run("dictionary"):
             task = progress.add_task("Loading dictionaries...", total=None)
             try:
@@ -248,7 +263,7 @@ def translate_cmd(
 
 def _stage_runner(from_stage: str | None, to_stage: str | None):
     """Return a function that checks whether a given stage should run."""
-    stages = ["extract", "transcribe", "dictionary", "rounds", "players", "translate", "subtitles"]
+    stages = ["extract", "transcribe", "align", "dictionary", "rounds", "players", "translate", "subtitles"]
 
     start_idx = stages.index(from_stage) if from_stage else 0
     end_idx = stages.index(to_stage) + 1 if to_stage else len(stages)
