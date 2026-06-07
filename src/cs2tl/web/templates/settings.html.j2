@@ -12,7 +12,7 @@
 
   <!-- ── Whisper ── -->
   <div class="settings-section">
-    <h3>🎙️ Whisper 语音识别模型</h3>
+    <h3>Whisper 语音识别模型</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
       <div>
         <label for="whisper_model">模型大小</label>
@@ -32,14 +32,14 @@
       </div>
     </div>
     <p class="hint">
-      💡 模型首次使用时自动从 HuggingFace 下载。越大的模型准确率越高，但速度越慢、占用内存越多。
+      模型首次使用时自动从 HuggingFace 下载。越大的模型准确率越高，但速度越慢、占用内存越多。
       <strong>tiny</strong> 适合低配机器，<strong>base</strong> 平衡速度和准确率，<strong>large-v3</strong> 效果最好。
     </p>
   </div>
 
   <!-- ── LLM ── -->
   <div class="settings-section">
-    <h3>🤖 LLM 翻译配置</h3>
+    <h3>LLM 翻译配置</h3>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
       <div>
         <label for="llm_provider">提供商</label>
@@ -70,14 +70,14 @@
       </div>
     </div>
     <p class="hint">
-      💡 使用 DeepSeek：提供商选 <strong>openai</strong>，Base URL 填 <code>https://api.deepseek.com/v1</code>，模型填 <code>deepseek-chat</code>。
+      使用 DeepSeek：提供商选 <strong>openai</strong>，Base URL 填 <code>https://api.deepseek.com/v1</code>，模型填 <code>deepseek-chat</code>。
       API Key 留空则保持已有密钥不变。
     </p>
   </div>
 
   <!-- ── Prompt ── -->
   <div class="settings-section">
-    <h3>📝 翻译提示词模板</h3>
+    <h3>翻译提示词模板</h3>
     <textarea name="prompt_template" id="prompt_template" rows="16"
               style="font-family:var(--font-mono);font-size:0.85em;"
     >{{ prompt_template }}</textarea>
@@ -95,7 +95,7 @@
               hx-swap="outerHTML"
               style="background:var(--color-bg-primary);color:var(--color-text-secondary);font-size:0.85em;"
               {% if not prompt_is_custom %}disabled style="opacity:0.4;cursor:default;"{% endif %}>
-        🔄 恢复默认提示词
+        恢复默认提示词
       </button>
       {% if not prompt_is_custom %}
       <span style="color:var(--color-text-secondary);font-size:0.8em;align-self:center;">当前使用默认提示词</span>
