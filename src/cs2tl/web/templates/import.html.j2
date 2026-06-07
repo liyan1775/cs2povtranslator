@@ -18,6 +18,27 @@
   </button>
 </form>
 
+<script>
+(function(){
+  const zone = document.querySelector('.upload-zone');
+  const input = zone.querySelector('input[type=file]');
+  const nameEl = zone.querySelector('.file-name');
+  ['dragenter','dragover','dragleave','drop'].forEach(ev => {
+    zone.addEventListener(ev, e => { e.preventDefault(); e.stopPropagation(); });
+  });
+  ['dragenter','dragover'].forEach(ev => {
+    zone.addEventListener(ev, () => zone.style.borderColor = 'var(--color-accent)');
+  });
+  ['dragleave','drop'].forEach(ev => {
+    zone.addEventListener(ev, () => zone.style.borderColor = '');
+  });
+  zone.addEventListener('drop', e => {
+    const files = e.dataTransfer.files;
+    if (files.length) { input.files = files; nameEl.textContent = files[0].name; }
+  });
+})();
+</script>
+
 <div style="margin-top: var(--space-xl); padding: var(--space-lg); background: var(--color-bg-secondary); border-radius: var(--radius-md);">
   <h3 style="margin-top: 0;">📋 使用说明</h3>
   <ol style="color: var(--color-text-secondary); line-height: 2;">
