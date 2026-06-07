@@ -83,6 +83,16 @@ def no_voice_data(demo_path: str) -> CS2tlError:
     )
 
 
+def opus_decoder_failed(detail: str) -> CS2tlError:
+    return CS2tlError(
+        code="E1-0004",
+        message="Opus audio decoder initialization failed",
+        cause=f"pyogg/libopus could not create a decoder: {detail}",
+        fix="Verify that pyogg is correctly installed. On CPU-only machines, try: "
+        "pip install --force-reinstall pyogg",
+    )
+
+
 # ---------------------------------------------------------------------------
 # E2 — Transcriber
 # ---------------------------------------------------------------------------

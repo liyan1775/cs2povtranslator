@@ -9,6 +9,7 @@ Respects --from/--to-stage for partial re-runs.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import sys
 from pathlib import Path
@@ -36,7 +37,6 @@ from cs2tl.round_detector import (
 from cs2tl.subtitles import write_srt
 from cs2tl.transcriber import transcribe_all
 from cs2tl.translator import translate_all
-from cs2tl.voice_aligner import align_segments
 
 console = Console()
 
@@ -47,7 +47,7 @@ KNOWN_MAPS = {
     "de_train", "de_cache", "de_cbble",
 }
 
-VALID_STAGES = {"extract", "transcribe", "align", "dictionary", "rounds", "players", "translate", "subtitles"}
+VALID_STAGES = {"extract", "transcribe", "dictionary", "rounds", "players", "translate", "subtitles"}
 
 
 def translate_cmd(
@@ -64,6 +64,10 @@ def translate_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="Estimate cost without calling LLM API"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress non-error output"),
+    machine_readable: bool = typer.Option(
+        False, "--machine-readable", hidden=True,
+        help="Write progress.json for Web UI consumption",
+    ),
 ) -> None:
     """Translate CS2 Faceit demo voice comms into Chinese SRT subtitles."""
     _setup_logging(verbose, quiet)
@@ -89,6 +93,10 @@ def translate_cmd(
     cache_dir = Path(config.cache_dir) / demo_name
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # When --machine-readable, write progress.json next to the demo file
+    # so the Web UI can find it (the Web saves demos to job-specific dirs).
+    progress_dir = demo.parent if machine_readable else cache_dir
+
     output_dir = output
     voices_dir = cache_dir / "voices"
     transcribed_cache = cache_dir / f"{demo_name}.transcribed.jsonl"
@@ -105,9 +113,13 @@ def translate_cmd(
                 extraction = run_extraction(demo, voices_dir)
                 wav_files = extraction.wav_files
                 progress.update(task, description=f"Extracted {len(wav_files)} voice files")
+                if machine_readable:
+                    _write_progress("extract", 1, 7, f"已提取 {len(wav_files)} 名玩家语音", cache_dir=progress_dir)
             except CS2tlError as e:
                 if e.code == "E1-0003":
                     # P1-4: Zero voice = exit 0 (valid result, not an error)
+                    if machine_readable:
+                        _write_progress("extract", 1, 7, e.message, error=e.message, cache_dir=progress_dir)
                     console.print(f"[yellow]{e.message}[/yellow]")
                     console.print(e.fix)
                     raise typer.Exit(0)
@@ -135,25 +147,15 @@ def translate_cmd(
                     partial_segs = load_cached_transcript(transcribed_cache)
                     console.print(f"Loaded {len(partial_segs)} segments from transcription cache")
                 progress.update(task, description=f"Transcribed {len(partial_segs)} segments")
+                if machine_readable:
+                    _write_progress("transcribe", 2, 7, f"转录完成，共 {len(partial_segs)} 段", cache_dir=progress_dir)
             except CS2tlError as e:
+                if machine_readable:
+                    _write_progress("transcribe", 2, 7, e.message, error=e.message, cache_dir=progress_dir)
                 exit_with_error(e)
             progress.remove_task(task)
 
-        # Stage 3: Align timestamps (fix compacted-WAV times → real demo times)
-        if should_run("align"):
-            task = progress.add_task("Aligning voice timestamps...", total=None)
-            try:
-                partial_segs = align_segments(partial_segs, demo)
-                last_time = max((getattr(s, "end_time", 0) for s in partial_segs), default=0)
-                progress.update(
-                    task,
-                    description=f"Aligned {len(partial_segs)} segments across {last_time:.0f}s",
-                )
-            except Exception as e:
-                console.print(f"[yellow]Timestamp alignment failed: {e}[/yellow]")
-            progress.remove_task(task)
-
-        # Stage 4: Dictionary
+        # Stage 3: Dictionary
         if should_run("dictionary"):
             task = progress.add_task("Loading dictionaries...", total=None)
             try:
@@ -163,6 +165,8 @@ def translate_cmd(
                 )
                 dict_mgr.load_all()
                 progress.update(task, description=f"Loaded dictionaries: {', '.join(dict_mgr.list_maps())}")
+                if machine_readable:
+                    _write_progress("dictionary", 3, 7, "词典加载完成", cache_dir=progress_dir)
             except CS2tlError as e:
                 if not no_dictionary:
                     console.print(f"[yellow]Dictionary warning: {e.message}[/yellow]")
@@ -180,6 +184,8 @@ def translate_cmd(
                     console.print(f"[yellow]{w}[/yellow]")
                 partial_segs = annotated_segs
                 progress.update(task, description=f"Detected {len(rounds)} rounds (offset: {clock_offset:.2f}s)")
+                if machine_readable:
+                    _write_progress("rounds", 4, 7, f"识别 {len(rounds)} 个回合", cache_dir=progress_dir)
             except CS2tlError as e:
                 console.print(f"[yellow]{e.message}[/yellow]")
                 rounds = []
@@ -189,7 +195,7 @@ def translate_cmd(
         if should_run("players"):
             task = progress.add_task("Resolving player names...", total=None)
             try:
-                players = resolve_players(demo, wav_files)
+                players = resolve_players(demo, list(wav_files.keys()))
                 # Attach team info to segments
                 for seg in partial_segs:
                     pid = players.get(getattr(seg, "steam_id", ""))
@@ -199,6 +205,8 @@ def translate_cmd(
                     task,
                     description=f"Resolved {len(players)} players",
                 )
+                if machine_readable:
+                    _write_progress("players", 5, 7, f"识别 {len(players)} 名球员", cache_dir=progress_dir)
             except CS2tlError as e:
                 console.print(f"[yellow]{e.message}[/yellow]")
                 players = {}
@@ -237,7 +245,11 @@ def translate_cmd(
                     progress.update(task, description=f"Dry run complete: {len(partial_segs)} segments (no API calls)")
                 else:
                     progress.update(task, description=f"Translated {len(translated)} segments")
+                if machine_readable:
+                    _write_progress("translate", 6, 7, f"翻译完成，共 {len(translated) if not dry_run else len(partial_segs)} 条", cache_dir=progress_dir)
             except CS2tlError as e:
+                if machine_readable:
+                    _write_progress("translate", 6, 7, e.message, error=e.message, cache_dir=progress_dir)
                 exit_with_error(e)
             progress.remove_task(task)
 
@@ -250,10 +262,14 @@ def translate_cmd(
                 try:
                     srt_files = write_srt(translated, output_dir, demo_name)
                     progress.update(task, description="SRT files written")
+                    if machine_readable:
+                        _write_progress("subtitles", 7, 7, "字幕已生成，共 {} 个文件".format(len(srt_files)), cache_dir=progress_dir)
                     console.print(f"\n[green]Done! {len(srt_files)} SRT file(s) written to {output_dir}/[/green]")
                     for team, path in srt_files.items():
                         console.print(f"  {path.name} ({team} team)")
                 except CS2tlError as e:
+                    if machine_readable:
+                        _write_progress("subtitles", 7, 7, e.message, error=e.message, cache_dir=progress_dir)
                     exit_with_error(e)
                 progress.remove_task(task)
 
@@ -263,7 +279,7 @@ def translate_cmd(
 
 def _stage_runner(from_stage: str | None, to_stage: str | None):
     """Return a function that checks whether a given stage should run."""
-    stages = ["extract", "transcribe", "align", "dictionary", "rounds", "players", "translate", "subtitles"]
+    stages = ["extract", "transcribe", "dictionary", "rounds", "players", "translate", "subtitles"]
 
     start_idx = stages.index(from_stage) if from_stage else 0
     end_idx = stages.index(to_stage) + 1 if to_stage else len(stages)
@@ -306,4 +322,31 @@ def _setup_logging(verbose: bool, quiet: bool) -> None:
     logging.basicConfig(
         level=level,
         format="%(levelname)s %(name)s: %(message)s",
+    )
+
+
+def _write_progress(
+    stage: str,
+    done: int,
+    total: int,
+    desc: str,
+    error: str | None = None,
+    cache_dir: Path | None = None,
+) -> None:
+    """Write progress.json for Web UI consumption (--machine-readable mode).
+
+    Only writes when cache_dir is provided (set by --machine-readable flag).
+    The file is overwritten each call so the Web UI always sees the latest state.
+    """
+    if cache_dir is None:
+        return
+    progress = {
+        "stage": stage,
+        "done": done,
+        "total": total,
+        "stage_desc": desc,
+        "error": error,
+    }
+    (cache_dir / "progress.json").write_text(
+        json.dumps(progress, ensure_ascii=False), encoding="utf-8"
     )

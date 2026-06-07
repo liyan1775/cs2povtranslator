@@ -11,7 +11,6 @@ from rich.console import Console
 from rich.table import Table
 
 from cs2tl.errors import CS2tlError
-from cs2tl.extractor import check_binary
 
 
 def doctor_cmd(verbose: bool = False) -> int:
@@ -52,7 +51,7 @@ def doctor_cmd(verbose: bool = False) -> int:
 def _run_checks(verbose: bool) -> list[tuple[str, str, str, str]]:
     return [
         _check_python_version(),
-        _check_csgove(),
+        _check_demoparser2(),
         _check_whisper(),
         _check_awpy(),
         _check_openai(),
@@ -72,16 +71,17 @@ def _check_python_version() -> tuple[str, str, str, str]:
     )
 
 
-def _check_csgove() -> tuple[str, str, str, str]:
-    bin_path = check_binary("csgove")
-    if bin_path:
-        return ("PASS", "csgo-voice-extractor", str(bin_path), "")
-    return (
-        "FAIL",
-        "csgo-voice-extractor",
-        "Not found on PATH",
-        "Download: https://github.com/akiver/csgo-voice-extractor/releases/latest",
-    )
+def _check_demoparser2() -> tuple[str, str, str, str]:
+    """Check that demoparser2 + pyogg are installed (replaces csgove in v0.1)."""
+    try:
+        importlib.import_module("demoparser2")
+    except ImportError:
+        return ("FAIL", "demoparser2", "Not installed", "Run: pip install demoparser2")
+    try:
+        importlib.import_module("pyogg")
+        return ("PASS", "demoparser2 + pyogg", "Installed (voice extraction)", "")
+    except ImportError:
+        return ("FAIL", "pyogg", "Not installed", "Run: pip install pyogg")
 
 
 def _check_whisper() -> tuple[str, str, str, str]:

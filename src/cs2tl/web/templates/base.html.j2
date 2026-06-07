@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CS2 POV Translator</title>
+  <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+  <style>
+    :root {
+      --color-bg-primary: #1a1a2e;
+      --color-bg-secondary: #16213e;
+      --color-accent: #e94560;
+      --color-accent-secondary: #0f3460;
+      --color-text-primary: #eaeaea;
+      --color-text-secondary: #a0a0b0;
+      --color-border: #2a2a4a;
+      --color-success: #4ade80;
+      --font-body: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+      --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      --space-xs: 4px; --space-sm: 8px; --space-md: 16px;
+      --space-lg: 24px; --space-xl: 32px;
+      --radius-sm: 4px; --radius-md: 8px;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: var(--font-body);
+      background: var(--color-bg-primary);
+      color: var(--color-text-primary);
+      margin: 0;
+      min-width: 1024px;
+      line-height: 1.6;
+    }
+    a { color: var(--color-accent); }
+
+    /* Navigation tabs */
+    nav.tabs {
+      display: flex;
+      background: var(--color-bg-secondary);
+      border-bottom: 1px solid var(--color-border);
+      padding: 0 var(--space-lg);
+    }
+    nav.tabs a {
+      color: var(--color-text-secondary);
+      text-decoration: none;
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 2px solid transparent;
+      font-size: 0.95em;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav.tabs a:hover { color: var(--color-text-primary); }
+    nav.tabs a.active {
+      color: var(--color-accent);
+      border-bottom-color: var(--color-accent);
+    }
+
+    /* Main content */
+    main {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: var(--space-lg);
+    }
+
+    /* Common components */
+    button, .btn {
+      display: inline-block;
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-accent);
+      color: white;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: var(--font-body);
+      font-size: 0.95em;
+      cursor: pointer;
+      min-height: 44px;
+      min-width: 44px;
+      text-decoration: none;
+    }
+    button:hover, .btn:hover { opacity: 0.9; }
+    button:focus-visible, .btn:focus-visible, a:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    input, textarea, select {
+      font-family: var(--font-body);
+      font-size: 0.95em;
+      padding: var(--space-sm) var(--space-md);
+      background: var(--color-bg-secondary);
+      color: var(--color-text-primary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius-sm);
+      min-height: 44px;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--color-accent);
+      outline: none;
+    }
+
+    /* Empty states */
+    .empty-state {
+      text-align: center;
+      padding: var(--space-xl);
+      color: var(--color-text-secondary);
+    }
+
+    /* Progress stages */
+    .stage-list { list-style: none; padding: 0; }
+    .stage-list li {
+      padding: var(--space-sm) var(--space-md);
+      margin-bottom: var(--space-xs);
+      border-radius: var(--radius-sm);
+    }
+    .stage-done { color: var(--color-success); }
+    .stage-current { color: var(--color-text-primary); background: var(--color-bg-secondary); }
+    .stage-pending { color: var(--color-text-secondary); }
+    .stage-error { color: var(--color-accent); }
+    .stage-error-detail { color: var(--color-accent); padding: var(--space-md); }
+    .stage-error-detail .hint { color: var(--color-text-secondary); font-size: 0.9em; }
+    .stage-detail { color: var(--color-text-secondary); font-size: 0.85em; margin-left: var(--space-md); }
+
+    /* Chat messages */
+    .chat-message {
+      padding: var(--space-sm) var(--space-md);
+      margin-bottom: var(--space-sm);
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .chat-message:hover { background: var(--color-bg-secondary); }
+    .chat-message.selected { background: var(--color-accent-secondary); }
+    .msg-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      margin-bottom: var(--space-xs);
+    }
+    .msg-player { font-weight: 600; color: var(--color-accent); }
+    .msg-time { color: var(--color-text-secondary); font-size: 0.85em; font-family: var(--font-mono); }
+    .msg-original { color: var(--color-text-secondary); font-size: 0.85em; margin-bottom: var(--space-xs); }
+    .msg-translated { color: var(--color-text-primary); }
+    .edited-mark { font-size: 0.8em; }
+
+    /* Glossary table */
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      text-align: left;
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--color-border);
+    }
+    th { color: var(--color-text-secondary); font-weight: 600; font-size: 0.85em; }
+    tr:hover { background: var(--color-bg-secondary); }
+
+    /* Stats card */
+    .stats-card {
+      background: var(--color-bg-secondary);
+      padding: var(--space-lg);
+      border-radius: var(--radius-md);
+    }
+    .stats-card ul { list-style: none; padding: 0; }
+    .stats-card li { padding: var(--space-xs) 0; }
+
+    /* File upload drop zone */
+    .upload-zone {
+      padding: var(--space-xl);
+      border: 2px dashed var(--color-border);
+      border-radius: var(--radius-md);
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .upload-zone:hover { border-color: var(--color-accent); }
+
+    /* Preview layout */
+    .preview-grid {
+      display: grid;
+      grid-template-columns: 150px 1fr 320px;
+      gap: var(--space-lg);
+      height: calc(100vh - 140px);
+    }
+    .team-sidebar button {
+      display: block;
+      width: 100%;
+      margin-bottom: var(--space-sm);
+      background: var(--color-bg-secondary);
+      text-align: left;
+      padding: var(--space-md);
+      border-radius: var(--radius-sm);
+    }
+    .team-sidebar button.active {
+      background: var(--color-accent);
+    }
+    .message-flow {
+      overflow-y: auto;
+      border-left: 1px solid var(--color-border);
+      border-right: 1px solid var(--color-border);
+      padding: 0 var(--space-md);
+    }
+    .edit-panel {
+      background: var(--color-bg-secondary);
+      padding: var(--space-md);
+      border-radius: var(--radius-md);
+    }
+    .edit-panel textarea {
+      width: 100%;
+      min-height: 80px;
+      margin-bottom: var(--space-sm);
+    }
+  </style>
+</head>
+<body>
+  <nav class="tabs" role="tablist">
+    <a href="/import" role="tab" {% if active_tab == 'import' %}class="active"{% endif %}>📥 导入</a>
+    {% if job_id %}
+    <a href="/preview/{{ job_id }}" role="tab" {% if active_tab == 'preview' %}class="active"{% endif %}>💬 预览</a>
+    <a href="/export/{{ job_id }}" role="tab" {% if active_tab == 'export' %}class="active"{% endif %}>📤 导出</a>
+    {% else %}
+    <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">💬 预览</a>
+    <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">📤 导出</a>
+    {% endif %}
+    <a href="/glossary" role="tab" {% if active_tab == 'glossary' %}class="active"{% endif %}>📖 词典</a>
+  </nav>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    function openEditor(index, el) {
+      document.querySelectorAll('.chat-message').forEach(m => m.classList.remove('selected'));
+      el.classList.add('selected');
+      const panel = document.getElementById('edit-panel');
+      if (!panel) return;
+      panel.style.display = 'block';
+      const seg = document.getElementById('msg-' + index);
+      const orig = seg?.querySelector('.msg-original')?.textContent || '';
+      const trans = seg?.querySelector('.msg-translated')?.textContent || '';
+      panel.querySelector('#edit-original').textContent = orig;
+      panel.querySelector('#edit-translated').value = trans;
+      panel.querySelector('#edit-form').setAttribute('hx-post', '/preview/{{ job_id }}/edit/' + index);
+      panel.querySelector('#edit-form').setAttribute('hx-target', '#msg-' + index);
+    }
+  </script>
+</body>
+</html>

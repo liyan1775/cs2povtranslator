@@ -1,0 +1,36 @@
+{% extends "base.html.j2" %}
+{% block content %}
+<h1>导入 Demo</h1>
+<p style="color: var(--color-text-secondary);">支持 Faceit / 社区服务器 CS2 demo（.dem 或 .dem.zst）</p>
+
+<form action="/import" method="post" enctype="multipart/form-data">
+  <label class="upload-zone">
+    <input type="file" name="demo" accept=".dem,.dem.zst" required
+           style="display: block; width: 100%;"
+           onchange="this.parentElement.querySelector('.file-name').textContent = this.files[0]?.name || '点击选择文件或拖拽到此处'">
+    <span class="file-name" style="display:block;margin-top:var(--space-md);color:var(--color-text-secondary);">
+      点击选择文件或拖拽到此处
+    </span>
+  </label>
+
+  <button type="submit" style="margin-top: var(--space-lg); padding: var(--space-md) var(--space-xl); font-size: 1.1em;">
+    开始翻译
+  </button>
+</form>
+
+<div style="margin-top: var(--space-xl); padding: var(--space-lg); background: var(--color-bg-secondary); border-radius: var(--radius-md);">
+  <h3 style="margin-top: 0;">📋 使用说明</h3>
+  <ol style="color: var(--color-text-secondary); line-height: 2;">
+    <li>选择 CS2 demo 文件（.dem 或 .dem.zst）</li>
+    <li>点击「开始翻译」— 管线将自动运行 7 个阶段</li>
+    <li>在进度页观察处理状态（可刷新页面，进度不丢失）</li>
+    <li>完成后在预览页检查翻译质量，可编辑任何一条译文</li>
+    <li>在词典页维护 CS 术语（新增、修改、删除）</li>
+    <li>在导出页下载双语 SRT 字幕文件</li>
+  </ol>
+  <p style="color: var(--color-text-secondary);">
+    ⏱️ 翻译一个 30 分钟的 demo 大约需要 5-10 分钟，具体取决于 Whisper 模型大小和 CPU 性能。<br>
+    💡 提示：翻译过程中可以切换到词典标签页编辑术语，互不影响。
+  </p>
+</div>
+{% endblock %}

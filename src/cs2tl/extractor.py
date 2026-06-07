@@ -1,214 +1,223 @@
-"""Voice extraction from CS2 demos via csgo-voice-extractor.
+"""Voice extraction from CS2 demos via demoparser2 + pyogg (libopus).
 
-Calls the external Go binary `csgove` (csgo-voice-extractor) via subprocess
-to extract per-player voice audio from Faceit/community server demos.
+Replaces the v0.0 csgove (Go binary) approach with a pure-Python pipeline:
+  demoparser2.parse_voice() → pyogg.opus_decode() → wave.write()
 
-Key P1 constraints:
-  - Zero-voice early exit (E1-0003, exit code 0)
-  - Binary discovery via shutil.which() + doctor command
-  - Clear error messages with download URLs
+Key architectural properties:
+  - Timestamps are correct at extraction time (tick / 64.0), eliminating
+    the need for voice_aligner (deleted in v0.1).
+  - Corrupt opus frames are skipped with a counter (D5 decision).
+  - WAV files use fixed names ({steam_id}.wav) — overwrite, don't accumulate.
+  - zst decompression is delegated to shared.decompress_zst().
 """
 
 from __future__ import annotations
 
+import ctypes
 import logging
-import os
-import shutil
-import subprocess
+import wave
+from dataclasses import dataclass, field
 from pathlib import Path
-from dataclasses import dataclass
 
 from cs2tl.errors import (
     extractor_failed,
-    extractor_not_found,
     no_voice_data,
+    opus_decoder_failed,
 )
+from cs2tl.shared import decompress_zst
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CSGOVE_BINARY = "csgove"
+# --- Opus constants (CS2 voice chat: 24kHz mono) ---
+SAMPLE_RATE = 24000
+CHANNELS = 1
+# Maximum samples per opus frame at 24kHz: 120ms × 240 samples/ms = 2880.
+# We allocate 5760 to be safe (headroom for 48kHz frames downsampled).
+MAX_SAMPLES = 5760
+
+# CS2 competitive / Faceit tick rate (hardcoded — demoparser2 has no tick_rate()).
+TICK_RATE = 64.0
+
+# BOT filter: real Steam ID64s are exactly 17 digits and start with "7656".
+STEAM_ID_LENGTH = 17
+STEAM_ID_PREFIX = "7656"
 
 
 @dataclass
 class ExtractionResult:
-    """Result of voice extraction from a demo file."""
+    """Result of voice extraction from a demo file.
 
-    wav_files: dict[str, Path]  # steam_id -> path to {steam_id}.wav
-    output_dir: Path
-    duration_seconds: float = 0.0
-
-
-def check_binary(binary_name: str = DEFAULT_CSGOVE_BINARY) -> Path | None:
-    """Check if the csgo-voice-extractor binary is available on PATH.
-
-    Returns the resolved path if found, None otherwise.
-    Also checks known install locations (Windows/Linux/macOS).
+    Attributes:
+        wav_files: steam_id → path to {steam_id}.wav.
+        voice_timestamps: steam_id → list of (start_seconds, end_seconds)
+            for each voice packet, derived from game ticks.
+        output_dir: Directory containing the WAV files.
+        skipped_frames: Number of corrupt opus frames that were skipped.
     """
-    resolved = shutil.which(binary_name)
-    if resolved is not None:
-        return Path(resolved)
 
-    # Check known install locations
-    known_paths = []
-    if os.name == "nt":
-        home = Path.home()
-        known_paths = [
-            home / "Tools" / "csgo-voice-extractor" / "win32-x64" / f"{binary_name}.exe",
-            home / "Tools" / f"{binary_name}.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "csgo-voice-extractor" / "win32-x64" / f"{binary_name}.exe",
-        ]
-    else:
-        known_paths = [
-            Path.home() / ".local" / "bin" / binary_name,
-            Path("/usr/local/bin") / binary_name,
-        ]
-
-    for p in known_paths:
-        if p.exists():
-            return p
-
-    return None
+    wav_files: dict[str, Path] = field(default_factory=dict)
+    voice_timestamps: dict[str, list[tuple[float, float]]] = field(default_factory=dict)
+    output_dir: Path = Path()
+    skipped_frames: int = 0
 
 
 def run_extraction(
     demo_path: Path,
     output_dir: Path,
-    binary: str = DEFAULT_CSGOVE_BINARY,
-    mode: str = "split-compact",
-    timeout_seconds: int = 300,
 ) -> ExtractionResult:
-    """Run csgo-voice-extractor on a demo file.
+    """Extract per-player voice audio from a CS2 demo.
+
+    Pipeline:
+      1. Decompress .dem.zst → temp .dem (via shared.decompress_zst).
+      2. Parse voice packets via demoparser2.parse_voice().
+      3. Group by steam_id, filter BOTs, sort by tick.
+      4. Create opus decoder → decode each packet → accumulate PCM.
+      5. Write per-player WAV files ({steam_id}.wav).
+      6. Build ExtractionResult with timestamps from game ticks.
+      7. Clean up temp .dem.
 
     Args:
-        demo_path: Path to the .dem file.
+        demo_path: Path to .dem or .dem.zst file.
         output_dir: Directory for extracted WAV files.
-        binary: Name or path of the csgove binary.
-        mode: Extraction mode. Default is "split-compact" (per-player WAVs).
-        timeout_seconds: Maximum time to wait for extraction.
 
     Returns:
-        ExtractionResult with the mapping of steam_id -> WAV path.
+        ExtractionResult with WAV paths and voice timestamps.
 
     Raises:
-        CS2tlError: E1-0001 if binary not found, E1-0002 if extraction fails,
-                    E1-0003 if zero voice data.
+        CS2tlError: E1-0003 if zero voice data, E1-0004 if opus decoder
+            creation fails, E1-0002 for other extraction failures.
     """
-    # --- Handle .dem.zst: auto-decompress before processing ---
-    tmp_dem: Path | None = None
-    if demo_path.suffix == ".zst":
-        tmp_dem = _decompress_zst(demo_path)
-        logger.info("Decompressed %s -> %s", demo_path.name, tmp_dem.name)
-        demo_path = tmp_dem
-
-    # --- P1-1: Binary discovery ---
-    binary_path = check_binary(binary)
-    if binary_path is None:
-        raise extractor_not_found(binary)
+    from demoparser2 import DemoParser
+    from pyogg.opus import opus_decoder_create, opus_decode
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Build the command — flags first, then demo path last
-    cmd = [
-        str(binary_path),
-        "-mode", mode,
-        "-output", str(output_dir),
-        str(demo_path),
-    ]
-
-    # Run from csgove's directory so it finds its DLLs (opus.dll, vaudio_celt.dll, etc.)
-    working_dir = binary_path.parent
-
-    logger.info("Running extractor: %s (cwd=%s)", " ".join(cmd), working_dir)
+    tmp_dem: Path | None = None
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            cwd=str(working_dir),
+        # 1. Decompress .zst if needed
+        actual_demo = demo_path
+        if demo_path.suffix == ".zst":
+            tmp_dem = decompress_zst(demo_path)
+            actual_demo = tmp_dem
+            logger.info("Decompressed %s → %s", demo_path.name, tmp_dem.name)
+
+        # 2. Parse voice packets
+        parser = DemoParser(str(actual_demo))
+        voice_data = parser.parse_voice()
+        logger.info("Parsed %d voice packets from demo", len(voice_data))
+
+        # 3. Group by steam_id, filter BOTs, sort by tick
+        by_player: dict[str, list[tuple[int, bytes]]] = {}
+        for pkt in voice_data:
+            sid = str(int(pkt["steamid"]))
+            if len(sid) == STEAM_ID_LENGTH and sid.startswith(STEAM_ID_PREFIX):
+                by_player.setdefault(sid, []).append(
+                    (pkt["tick"], pkt["bytes"])
+                )
+
+        if not by_player:
+            raise no_voice_data(str(demo_path))
+
+        # Sort each player's packets by tick
+        for sid in by_player:
+            by_player[sid].sort(key=lambda x: x[0])
+
+        # 4. Create opus decoder (D7 decision — fail loud with E1-0004)
+        err = ctypes.c_int()
+        decoder = opus_decoder_create(
+            ctypes.c_int32(SAMPLE_RATE),
+            ctypes.c_int(CHANNELS),
+            ctypes.pointer(err),
         )
-    except subprocess.TimeoutExpired:
-        raise extractor_failed(
-            str(demo_path),
-            f"Extraction timed out after {timeout_seconds}s. The demo may be very large or corrupted.",
+        if not decoder:
+            raise opus_decoder_failed(
+                f"opus_decoder_create returned NULL (error code: {err.value})"
+            )
+
+        pcm_buf = (ctypes.c_short * MAX_SAMPLES)()
+        wav_files: dict[str, Path] = {}
+        timestamps: dict[str, list[tuple[float, float]]] = {}
+        skipped_frames = 0
+
+        # 5. Decode per player (D5 decision — skip corrupt frames)
+        for sid, packets in by_player.items():
+            all_pcm = bytearray()
+            player_ts: list[tuple[float, float]] = []
+
+            for tick, opus_bytes in packets:
+                raw_buf = (ctypes.c_ubyte * len(opus_bytes))(*opus_bytes)
+                samples = opus_decode(
+                    decoder,
+                    ctypes.cast(raw_buf, ctypes.POINTER(ctypes.c_ubyte)),
+                    ctypes.c_int32(len(opus_bytes)),
+                    ctypes.cast(pcm_buf, ctypes.POINTER(ctypes.c_short)),
+                    ctypes.c_int32(MAX_SAMPLES),
+                    ctypes.c_int(0),
+                )
+
+                if samples > 0:
+                    for j in range(samples):
+                        all_pcm.extend(
+                            pcm_buf[j].to_bytes(2, "little", signed=True)
+                        )
+                    t_sec = tick / TICK_RATE
+                    duration = samples / SAMPLE_RATE
+                    player_ts.append((round(t_sec, 3), round(t_sec + duration, 3)))
+                elif samples < 0:
+                    logger.warning(
+                        "opus_decode error %d for steam_id=%s at tick=%d — skipping frame",
+                        samples, sid, tick,
+                    )
+                    skipped_frames += 1
+
+            # 6. Write WAV (fixed filename — overwrites, doesn't accumulate)
+            if all_pcm:
+                wav_path = output_dir / f"{sid}.wav"
+                with wave.open(str(wav_path), "wb") as wf:
+                    wf.setnchannels(CHANNELS)
+                    wf.setsampwidth(2)  # 16-bit = 2 bytes
+                    wf.setframerate(SAMPLE_RATE)
+                    wf.writeframes(all_pcm)
+                wav_files[sid] = wav_path
+                timestamps[sid] = player_ts
+                logger.debug(
+                    "Wrote %s: %d packets, %.2fs of audio",
+                    wav_path.name, len(packets),
+                    sum(d for _, d in player_ts) if player_ts else 0,
+                )
+
+        # 7. Zero-voice check (after filtering — E1-0003)
+        if not wav_files:
+            raise no_voice_data(str(demo_path))
+
+        if skipped_frames:
+            logger.info("Skipped %d corrupt opus frames across all players", skipped_frames)
+
+        logger.info(
+            "Extracted %d voice files (%d players)%s",
+            len(wav_files), len(wav_files),
+            f", skipped {skipped_frames} corrupt frames" if skipped_frames else "",
         )
 
-    if result.returncode != 0:
-        raise extractor_failed(str(demo_path), result.stderr.strip() or result.stdout.strip())
+        return ExtractionResult(
+            wav_files=wav_files,
+            voice_timestamps=timestamps,
+            output_dir=output_dir,
+            skipped_frames=skipped_frames,
+        )
 
-    # Collect WAV files
-    # csgove names files as: {demo}_{temp}_{PLAYER_NAME}_{STEAM_ID64}.wav
-    # Extract the clean 17-digit Steam ID64 as the key.
-    wav_files: dict[str, Path] = {}
-    for wav_path in sorted(output_dir.glob("*.wav")):
-        steam_id = _extract_steam_id_from_filename(wav_path.stem)
-        wav_files[steam_id] = wav_path
-        logger.debug("WAV: %s → steam_id=%s", wav_path.name, steam_id)
+    except Exception as e:
+        # Re-raise CS2tlError as-is; wrap unexpected errors
+        from cs2tl.errors import CS2tlError
+        if isinstance(e, CS2tlError):
+            raise
+        raise extractor_failed(str(demo_path), str(e)) from e
 
-    # --- P1-4: Zero-voice early exit ---
-    if len(wav_files) == 0:
-        raise no_voice_data(str(demo_path))
-
-    logger.info("Extracted %d voice files (%d players)", len(wav_files), len(wav_files))
-
-    result_obj = ExtractionResult(
-        wav_files=wav_files,
-        output_dir=output_dir,
-        duration_seconds=0.0,  # not computed here — csgove may report it
-    )
-
-    # Clean up temporary decompressed .dem
-    if tmp_dem is not None:
-        try:
-            tmp_dem.unlink()
-            logger.debug("Cleaned up temp file: %s", tmp_dem)
-        except OSError:
-            pass
-
-    return result_obj
-
-
-def _decompress_zst(zst_path: Path) -> Path:
-    """Decompress a .dem.zst file to a temporary .dem file.
-
-    Returns the path to the decompressed .dem file (caller is responsible
-    for cleanup).
-    """
-    import tempfile
-
-    import zstandard as zstd
-
-    with open(zst_path, "rb") as f:
-        compressed = f.read()
-
-    dctx = zstd.ZstdDecompressor()
-    decompressed = dctx.decompress(compressed)
-
-    # Write to a temp file with the same base name
-    base_name = zst_path.stem  # remove .zst → still has .dem
-    if not base_name.endswith(".dem"):
-        base_name = zst_path.with_suffix("").name  # .dem.zst → name only
-    fd, tmp_path = tempfile.mkstemp(suffix=".dem", prefix=base_name + "_")
-    with os.fdopen(fd, "wb") as f:
-        f.write(decompressed)
-
-    return Path(tmp_path)
-
-
-def _extract_steam_id_from_filename(stem: str) -> str:
-    """Extract the 17-digit Steam ID64 from a csgove WAV filename stem.
-
-    csgove split-compact mode names files as:
-      {demo_basename}_{temp_suffix}_{PLAYER_NAME}_{STEAM_ID64}
-
-    The Steam ID64 is the last underscore-separated segment if it's 17 digits.
-    Falls back to the full stem if parsing fails.
-    """
-    import re
-    # Match a 17-digit number at the end of the stem (possibly after last _)
-    # Steam ID64 format: 7656119XXXXXXXXXX (starts with 7656, 17 digits)
-    match = re.search(r"_?(\d{17})$", stem)
-    if match:
-        return match.group(1)
-    return stem
+    finally:
+        # 8. Clean up temporary decompressed .dem
+        if tmp_dem is not None:
+            try:
+                tmp_dem.unlink()
+                logger.debug("Cleaned up temp file: %s", tmp_dem)
+            except OSError:
+                pass
