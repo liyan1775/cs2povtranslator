@@ -3,7 +3,7 @@
 <h1>设置</h1>
 
 {% if config_error %}
-<div style="background:var(--color-bg-secondary);border-left:3px solid var(--color-accent);padding:var(--space-md);margin-bottom:var(--space-lg);border-radius:0 var(--radius-sm) var(--radius-sm) 0;">
+<div class="config-warning">
   {{ config_error }}
 </div>
 {% endif %}
@@ -13,7 +13,7 @@
   <!-- ── Whisper ── -->
   <div class="settings-section">
     <h3>Whisper 语音识别模型</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
+    <div class="form-grid-2">
       <div>
         <label for="whisper_model">模型大小</label>
         <select name="whisper_model" id="whisper_model">
@@ -40,7 +40,7 @@
   <!-- ── LLM ── -->
   <div class="settings-section">
     <h3>LLM 翻译配置</h3>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
+    <div class="form-grid-2">
       <div>
         <label for="llm_provider">提供商</label>
         <select name="llm_provider" id="llm_provider">
@@ -56,14 +56,14 @@
                placeholder="如：deepseek-chat, gpt-4o, claude-sonnet-4-6">
       </div>
       <div>
-        <label for="llm_api_key">API Key <span style="font-weight:400;color:var(--color-text-secondary);">（留空不修改）</span></label>
+        <label for="llm_api_key">API Key <span class="form-label-hint">（留空不修改）</span></label>
         <input type="password" name="llm_api_key" id="llm_api_key"
                value=""
-               placeholder="●●●●●●●● 留空则不修改现有密钥"
+               placeholder="留空则不修改现有密钥"
                autocomplete="new-password">
       </div>
       <div>
-        <label for="llm_base_url">Base URL <span style="font-weight:400;color:var(--color-text-secondary);">（可选）</span></label>
+        <label for="llm_base_url">Base URL <span class="form-label-hint">（可选）</span></label>
         <input type="text" name="llm_base_url" id="llm_base_url"
                value="{{ llm_base_url }}"
                placeholder="留空使用默认；DeepSeek: https://api.deepseek.com/v1">
@@ -79,7 +79,7 @@
   <div class="settings-section">
     <h3>翻译提示词模板</h3>
     <textarea name="prompt_template" id="prompt_template" rows="16"
-              style="font-family:var(--font-mono);font-size:0.85em;"
+              class="form-mono-input"
     >{{ prompt_template }}</textarea>
     <p class="hint">
       可用占位符：<code>{'{target_language}'}</code> — 目标语言，
@@ -87,27 +87,27 @@
       <code>{'{voice_lines}'}</code> — 待翻译语音行。
       <strong>{'{voice_lines}'}</strong> 为必填占位符。
     </p>
-    <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);">
+    <div class="form-row-tight">
       <button type="button"
               hx-post="/settings"
               hx-vals='{"action":"reset_prompt"}'
               hx-target="#save-status"
               hx-swap="outerHTML"
-              style="background:var(--color-bg-primary);color:var(--color-text-secondary);font-size:0.85em;"
-              {% if not prompt_is_custom %}disabled style="opacity:0.4;cursor:default;"{% endif %}>
+              class="btn-secondary"
+              {% if not prompt_is_custom %}disabled{% endif %}>
         恢复默认提示词
       </button>
       {% if not prompt_is_custom %}
-      <span style="color:var(--color-text-secondary);font-size:0.8em;align-self:center;">当前使用默认提示词</span>
+      <span class="form-label-hint" style="align-self:center;">当前使用默认提示词</span>
       {% endif %}
     </div>
   </div>
 
   <!-- ── Save ── -->
-  <div style="display:flex;align-items:center;gap:var(--space-md);">
+  <div class="form-row">
     <input type="hidden" name="action" value="save">
-    <button type="submit" style="padding:var(--space-md) var(--space-xl);font-size:1.05em;">
-      💾 保存设置
+    <button type="submit" class="btn-primary">
+      保存设置
     </button>
     <span id="save-status"></span>
   </div>

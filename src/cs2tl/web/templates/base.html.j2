@@ -207,6 +207,31 @@
       margin-bottom: var(--space-sm);
     }
 
+    /* Config warning banner */
+    .config-warning {
+      background: var(--color-bg-secondary);
+      padding: var(--space-md);
+      margin-bottom: var(--space-lg);
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
+    }
+
+    /* Button variants */
+    .btn-primary {
+      padding: var(--space-md) var(--space-xl);
+      font-size: 1.05em;
+    }
+    .btn-secondary {
+      background: var(--color-bg-primary);
+      color: var(--color-text-secondary);
+      font-size: 0.85em;
+    }
+    .btn-secondary:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
     /* Settings */
     .settings-section {
       background: var(--color-bg-secondary);
@@ -244,6 +269,35 @@
       color: var(--color-accent);
       padding: var(--space-sm);
       font-weight: 600;
+    }
+
+    /* Settings form layout */
+    .form-grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-md);
+    }
+    .form-label-hint {
+      font-weight: 400;
+      color: var(--color-text-secondary);
+    }
+    .form-mono-input {
+      font-family: var(--font-mono);
+      font-size: 0.85em;
+    }
+    .form-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-md);
+    }
+    .form-row-tight {
+      display: flex;
+      gap: var(--space-sm);
+      margin-top: var(--space-sm);
+    }
+    /* Visited link distinction (universal design rule) */
+    a:visited {
+      color: #c03a50;
     }
   </style>
 </head>
