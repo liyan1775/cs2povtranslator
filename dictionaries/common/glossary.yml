@@ -1,0 +1,34 @@
+apartments:
+  category: zone
+  en_aliases:
+  - apps
+  - B apartments
+  - B apps
+  zh: B2楼
+jungle:
+  category: zone
+  en_aliases:
+  - jungle A
+  zh: jungle
+palace:
+  category: zone
+  en_aliases:
+  - A palace
+  - palace A
+  zh: A2楼
+sniper's nest:
+  category: position
+  en_aliases:
+  - nest
+  - mid nest
+  zh: 狙位
+underpass:
+  category: zone
+  en_aliases:
+  - under
+  zh: 下水道
+van:
+  category: landmark
+  en_aliases:
+  - B van
+  zh: 白车
