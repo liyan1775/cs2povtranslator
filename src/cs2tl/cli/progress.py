@@ -157,13 +157,20 @@ class PipelineProgress:
             self._progress.update(task_id, **kwargs)
 
     def stage_done(self, task_id: TaskID, label: str = "") -> None:
-        """Mark a stage as successfully completed."""
+        """Mark a stage as successfully completed.
+
+        Does NOT remove the task from the progress display — removing a
+        task shifts internal indices and would break subsequent stage_done
+        calls (IndexError: list index out of range). Tasks are cleaned up
+        when the Progress context manager exits.
+        """
         if self._progress is None or task_id == TaskID(-1):
             return
         if label:
             self._progress.update(task_id, description=f"✅ {label}")
-        self._progress.update(task_id, completed=self._progress.tasks[task_id].total or 1.0)
-        self._progress.remove_task(task_id)
+        # Mark as complete: set completed to total so the bar fills
+        total = self._progress.tasks[task_id].total
+        self._progress.update(task_id, completed=(total if total else 1.0), refresh=True)
 
     def stage_failed(self, task_id: TaskID, error: str) -> None:
         """Mark a stage as failed with an error message."""

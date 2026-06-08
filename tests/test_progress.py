@@ -40,14 +40,18 @@ class TestPipelineProgress:
             task = pp._progress.tasks[tid]
             assert task.total == 10.0
 
-    def test_stage_done_removes_task(self):
-        """stage_done marks the task complete and removes it."""
+    def test_stage_done_marks_complete(self):
+        """stage_done marks the task complete but keeps it visible."""
         with PipelineProgress(enabled=True) as pp:
             tid = pp.task_extract(5)
             initial_count = len(pp._progress.tasks)
             pp.stage_done(tid, "Done!")
-            # After removal, task is no longer in the task list
-            assert len(pp._progress.tasks) == initial_count - 1
+            # Task stays in the list (not removed) — removing would shift
+            # internal indices and break subsequent stage_done calls.
+            assert len(pp._progress.tasks) == initial_count
+            # Task is marked complete (completed >= total)
+            task = pp._progress.tasks[tid]
+            assert task.completed == task.total
 
     def test_stage_failed_stops_task(self):
         """stage_failed marks the task with an error description."""
