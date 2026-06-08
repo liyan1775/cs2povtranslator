@@ -18,8 +18,8 @@ from cs2tl.transcriber import PartialSegment
 
 import typer
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from cs2tl.cli.progress import PipelineProgress
 from cs2tl.config import load_config, resolve_paths
 from cs2tl.dictionary import DictionaryManager
 from cs2tl.errors import (
@@ -104,15 +104,18 @@ def translate_cmd(
 
     should_run = _stage_runner(from_stage, to_stage)
 
-    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
+    with PipelineProgress(enabled=not quiet) as pp:
+
+        # wav_files is set in stage 1; may be empty list if --from skips extract
+        wav_files: list[Path] = []
 
         # Stage 1: Extract
         if should_run("extract"):
-            task = progress.add_task("Extracting voice audio...", total=None)
+            task = pp.task_extract()
             try:
                 extraction = run_extraction(demo, voices_dir)
                 wav_files = extraction.wav_files
-                progress.update(task, description=f"Extracted {len(wav_files)} voice files")
+                pp.stage_done(task, f"已提取 {len(wav_files)} 名玩家语音")
                 if machine_readable:
                     _write_progress("extract", 1, 7, f"已提取 {len(wav_files)} 名玩家语音", cache_dir=progress_dir)
             except CS2tlError as e:
@@ -120,19 +123,17 @@ def translate_cmd(
                     # P1-4: Zero voice = exit 0 (valid result, not an error)
                     if machine_readable:
                         _write_progress("extract", 1, 7, e.message, error=e.message, cache_dir=progress_dir)
+                    pp.stage_failed(task, e.message)
                     console.print(f"[yellow]{e.message}[/yellow]")
                     console.print(e.fix)
                     raise typer.Exit(0)
+                pp.stage_failed(task, e.message)
                 exit_with_error(e)
-            except CS2tlError as e:
-                exit_with_error(e)
-            progress.remove_task(task)
-        # ---> extract ← here for type checker; wav_files always set if we reach further
-        # but for type safety, we handle the resume path below
+        # wav_files stays as [] if extract stage was skipped via --from
 
         # Stage 2: Transcribe
         if should_run("transcribe"):
-            task = progress.add_task("Transcribing with Whisper...", total=None)
+            task = pp.task_transcribe(len(wav_files) if wav_files else None)
             try:
                 if from_stage in (None, "extract", "transcribe"):
                     partial_segs = transcribe_all(
@@ -146,25 +147,25 @@ def translate_cmd(
                     from cs2tl.transcriber import load_cached_transcript
                     partial_segs = load_cached_transcript(transcribed_cache)
                     console.print(f"Loaded {len(partial_segs)} segments from transcription cache")
-                progress.update(task, description=f"Transcribed {len(partial_segs)} segments")
+                pp.stage_done(task, f"转录完成，共 {len(partial_segs)} 段")
                 if machine_readable:
                     _write_progress("transcribe", 2, 7, f"转录完成，共 {len(partial_segs)} 段", cache_dir=progress_dir)
             except CS2tlError as e:
                 if machine_readable:
                     _write_progress("transcribe", 2, 7, e.message, error=e.message, cache_dir=progress_dir)
+                pp.stage_failed(task, e.message)
                 exit_with_error(e)
-            progress.remove_task(task)
 
         # Stage 3: Dictionary
         if should_run("dictionary"):
-            task = progress.add_task("Loading dictionaries...", total=None)
+            task = pp.task_dictionary()
             try:
                 dict_mgr = DictionaryManager(
                     repo_url=config.dictionary.repo_url,
                     local_path=Path(config.dictionary.local_path or ""),
                 )
                 dict_mgr.load_all()
-                progress.update(task, description=f"Loaded dictionaries: {', '.join(dict_mgr.list_maps())}")
+                pp.stage_done(task, f"词典加载完成: {', '.join(dict_mgr.list_maps())}")
                 if machine_readable:
                     _write_progress("dictionary", 3, 7, "词典加载完成", cache_dir=progress_dir)
             except CS2tlError as e:
@@ -172,28 +173,28 @@ def translate_cmd(
                     console.print(f"[yellow]Dictionary warning: {e.message}[/yellow]")
                     console.print("Continuing without dictionary. Use --no-dictionary to suppress this warning.")
                 dict_mgr = None
-            progress.remove_task(task)
+                pp.stage_done(task, "词典跳过（已禁用）")
 
         # Stage 4: Rounds
         if should_run("rounds"):
-            task = progress.add_task("Detecting rounds...", total=None)
+            task = pp.task_rounds()
             try:
                 rounds = detect_rounds(demo)
                 annotated_segs, clock_offset, clock_warnings = annotate_segments(partial_segs, rounds)
                 for w in clock_warnings:
                     console.print(f"[yellow]{w}[/yellow]")
                 partial_segs = annotated_segs
-                progress.update(task, description=f"Detected {len(rounds)} rounds (offset: {clock_offset:.2f}s)")
+                pp.stage_done(task, f"识别 {len(rounds)} 个回合 (offset: {clock_offset:.2f}s)")
                 if machine_readable:
                     _write_progress("rounds", 4, 7, f"识别 {len(rounds)} 个回合", cache_dir=progress_dir)
             except CS2tlError as e:
                 console.print(f"[yellow]{e.message}[/yellow]")
                 rounds = []
-            progress.remove_task(task)
+                pp.stage_done(task, "回合识别跳过")
 
         # Stage 5: Players
         if should_run("players"):
-            task = progress.add_task("Resolving player names...", total=None)
+            task = pp.task_players(len(wav_files))
             try:
                 players = resolve_players(demo, list(wav_files.keys()))
                 # Attach team info to segments
@@ -201,16 +202,13 @@ def translate_cmd(
                     pid = players.get(getattr(seg, "steam_id", ""))
                     if pid:
                         setattr(seg, "team", pid.team)
-                progress.update(
-                    task,
-                    description=f"Resolved {len(players)} players",
-                )
+                pp.stage_done(task, f"识别 {len(players)} 名球员")
                 if machine_readable:
                     _write_progress("players", 5, 7, f"识别 {len(players)} 名球员", cache_dir=progress_dir)
             except CS2tlError as e:
                 console.print(f"[yellow]{e.message}[/yellow]")
                 players = {}
-            progress.remove_task(task)
+                pp.stage_done(task, "球员识别跳过")
 
         # Halftime swap
         if rounds:
@@ -218,10 +216,8 @@ def translate_cmd(
 
         # Stage 6: Translate
         if should_run("translate"):
-            task = progress.add_task(
-                f"Translating {'(dry run) ' if dry_run else ''}with LLM...",
-                total=None,
-            )
+            segment_count = len(partial_segs)
+            task = pp.task_translate(max(segment_count, 1))
             try:
                 # Load custom prompt template if specified
                 custom_prompt = None
@@ -242,36 +238,36 @@ def translate_cmd(
                     dry_run=dry_run,
                 )
                 if dry_run:
-                    progress.update(task, description=f"Dry run complete: {len(partial_segs)} segments (no API calls)")
+                    pp.stage_done(task, f"Dry run: {segment_count} segments (no API)")
                 else:
-                    progress.update(task, description=f"Translated {len(translated)} segments")
+                    pp.stage_done(task, f"翻译完成，共 {len(translated)} 条")
                 if machine_readable:
-                    _write_progress("translate", 6, 7, f"翻译完成，共 {len(translated) if not dry_run else len(partial_segs)} 条", cache_dir=progress_dir)
+                    _write_progress("translate", 6, 7, f"翻译完成，共 {len(translated) if not dry_run else segment_count} 条", cache_dir=progress_dir)
             except CS2tlError as e:
                 if machine_readable:
                     _write_progress("translate", 6, 7, e.message, error=e.message, cache_dir=progress_dir)
+                pp.stage_failed(task, e.message)
                 exit_with_error(e)
-            progress.remove_task(task)
 
         # Stage 7: Subtitles
         if should_run("subtitles"):
             if dry_run:
                 console.print("[dim]Dry run: skipping SRT generation.[/dim]")
             else:
-                task = progress.add_task("Writing SRT subtitles...", total=None)
+                task = pp.task_subtitles(2)  # 2 teams
                 try:
                     srt_files = write_srt(translated, output_dir, demo_name)
-                    progress.update(task, description="SRT files written")
+                    pp.stage_done(task, f"字幕生成: {len(srt_files)} 个文件")
                     if machine_readable:
-                        _write_progress("subtitles", 7, 7, "字幕已生成，共 {} 个文件".format(len(srt_files)), cache_dir=progress_dir)
+                        _write_progress("subtitles", 7, 7, f"字幕已生成，共 {len(srt_files)} 个文件", cache_dir=progress_dir)
                     console.print(f"\n[green]Done! {len(srt_files)} SRT file(s) written to {output_dir}/[/green]")
                     for team, path in srt_files.items():
                         console.print(f"  {path.name} ({team} team)")
                 except CS2tlError as e:
                     if machine_readable:
                         _write_progress("subtitles", 7, 7, e.message, error=e.message, cache_dir=progress_dir)
+                    pp.stage_failed(task, e.message)
                     exit_with_error(e)
-                progress.remove_task(task)
 
     if not dry_run and should_run("subtitles"):
         console.print("\n[bold green]Ready for import into 剪映 / Premiere Pro[/bold green]")

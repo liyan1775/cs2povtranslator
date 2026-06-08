@@ -52,6 +52,7 @@ def _run_checks(verbose: bool) -> list[tuple[str, str, str, str]]:
     return [
         _check_python_version(),
         _check_demoparser2(),
+        _check_csgove(interactive=True),
         _check_whisper(),
         _check_awpy(),
         _check_openai(),
@@ -82,6 +83,48 @@ def _check_demoparser2() -> tuple[str, str, str, str]:
         return ("PASS", "demoparser2 + pyogg", "Installed (voice extraction)", "")
     except ImportError:
         return ("FAIL", "pyogg", "Not installed", "Run: pip install pyogg")
+
+
+def _check_csgove(interactive: bool = True) -> tuple[str, str, str, str]:
+    """Check for csgove binary; offer auto-download if missing."""
+    binary = "csgove.exe" if sys.platform == "win32" else "csgove"
+
+    # Check PATH first
+    path_found = shutil.which(binary)
+    if path_found:
+        return ("PASS", "csgove", f"Found at {path_found}", "")
+
+    # Check local data dir
+    from cs2tl.config import default_data_dir
+    local_bin = default_data_dir() / "bin" / binary
+    if local_bin.exists():
+        return ("PASS", "csgove", f"Found at {local_bin}", "")
+
+    # Offer auto-download
+    if interactive:
+        try:
+            answer = input(
+                "\ncsgove 未找到。是否自动下载到 cs2tl-data/bin/？[Y/n] "
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer and answer != "y":
+            return ("WARN", "csgove", "Not found",
+                    "Download manually: https://github.com/akiver/csgo-voice-extractor/releases/latest")
+    else:
+        answer = "y"
+
+    if answer == "y" or answer == "":
+        try:
+            from cs2tl.cli.csgove_download import download_csgove
+            path = download_csgove()
+            return ("PASS", "csgove", f"Downloaded to {path}", "")
+        except Exception as e:
+            return ("WARN", "csgove", f"Download failed: {e}",
+                    "Download manually: https://github.com/akiver/csgo-voice-extractor/releases/latest")
+
+    return ("WARN", "csgove", "Not found",
+            "Download: https://github.com/akiver/csgo-voice-extractor/releases/latest")
 
 
 def _check_whisper() -> tuple[str, str, str, str]:
