@@ -39,6 +39,14 @@ router = APIRouter()
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 _JINJA_ENV = Environment(loader=FileSystemLoader(str(_TEMPLATE_DIR)))
 
+# Load Pico.css once at import time and inject as a global template variable.
+# This avoids CDN dependencies — Pico.css is fully self-contained.
+_pico_css_path = _TEMPLATE_DIR / "pico.min.css"
+_PICO_CSS = ""
+if _pico_css_path.exists():
+    _PICO_CSS = _pico_css_path.read_text(encoding="utf-8")
+_JINJA_ENV.globals["pico_css"] = _PICO_CSS
+
 
 def _render(template_name: str, context: dict) -> HTMLResponse:
     """Render a Jinja2 template and return an HTMLResponse."""
@@ -477,14 +485,23 @@ async def edit_segment(
 
 @router.get("/glossary", response_class=HTMLResponse)
 async def glossary_page(request: Request, search: str = ""):
-    """Glossary CRUD page — terms grouped by map with collapsible sections."""
+    """Glossary CRUD page — terms grouped by map with collapsible sections.
+
+    Supports tri-language search (Russian, English, Chinese).
+    """
     terms = _load_glossary_terms()
     if search:
         q = search.lower()
-        terms = [
-            t for t in terms
-            if q in t.get("en", "").lower() or q in t.get("zh", "")
-        ]
+        filtered: list[dict] = []
+        for t in terms:
+            en_text = t.get("en", "").lower()
+            zh_text = t.get("zh", "").lower()
+            ru_text = ", ".join(t.get("ru", []) if isinstance(t.get("ru"), list) else []).lower()
+            aliases_text = ", ".join(t.get("aliases", []) if isinstance(t.get("aliases"), list) else []).lower()
+            combined = f"{en_text} {zh_text} {ru_text} {aliases_text}"
+            if q in combined:
+                filtered.append(t)
+        terms = filtered
 
     # Group terms by source (map name or "user")
     from collections import OrderedDict
@@ -1063,55 +1080,83 @@ def _get_dictionary_path() -> Path:
 
 
 def _load_glossary_terms() -> list[dict]:
-    """Load glossary terms from per-map zones.yml + common/glossary.yml.
+    """Load glossary terms from built-in dictionary + user YAML overrides.
 
     Merges two sources:
-      1. Per-map callout dictionaries (zones.yml) — read-only system terms
-      2. common/glossary.yml — user-added/edited terms
+      1. Built-in dictionary (shipped with the wheel) — read-only system terms
+      2. common/glossary.yml — user-added/edited terms in the local dict dir
     User terms override system terms with the same 'en' key.
     """
     import yaml
 
-    dict_dir = _get_dictionary_path()
     seen: set[str] = set()
     terms: list[dict] = []
 
-    # 1. Load per-map callout terms (zones.yml)
-    if dict_dir.exists():
-        for entry in sorted(dict_dir.iterdir()):
-            if not entry.is_dir() or entry.name.startswith("."):
-                continue
-            zones_yml = entry / "zones.yml"
-            if not zones_yml.exists():
-                continue
-            try:
-                with open(zones_yml, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-                if isinstance(data, dict):
-                    for raw in data.get("terms", []):
-                        if not isinstance(raw, dict):
-                            continue
-                        aliases = raw.get("aliases", [])
-                        zh = raw.get("chinese", "")
-                        if not aliases or not zh:
-                            continue
-                        en = aliases[0]  # primary alias as the key
-                        if en.lower() in seen:
-                            continue
-                        seen.add(en.lower())
-                        terms.append({
-                            "en": en,
-                            "zh": zh,
-                            "aliases": aliases[1:],
-                            "category": raw.get("category", "zone"),
-                            "source": entry.name,  # which map
-                        })
-            except Exception:
-                continue
+    # 1. Load from built-in dictionary (DictionaryManager)
+    try:
+        from cs2tl.dictionary import DictionaryManager
+        mgr = DictionaryManager()
+        builtin = mgr.load_builtin()
+        for map_name, map_dict in sorted(builtin.items()):
+            for term in map_dict.terms:
+                en = term.primary_alias
+                if not en:
+                    continue
+                if en.lower() in seen:
+                    continue
+                seen.add(en.lower())
+                terms.append({
+                    "en": en,
+                    "zh": term.chinese_name,
+                    "aliases": term.aliases[1:] if len(term.aliases) > 1 else [],
+                    "ru": term.russian_aliases,
+                    "category": term.category,
+                    "source": map_name,
+                })
+    except Exception:
+        logger.warning("Failed to load built-in dictionary, falling back to file-based")
+        # Fallback: load from local YAML files
+        dict_dir = _get_dictionary_path()
+        if dict_dir.exists():
+            for entry in sorted(dict_dir.iterdir()):
+                if not entry.is_dir() or entry.name.startswith("."):
+                    continue
+                zones_yml = entry / "zones.yml"
+                if not zones_yml.exists():
+                    continue
+                try:
+                    with open(zones_yml, "r", encoding="utf-8") as f:
+                        data = yaml.safe_load(f)
+                    if isinstance(data, dict):
+                        for raw in data.get("terms", []):
+                            if not isinstance(raw, dict):
+                                continue
+                            aliases = raw.get("aliases", [])
+                            zh = raw.get("chinese", "")
+                            if not aliases or not zh:
+                                continue
+                            en = aliases[0]
+                            if en.lower() in seen:
+                                continue
+                            seen.add(en.lower())
+                            ru = raw.get("ru", [])
+                            if isinstance(ru, str):
+                                ru = [ru]
+                            terms.append({
+                                "en": en,
+                                "zh": zh,
+                                "aliases": aliases[1:],
+                                "ru": [str(r) for r in ru],
+                                "category": raw.get("category", "zone"),
+                                "source": entry.name,
+                            })
+                except Exception:
+                    continue
 
     # 2. Load user glossary (common/glossary.yml) — overrides system terms
-    glossary_path = dict_dir / "common" / "glossary.yml"
-    if glossary_path.exists():
+    dict_dir = _get_dictionary_path()
+    glossary_path = dict_dir / "common" / "glossary.yml" if dict_dir else None
+    if glossary_path and glossary_path.exists():
         try:
             with open(glossary_path, "r", encoding="utf-8") as f:
                 user_data = yaml.safe_load(f)
@@ -1122,16 +1167,15 @@ def _load_glossary_terms() -> list[dict]:
                     zh = info.get("zh", "")
                     if not zh:
                         continue
-                    # Check if this overrides a system term
                     key = en.lower()
                     if key in seen:
-                        # Replace the existing term
                         for i, t in enumerate(terms):
                             if t["en"].lower() == key:
                                 terms[i] = {
                                     "en": en,
                                     "zh": zh,
                                     "aliases": info.get("en_aliases", []),
+                                    "ru": info.get("ru", []),
                                     "category": info.get("category", "user"),
                                     "source": "user",
                                 }
@@ -1142,6 +1186,7 @@ def _load_glossary_terms() -> list[dict]:
                             "en": en,
                             "zh": zh,
                             "aliases": info.get("en_aliases", []),
+                            "ru": info.get("ru", []),
                             "category": info.get("category", "user"),
                             "source": "user",
                         })

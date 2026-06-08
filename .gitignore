@@ -37,6 +37,7 @@ tests/screenshots/
 voices/
 subtitles/
 .cs2tl_cache/
+cs2tl-data/
 apikey.txt
 
 # OS

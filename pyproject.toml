@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cs2povtranslator"
-version = "0.1.0"
+version = "0.3.0"
 description = "CS2 POV subtitle translator: extract CS2 Faceit demo voice comms, transcribe with Whisper, and translate with esports terminology"
 readme = "README.md"
 license = { text = "MIT" }
@@ -75,6 +75,7 @@ ignore_missing_imports = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cs2tl"]
+force-include = { "src/cs2tl/data" = "cs2tl/data" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

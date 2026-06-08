@@ -1,0 +1,975 @@
+# CS2 POV Translator — 内置术语库 (Terminology Database)
+# 7 张服役地图的高频报点术语，三语对照（俄/英/中）
+# 社区贡献欢迎纠错 — corrections welcome: https://github.com/liyan1775/cs2povtranslator
+
+de_dust2:
+  version: "1.0"
+  terms:
+    - en: ["A short", "catwalk", "cat"]
+      ru: ["короткий", "шорт", "кэт"]
+      zh: "A小道"
+      category: zone
+    - en: ["long", "long A", "pit"]
+      ru: ["длинный", "лонг", "лонг А", "яма"]
+      zh: "A大"
+      category: zone
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["mid", "middle", "mid doors"]
+      ru: ["мид", "центр", "мидл"]
+      zh: "中路"
+      category: zone
+    - en: ["tunnel", "tunnels", "B tunnel", "upper tunnel"]
+      ru: ["туннель", "тоннель", "туннели"]
+      zh: "B洞"
+      category: zone
+    - en: ["lower tunnel", "lower B", "lower"]
+      ru: ["нижний туннель", "низ"]
+      zh: "B下层"
+      category: zone
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["T spawn", "T"]
+      ru: ["Т спавн", "Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["car", "long car", "A car"]
+      ru: ["машина", "тачка"]
+      zh: "A大车位"
+      category: position
+    - en: ["goose", "A goose"]
+      ru: ["гусь"]
+      zh: "A点鹅位"
+      category: position
+    - en: ["ninja", "A ninja", "ninja box"]
+      ru: ["ниндзя"]
+      zh: "A点忍者位"
+      category: position
+    - en: ["elevator", "A elevator", "A site elevator"]
+      ru: ["лифт", "элеватор"]
+      zh: "A点电梯位"
+      category: position
+    - en: ["ramp", "A ramp"]
+      ru: ["рампа", "пандус"]
+      zh: "A点斜坡"
+      category: position
+    - en: ["barrels", "A barrels"]
+      ru: ["бочки"]
+      zh: "A点油桶"
+      category: position
+    - en: ["double doors", "mid doors", "dd"]
+      ru: ["двойные двери", "двери"]
+      zh: "中门"
+      category: landmark
+    - en: ["suicide", "mid suicide"]
+      ru: ["самоубийство"]
+      zh: "中门自杀位"
+      category: position
+    - en: ["window", "B window", "mid window"]
+      ru: ["окно"]
+      zh: "B门窗口"
+      category: position
+    - en: ["door", "B door", "B doors"]
+      ru: ["дверь Б", "двери Б"]
+      zh: "B门"
+      category: landmark
+    - en: ["box", "B box", "big box"]
+      ru: ["коробка", "ящик"]
+      zh: "B包点箱子"
+      category: position
+    - en: ["platform", "B platform", "B plat"]
+      ru: ["платформа", "платформа Б"]
+      zh: "B平台"
+      category: position
+    - en: ["back plat", "back platform", "B back"]
+      ru: ["задняя платформа", "зад Б"]
+      zh: "B后点"
+      category: position
+    - en: ["closet", "B closet"]
+      ru: ["кладовка", "чулан"]
+      zh: "B点死角"
+      category: position
+    - en: ["stairs", "B stairs"]
+      ru: ["лестница", "ступеньки"]
+      zh: "B楼梯"
+      category: zone
+    - en: ["back site", "back A"]
+      ru: ["задняя точка"]
+      zh: "A后点"
+      category: position
+    - en: ["CT mid", "mid CT side"]
+      ru: ["КТ мид"]
+      zh: "CT中路"
+      category: zone
+    - en: ["outside B", "B outside"]
+      ru: ["снаружи Б"]
+      zh: "B门外"
+      category: zone
+    - en: ["corner", "long corner"]
+      ru: ["угол", "угол лонга"]
+      zh: "A大拐角"
+      category: position
+
+de_mirage:
+  version: "1.0"
+  terms:
+    - en: ["palace", "A palace", "A palace balcony"]
+      ru: ["дворец", "палас", "балкон"]
+      zh: "A2楼"
+      category: zone
+    - en: ["ramp", "A ramp"]
+      ru: ["рампа", "пандус А"]
+      zh: "A1"
+      category: zone
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["mid", "middle"]
+      ru: ["мид", "центр", "мидл"]
+      zh: "中路"
+      category: zone
+    - en: ["window", "mid window", "connector window"]
+      ru: ["окно", "окно мида"]
+      zh: "VIP窗口"
+      category: position
+    - en: ["connector", "con", "mid connector"]
+      ru: ["коннектор", "соединение", "кон"]
+      zh: "连接"
+      category: zone
+    - en: ["underpass", "underpass mid"]
+      ru: ["подземка", "под мидом"]
+      zh: "中路地道"
+      category: zone
+    - en: ["short", "B short", "cat"]
+      ru: ["шорт", "короткий", "кэт Б"]
+      zh: "B小道"
+      category: zone
+    - en: ["apartments", "apps", "B apartments"]
+      ru: ["апартаменты", "квартиры", "аппы"]
+      zh: "B2楼"
+      category: zone
+    - en: ["kitchen", "B kitchen", "market"]
+      ru: ["кухня", "маркет"]
+      zh: "B厨房"
+      category: zone
+    - en: ["market", "B market"]
+      ru: ["маркет", "рынок"]
+      zh: "B超市"
+      category: zone
+    - en: ["bench", "B bench"]
+      ru: ["скамейка"]
+      zh: "B长凳"
+      category: position
+    - en: ["van", "B van"]
+      ru: ["фургон", "машина Б"]
+      zh: "B面包车"
+      category: position
+    - en: ["bench", "A bench"]
+      ru: ["скамейка А"]
+      zh: "A长凳"
+      category: position
+    - en: ["default", "A default"]
+      ru: ["дефолт", "дефолт А"]
+      zh: "A默认位"
+      category: position
+    - en: ["firebox", "A firebox", "fire box"]
+      ru: ["огненный ящик"]
+      zh: "A火箱"
+      category: position
+    - en: ["sandwich", "A sandwich"]
+      ru: ["сэндвич", "бутерброд"]
+      zh: "A三明治"
+      category: position
+    - en: ["jungle", "A jungle"]
+      ru: ["джунгли"]
+      zh: "A丛林位"
+      category: position
+    - en: ["CT", "CT spawn", "CT base"]
+      ru: ["КТ", "КТ спавн", "база КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["stairs", "A stairs", "A ramp stairs"]
+      ru: ["лестница", "лестница А"]
+      zh: "A1楼梯"
+      category: position
+    - en: ["ladder", "B ladder", "ladder room"]
+      ru: ["лестница Б", "комната с лестницей"]
+      zh: "B楼梯间"
+      category: zone
+    - en: ["B back", "back B", "B site back"]
+      ru: ["зад Б", "задняя точка Б"]
+      zh: "B后点"
+      category: position
+    - en: ["T ramp", "T spawn ramp"]
+      ru: ["рампа Т", "пандус Т"]
+      zh: "T家斜坡"
+      category: zone
+    - en: ["T spawn", "T"]
+      ru: ["Т спавн", "Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["chair", "B chair"]
+      ru: ["стул"]
+      zh: "B椅子位"
+      category: position
+    - en: ["pillar", "B pillar"]
+      ru: ["колонна", "столб Б"]
+      zh: "B柱子"
+      category: position
+    - en: ["top mid", "mid top"]
+      ru: ["верх мида", "верхний мид"]
+      zh: "中路顶"
+      category: zone
+    - en: ["boxes", "B boxes"]
+      ru: ["коробки Б"]
+      zh: "B包点箱子"
+      category: position
+    - en: ["sniper", "A sniper nest"]
+      ru: ["снайпер", "гнездо снайпера"]
+      zh: "A狙击位"
+      category: position
+    - en: ["ninja", "A ninja"]
+      ru: ["ниндзя А"]
+      zh: "A忍者位"
+      category: position
+    - en: ["shadow", "A shadow"]
+      ru: ["тень"]
+      zh: "A暗角位"
+      category: position
+    - en: ["B arches", "brick wall"]
+      ru: ["арки Б", "кирпичная стена"]
+      zh: "B拱门"
+      category: position
+
+de_inferno:
+  version: "1.0"
+  terms:
+    - en: ["banana", "B banana"]
+      ru: ["банан", "банан Б"]
+      zh: "香蕉道"
+      category: zone
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["mid", "middle"]
+      ru: ["мид", "центр", "мидл"]
+      zh: "中路"
+      category: zone
+    - en: ["apartments", "apps", "A apartments", "A apps"]
+      ru: ["аппартаменты", "квартиры", "аппы"]
+      zh: "A2楼"
+      category: zone
+    - en: ["balcony", "A balcony", "A balc"]
+      ru: ["балкон", "балкон А"]
+      zh: "A阳台"
+      category: position
+    - en: ["pit", "A pit", "grave"]
+      ru: ["яма", "яма А", "могила"]
+      zh: "A坑"
+      category: position
+    - en: ["graveyard", "A graveyard", "grave"]
+      ru: ["кладбище", "могила"]
+      zh: "A墓地"
+      category: position
+    - en: ["porch", "A porch", "arches", "A arches"]
+      ru: ["крыльцо", "арки", "арки А"]
+      zh: "A拱门"
+      category: position
+    - en: ["library", "A library"]
+      ru: ["библиотека", "библиотека А"]
+      zh: "A书房"
+      category: zone
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["T spawn", "T ramp"]
+      ru: ["Т спавн", "Т", "рампа Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["boiler", "boiler room"]
+      ru: ["котельная", "бойлер"]
+      zh: "B锅炉房"
+      category: zone
+    - en: ["construction", "con", "B construction"]
+      ru: ["стройка", "стройка Б"]
+      zh: "B工地"
+      category: zone
+    - en: ["dark", "dark spot", "B dark"]
+      ru: ["темнота", "темный угол"]
+      zh: "B暗角"
+      category: position
+    - en: ["fountain", "B fountain", "water"]
+      ru: ["фонтан", "вода"]
+      zh: "B喷泉"
+      category: landmark
+    - en: ["car", "B car", "B site car"]
+      ru: ["машина", "тачка Б"]
+      zh: "B车位"
+      category: position
+    - en: ["CT", "CT spawn"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["coffins", "B coffins"]
+      ru: ["гробы", "гробы Б"]
+      zh: "B棺材位"
+      category: position
+    - en: ["new box", "B new box"]
+      ru: ["новая коробка", "новый ящик"]
+      zh: "B新箱子"
+      category: position
+    - en: ["quad", "B quad", "B quad box"]
+      ru: ["квад", "четверной"]
+      zh: "B四角箱"
+      category: position
+    - en: ["sandbags", "banana sandbags"]
+      ru: ["мешки", "мешки с песком"]
+      zh: "香蕉道沙袋"
+      category: position
+    - en: ["logs", "banana logs", "wood pile"]
+      ru: ["бревна", "дрова"]
+      zh: "香蕉道木堆"
+      category: position
+    - en: ["CT arch", "CT side arch", "mid arch"]
+      ru: ["арка КТ", "арка мида"]
+      zh: "CT拱门"
+      category: landmark
+    - en: ["top mid", "T mid", "mid top"]
+      ru: ["верх мида", "Т мид"]
+      zh: "T方中路"
+      category: zone
+    - en: ["second mid", "2nd mid", "alt mid"]
+      ru: ["второй мид", "2-й мид"]
+      zh: "第二中路"
+      category: zone
+    - en: ["B stairs", "CT stairs", "B CT stairs"]
+      ru: ["лестница Б", "лестница КТ"]
+      zh: "B CT楼梯"
+      category: zone
+    - en: ["short", "A short"]
+      ru: ["шорт", "короткий А"]
+      zh: "A小道"
+      category: zone
+    - en: ["long", "A long"]
+      ru: ["лонг", "длинный А"]
+      zh: "A大道"
+      category: zone
+    - en: ["moto", "A moto", "A motorcycle"]
+      ru: ["мотоцикл", "мото"]
+      zh: "A摩托车"
+      category: landmark
+    - en: ["underpass", "mid underpass"]
+      ru: ["подземка", "под мидом"]
+      zh: "中路地道"
+      category: zone
+    - en: ["church", "mid church", "alt mid church"]
+      ru: ["церковь"]
+      zh: "中路教堂"
+      category: landmark
+    - en: ["speedway", "A speedway"]
+      ru: ["спидвей", "шоссе"]
+      zh: "A快车道"
+      category: zone
+    - en: ["pool", "A pool", "pool side"]
+      ru: ["бассейн", "сторона бассейна"]
+      zh: "A水池"
+      category: zone
+    - en: ["pillar", "A pillar"]
+      ru: ["колонна", "столб А"]
+      zh: "A柱子"
+      category: position
+    - en: ["spools", "B spools"]
+      ru: ["катушки", "катушки Б"]
+      zh: "B线圈位"
+      category: position
+
+de_nuke:
+  version: "1.0"
+  terms:
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B", "lower B"]
+      ru: ["точка Б", "плант Б", "низ Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["yard", "outside", "CT yard"]
+      ru: ["двор", "улица", "снаружи"]
+      zh: "外场"
+      category: zone
+    - en: ["ramp", "A ramp", "ramp room"]
+      ru: ["рампа", "рампа А"]
+      zh: "A斜坡"
+      category: zone
+    - en: ["hut", "A hut", "hut roof"]
+      ru: ["хижина", "крыша А"]
+      zh: "A小屋顶"
+      category: position
+    - en: ["silo", "A silo", "silo catwalk"]
+      ru: ["силос", "силосная башня"]
+      zh: "A筒仓"
+      category: zone
+    - en: ["heaven", "A heaven", "rafters"]
+      ru: ["небеса", "хэвен"]
+      zh: "A天台"
+      category: position
+    - en: ["hell", "A hell"]
+      ru: ["ад", "хелл"]
+      zh: "A下层"
+      category: zone
+    - en: ["entrance", "A entrance", "main"]
+      ru: ["вход", "вход А"]
+      zh: "A大门"
+      category: zone
+    - en: ["squeaky", "A squeaky", "squeaky door"]
+      ru: ["скрипучая дверь", "скрип"]
+      zh: "A木门"
+      category: landmark
+    - en: ["control", "A control", "control room"]
+      ru: ["контроль", "рубка", "пункт управления"]
+      zh: "A控制室"
+      category: zone
+    - en: ["trophy", "A trophy", "trophy room"]
+      ru: ["трофейная", "трофеи"]
+      zh: "A奖杯室"
+      category: zone
+    - en: ["locker", "A locker", "locker room"]
+      ru: ["раздевалка", "локер"]
+      zh: "A更衣室"
+      category: zone
+    - en: ["mini", "A mini", "mini pit"]
+      ru: ["мини", "мини пит"]
+      zh: "A小坑"
+      category: position
+    - en: ["vent", "vent room", "ramp vent"]
+      ru: ["вентиляция", "вент"]
+      zh: "通风管道"
+      category: zone
+    - en: ["radio", "A radio", "radio room"]
+      ru: ["радио", "радиорубка"]
+      zh: "A无线电室"
+      category: zone
+    - en: ["catwalk", "outside catwalk"]
+      ru: ["кэтвок", "мостик"]
+      zh: "外场走道"
+      category: zone
+    - en: ["secret", "secret stairs", "B secret"]
+      ru: ["секрет", "секретная лестница"]
+      zh: "秘密通道"
+      category: zone
+    - en: ["T roof", "T spawn roof"]
+      ru: ["крыша Т", "Т спавн крыша"]
+      zh: "T家屋顶"
+      category: spawn
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["garage", "A garage"]
+      ru: ["гараж", "гараж А"]
+      zh: "A车库"
+      category: zone
+    - en: ["decon", "B decon"]
+      ru: ["декон", "деконтаминация"]
+      zh: "B净化室"
+      category: zone
+    - en: ["toxic", "B toxic"]
+      ru: ["токсик", "токсичная"]
+      zh: "B毒气室"
+      category: zone
+    - en: ["ramp", "B ramp", "B ramp room"]
+      ru: ["рампа Б", "пандус Б"]
+      zh: "B斜坡"
+      category: zone
+    - en: ["lobby", "T lobby", "B lobby"]
+      ru: ["лобби", "вестибюль"]
+      zh: "大厅"
+      category: zone
+    - en: ["rafters", "A rafters"]
+      ru: ["стропила", "балки"]
+      zh: "A房梁"
+      category: position
+    - en: ["boxes", "outside boxes"]
+      ru: ["коробки", "ящики на улице"]
+      zh: "外场箱堆"
+      category: position
+    - en: ["tunnel", "outside tunnel"]
+      ru: ["туннель", "туннель снаружи"]
+      zh: "外场地道"
+      category: zone
+    - en: ["big garage", "main garage"]
+      ru: ["большой гараж", "главный гараж"]
+      zh: "大车库"
+      category: zone
+    - en: ["window", "ramp window"]
+      ru: ["окно", "окно рампы"]
+      zh: "斜坡窗口"
+      category: position
+    - en: ["pipes", "B pipes"]
+      ru: ["трубы", "трубы Б"]
+      zh: "B管道位"
+      category: position
+    - en: ["back vents", "B vents"]
+      ru: ["вентиляция Б", "задняя вентиляция"]
+      zh: "B后通风口"
+      category: position
+    - en: ["CT vent", "CT side vent"]
+      ru: ["вентиляция КТ", "вент КТ"]
+      zh: "CT通风口"
+      category: zone
+    - en: ["Ct box", "CT box"]
+      ru: ["ящик КТ", "коробка КТ"]
+      zh: "CT方箱子"
+      category: position
+
+de_overpass:
+  version: "1.0"
+  terms:
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["long", "A long", "long A"]
+      ru: ["лонг", "длинный А"]
+      zh: "A大道"
+      category: zone
+    - en: ["short", "A short", "short A"]
+      ru: ["шорт", "короткий А"]
+      zh: "A小道"
+      category: zone
+    - en: ["bathroom", "A bathroom", "toilet"]
+      ru: ["туалет", "ванная"]
+      zh: "A厕所"
+      category: zone
+    - en: ["monster", "B monster"]
+      ru: ["монстр"]
+      zh: "B怪兽位"
+      category: position
+    - en: ["fountain", "A fountain"]
+      ru: ["фонтан", "фонтан А"]
+      zh: "A喷泉"
+      category: landmark
+    - en: ["bank", "A bank"]
+      ru: ["банк", "банк А"]
+      zh: "A银行"
+      category: zone
+    - en: ["playground", "A playground", "park"]
+      ru: ["детская площадка", "парк"]
+      zh: "A游乐场"
+      category: zone
+    - en: ["dumpster", "A dumpster"]
+      ru: ["мусорка", "мусорный бак"]
+      zh: "A垃圾桶"
+      category: position
+    - en: ["connector", "con", "mid connector", "water"]
+      ru: ["коннектор", "кон", "вода"]
+      zh: "连接水域"
+      category: zone
+    - en: ["water", "B water", "sewer"]
+      ru: ["вода", "канализация"]
+      zh: "B水道"
+      category: zone
+    - en: ["construction", "con", "A construction"]
+      ru: ["стройка", "стройка А"]
+      zh: "A工地"
+      category: zone
+    - en: ["party", "A party", "party room"]
+      ru: ["вечеринка", "комната вечеринок"]
+      zh: "A派对房"
+      category: zone
+    - en: ["barrels", "B barrels", "B site barrels"]
+      ru: ["бочки", "бочки Б"]
+      zh: "B油桶"
+      category: position
+    - en: ["pillar", "B pillar", "B site pillar"]
+      ru: ["колонна", "столб Б"]
+      zh: "B柱子"
+      category: position
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["T spawn", "T"]
+      ru: ["Т спавн", "Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["graffiti", "B graffiti"]
+      ru: ["граффити", "граффити Б"]
+      zh: "B涂鸦位"
+      category: position
+    - en: ["sniper nest", "B sniper", "B nest"]
+      ru: ["гнездо снайпера", "снайпер Б"]
+      zh: "B狙击位"
+      category: position
+    - en: ["heaven", "B heaven"]
+      ru: ["небеса", "хэвен Б"]
+      zh: "B天台"
+      category: position
+    - en: ["truck", "A truck"]
+      ru: ["грузовик", "фура"]
+      zh: "A卡车"
+      category: position
+    - en: ["bombsite A barrier", "A site barrier"]
+      ru: ["барьер А", "ограждение А"]
+      zh: "A包点围栏"
+      category: position
+    - en: ["cubby", "A cubby"]
+      ru: ["укрытие", "ниша А"]
+      zh: "A小凹槽"
+      category: position
+    - en: ["tunnels", "B tunnels", "B connector tunnel"]
+      ru: ["туннели", "туннели Б"]
+      zh: "B通道"
+      category: zone
+    - en: ["bridge", "B bridge", "bridge room"]
+      ru: ["мост", "мостик"]
+      zh: "B桥"
+      category: zone
+    - en: ["ice cream", "A ice cream", "ice cream shop"]
+      ru: ["мороженое", "магазин мороженого"]
+      zh: "A冰淇淋店"
+      category: zone
+    - en: ["door", "B monster door"]
+      ru: ["дверь", "дверь монстра"]
+      zh: "B门"
+      category: landmark
+    - en: ["pit", "B pit", "B site pit"]
+      ru: ["яма", "яма Б"]
+      zh: "B坑"
+      category: position
+    - en: ["squeaky", "B squeaky"]
+      ru: ["скрипучая дверь", "скрип Б"]
+      zh: "B木门"
+      category: landmark
+    - en: ["sandbags", "B sandbags"]
+      ru: ["мешки", "мешки с песком Б"]
+      zh: "B沙袋"
+      category: position
+    - en: ["short boost", "A short boost"]
+      ru: ["буст А", "буст шорта"]
+      zh: "A小道双架"
+      category: nade
+    - en: ["trash", "B trash"]
+      ru: ["мусор Б", "помойка Б"]
+      zh: "B垃圾桶位"
+      category: position
+    - en: ["connector stairs", "con stairs"]
+      ru: ["лестница коннектора"]
+      zh: "连接楼梯"
+      category: zone
+    - en: ["park", "A park", "park area"]
+      ru: ["парк", "парковая зона"]
+      zh: "A公园"
+      category: zone
+    - en: ["long door", "A long door"]
+      ru: ["дверь лонга", "дверь А лонга"]
+      zh: "A大门"
+      category: landmark
+
+de_anubis:
+  version: "1.0"
+  terms:
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["mid", "middle", "mid area"]
+      ru: ["мид", "центр", "мидл"]
+      zh: "中路"
+      category: zone
+    - en: ["canals", "water", "A canals"]
+      ru: ["каналы", "вода", "каналы А"]
+      zh: "A水渠"
+      category: zone
+    - en: ["palace", "A palace"]
+      ru: ["дворец", "палас"]
+      zh: "A宫殿"
+      category: zone
+    - en: ["temple", "A temple"]
+      ru: ["храм", "храм А"]
+      zh: "A神殿"
+      category: zone
+    - en: ["bridge", "A bridge", "A site bridge"]
+      ru: ["мост", "мост А"]
+      zh: "A桥"
+      category: landmark
+    - en: ["catwalk", "A catwalk"]
+      ru: ["кэтвок", "мостик А"]
+      zh: "A走廊"
+      category: zone
+    - en: ["street", "B street", "B main"]
+      ru: ["улица", "улица Б"]
+      zh: "B大道"
+      category: zone
+    - en: ["alley", "B alley"]
+      ru: ["переулок", "аллея Б"]
+      zh: "B小巷"
+      category: zone
+    - en: ["market", "B market"]
+      ru: ["рынок", "маркет"]
+      zh: "B市场"
+      category: zone
+    - en: ["connector", "con", "mid connector"]
+      ru: ["коннектор", "соединение", "кон"]
+      zh: "连接"
+      category: zone
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["T spawn", "T"]
+      ru: ["Т спавн", "Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["cave", "A cave", "A site cave"]
+      ru: ["пещера", "пещера А"]
+      zh: "A洞窟"
+      category: zone
+    - en: ["pillar", "A pillar", "A site pillar"]
+      ru: ["колонна", "столб А"]
+      zh: "A柱子"
+      category: position
+    - en: ["sniper", "A sniper", "A sniper nest"]
+      ru: ["снайпер", "гнездо снайпера"]
+      zh: "A狙击位"
+      category: position
+    - en: ["heaven", "A heaven"]
+      ru: ["небеса", "хэвен А"]
+      zh: "A天台"
+      category: position
+    - en: ["tree", "A tree", "A site tree"]
+      ru: ["дерево", "дерево А"]
+      zh: "A树下"
+      category: position
+    - en: ["dark", "B dark", "B dark spot"]
+      ru: ["темный", "темнота", "темный угол Б"]
+      zh: "B暗角"
+      category: position
+    - en: ["ruins", "B ruins", "B site ruins"]
+      ru: ["руины", "руины Б"]
+      zh: "B废墟"
+      category: position
+    - en: ["gate", "A gate"]
+      ru: ["ворота", "ворота А"]
+      zh: "A大门"
+      category: landmark
+    - en: ["site boxes", "A boxes"]
+      ru: ["коробки", "ящики А"]
+      zh: "A包点箱子"
+      category: position
+    - en: ["boost", "A boost spot"]
+      ru: ["буст", "место для буста"]
+      zh: "A双架位"
+      category: nade
+    - en: ["tunnel", "B tunnel"]
+      ru: ["туннель", "туннель Б"]
+      zh: "B通道"
+      category: zone
+    - en: ["back site", "A back site"]
+      ru: ["задняя точка А", "зад А"]
+      zh: "A后点"
+      category: position
+    - en: ["default", "A default", "default plant"]
+      ru: ["дефолт", "дефолт А"]
+      zh: "A默认位"
+      category: position
+    - en: ["pit", "B pit"]
+      ru: ["яма", "яма Б"]
+      zh: "B坑"
+      category: position
+    - en: ["windows", "B windows"]
+      ru: ["окна", "окна Б"]
+      zh: "B窗口"
+      category: position
+    - en: ["stairs", "B stairs"]
+      ru: ["лестница", "лестница Б"]
+      zh: "B楼梯"
+      category: zone
+    - en: ["cave entrance", "A cave entrance"]
+      ru: ["вход в пещеру", "вход пещеры"]
+      zh: "A洞窟入口"
+      category: zone
+    - en: ["t spawn alley", "T alley"]
+      ru: ["переулок Т", "аллея Т"]
+      zh: "T家巷"
+      category: zone
+    - en: ["short", "B short"]
+      ru: ["шорт", "короткий Б"]
+      zh: "B小道"
+      category: zone
+
+de_ancient:
+  version: "1.0"
+  terms:
+    - en: ["A site", "A bombsite", "A"]
+      ru: ["точка А", "плант А"]
+      zh: "A包点"
+      category: bombsite
+    - en: ["B site", "B bombsite", "B"]
+      ru: ["точка Б", "плант Б"]
+      zh: "B包点"
+      category: bombsite
+    - en: ["mid", "middle"]
+      ru: ["мид", "центр", "мидл"]
+      zh: "中路"
+      category: zone
+    - en: ["temple", "A temple", "temple room"]
+      ru: ["храм", "храм А"]
+      zh: "A神殿"
+      category: zone
+    - en: ["cave", "A cave", "cave area"]
+      ru: ["пещера", "пещера А"]
+      zh: "A洞窟"
+      category: zone
+    - en: ["donut", "A donut", "donut room"]
+      ru: ["пончик", "донат"]
+      zh: "A甜甜圈"
+      category: zone
+    - en: ["lane", "A lane", "A main"]
+      ru: ["переулок", "лейн А"]
+      zh: "A主道"
+      category: zone
+    - en: ["hut", "A hut"]
+      ru: ["хижина", "хижина А"]
+      zh: "A小屋"
+      category: position
+    - en: ["boost", "A boost", "A hut boost"]
+      ru: ["буст", "буст А"]
+      zh: "A双架位"
+      category: nade
+    - en: ["temple entrance", "A temple entrance"]
+      ru: ["вход в храм", "вход храма"]
+      zh: "A神殿入口"
+      category: zone
+    - en: ["B ramp", "ramp", "B ramp room"]
+      ru: ["рампа Б", "пандус Б"]
+      zh: "B斜坡"
+      category: zone
+    - en: ["B long", "long B", "B main"]
+      ru: ["лонг Б", "длинный Б"]
+      zh: "B大道"
+      category: zone
+    - en: ["CT spawn", "CT"]
+      ru: ["КТ спавн", "КТ"]
+      zh: "CT家"
+      category: spawn
+    - en: ["T spawn", "T"]
+      ru: ["Т спавн", "Т"]
+      zh: "T家"
+      category: spawn
+    - en: ["connector", "con", "mid connector"]
+      ru: ["коннектор", "кон", "соединение"]
+      zh: "连接"
+      category: zone
+    - en: ["elbow", "A elbow", "A site elbow"]
+      ru: ["локоть", "локоть А"]
+      zh: "A拐角"
+      category: position
+    - en: ["pillar", "A pillar"]
+      ru: ["колонна", "столб А"]
+      zh: "A柱子"
+      category: position
+    - en: ["default", "A default"]
+      ru: ["дефолт", "дефолт А"]
+      zh: "A默认位"
+      category: position
+    - en: ["cubby", "B cubby", "B back cubby"]
+      ru: ["укрытие", "ниша Б"]
+      zh: "B凹槽"
+      category: position
+    - en: ["ruins", "A ruins"]
+      ru: ["руины", "руины А"]
+      zh: "A废墟"
+      category: position
+    - en: ["water", "A water", "temple water"]
+      ru: ["вода", "вода А"]
+      zh: "A水区"
+      category: zone
+    - en: ["bricks", "A bricks", "A brick pile"]
+      ru: ["кирпичи", "куча кирпичей"]
+      zh: "A砖堆"
+      category: position
+    - en: ["site box", "A box", "A site box"]
+      ru: ["ящик", "коробка А"]
+      zh: "A包点箱"
+      category: position
+    - en: ["back site", "A back", "A back site"]
+      ru: ["задняя точка", "зад А"]
+      zh: "A后点"
+      category: position
+    - en: ["cheetah", "B cheetah", "cheetah spot"]
+      ru: ["гепард", "спот гепарда"]
+      zh: "B猎豹位"
+      category: position
+    - en: ["ninja", "B ninja"]
+      ru: ["ниндзя", "ниндзя Б"]
+      zh: "B忍者位"
+      category: position
+    - en: ["dark", "B dark", "B dark corner"]
+      ru: ["темный", "темнота", "темный угол Б"]
+      zh: "B暗角"
+      category: position
+    - en: ["close left", "B close left"]
+      ru: ["ближний левый", "близко слева"]
+      zh: "B近点左"
+      category: position
+    - en: ["close right", "B close right"]
+      ru: ["ближний правый", "близко справа"]
+      zh: "B近点右"
+      category: position
+    - en: ["stairs", "B stairs", "CT stairs"]
+      ru: ["лестница", "лестница Б"]
+      zh: "B楼梯"
+      category: zone
+    - en: ["alley", "B alley"]
+      ru: ["переулок", "аллея Б"]
+      zh: "B小巷"
+      category: zone
+    - en: ["temple back", "A temple back"]
+      ru: ["задняя часть храма", "зад храма"]
+      zh: "A神殿后部"
+      category: position
+    - en: ["mid doors", "mid entrance"]
+      ru: ["двери мида", "вход мида"]
+      zh: "中路门"
+      category: landmark
+    - en: ["bridge", "A bridge"]
+      ru: ["мост", "мост А"]
+      zh: "A桥"
+      category: landmark
+    - en: ["tree", "A tree"]
+      ru: ["дерево", "дерево А"]
+      zh: "A树干位"
+      category: position
+    - en: ["t ramp", "T entrance"]
+      ru: ["рампа Т", "вход Т"]
+      zh: "T家入口"
+      category: zone

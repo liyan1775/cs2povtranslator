@@ -285,11 +285,11 @@ class TestGlossaryPage:
             assert "smoke" not in response.text.lower()
 
     def test_glossary_empty_state(self):
-        """GET /glossary with no terms → shows empty state."""
+        """GET /glossary with no terms → shows empty state with new copy."""
         with patch("cs2tl.web.routes._load_glossary_terms", return_value=[]):
             response = client.get("/glossary")
             assert response.status_code == 200
-            assert "空" in response.text or "尚未克隆" in response.text or "没有找到" in response.text
+            assert "还没有术语数据" in response.text or "词典为空" in response.text or "没有找到" in response.text
 
 
 class TestGlossaryCRUD:

@@ -1,5 +1,29 @@
 """cs2tl — CS2 POV Translator CLI entry point."""
 
+import os
+import sys
+
+# Set HF_HOME before anything imports faster_whisper, so model weights
+# land in ./cs2tl-data/huggingface/ instead of the global HF cache.
+def _set_hf_home() -> None:
+    if "HF_HOME" in os.environ:
+        return
+    # Walk up from this file to find project root
+    from pathlib import Path
+    start = Path(__file__).resolve().parent
+    for ancestor in [start, *start.parents]:
+        if (ancestor / ".git").exists() or (ancestor / "pyproject.toml").exists():
+            project_root = ancestor
+            break
+    else:
+        project_root = Path.cwd()
+    # Priority: CS2TL_DATA_DIR env → ./cs2tl-data/ (project root)
+    env_dir = os.environ.get("CS2TL_DATA_DIR", "")
+    data_dir = Path(env_dir) if env_dir else project_root / "cs2tl-data"
+    os.environ["HF_HOME"] = str(data_dir / "huggingface")
+
+_set_hf_home()
+
 import typer
 
 from cs2tl.cli.config_cmd import config_app
