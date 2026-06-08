@@ -1,360 +1,268 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CS2 POV Translator</title>
   <script src="https://unpkg.com/htmx.org@1.9.10"></script>
   <style>
+    /* ── Pico.css v2.1.1 (inline, ~83KB) ── */
+    {{ pico_css | safe }}
+  </style>
+  <style>
+    /* ── CS2 Brand overrides (after Pico.css to win specificity) ── */
     :root {
-      --color-bg-primary: #1a1a2e;
+      --pico-primary: #e94560;
+      --pico-primary-hover: #c03a50;
+      --pico-primary-focus: rgba(233, 69, 96, 0.25);
+      --pico-primary-inverse: #ffffff;
+      --pico-background-color: #1a1a2e;
+      --pico-font-family: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
+      --pico-border-radius: 4px;
+      --pico-form-element-spacing-vertical: 8px;
+      --pico-form-element-spacing-horizontal: 16px;
+      --pico-nav-background-color: #16213e;
       --color-bg-secondary: #16213e;
-      --color-accent: #e94560;
-      --color-accent-secondary: #0f3460;
-      --color-text-primary: #eaeaea;
-      --color-text-secondary: #a0a0b0;
       --color-border: #2a2a4a;
+      --color-selected: rgba(233, 69, 96, 0.15);
+      /* Legacy aliases for templates not yet updated */
+      --color-accent: var(--pico-primary);
+      --color-text-secondary: #a0a0b0;
+      --color-bg-primary: var(--pico-background-color);
       --color-success: #4ade80;
-      --font-body: 'Microsoft YaHei UI', 'PingFang SC', 'Noto Sans SC', sans-serif;
-      --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-      --space-xs: 4px; --space-sm: 8px; --space-md: 16px;
-      --space-lg: 24px; --space-xl: 32px;
-      --radius-sm: 4px; --radius-md: 8px;
     }
-    *, *::before, *::after { box-sizing: border-box; }
-    body {
-      font-family: var(--font-body);
-      background: var(--color-bg-primary);
-      color: var(--color-text-primary);
-      margin: 0;
-      max-width: 100%;
-      line-height: 1.6;
-      overflow-x: hidden;
-    }
-    a { color: var(--color-accent); }
 
-    /* Navigation tabs */
+    /* ── Layout ── */
+    main.container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: var(--pico-spacing);
+    }
+
+    /* ── Nav tabs ── */
     nav.tabs {
-      display: flex;
-      background: var(--color-bg-secondary);
+      background: var(--pico-nav-background-color);
       border-bottom: 1px solid var(--color-border);
-      padding: 0 var(--space-lg);
+    }
+    nav.tabs ul {
+      margin: 0 auto;
+      max-width: 1400px;
+      padding: 0 var(--pico-spacing);
+      display: flex;
+      gap: 0;
+      list-style: none;
     }
     nav.tabs a {
-      color: var(--color-text-secondary);
+      display: block;
+      color: #a0a0b0;
       text-decoration: none;
-      padding: var(--space-md) var(--space-lg);
+      padding: var(--pico-spacing) calc(var(--pico-spacing) * 1.5);
       border-bottom: 2px solid transparent;
       font-size: 0.95em;
       transition: color 0.15s, border-color 0.15s;
     }
-    nav.tabs a:hover { color: var(--color-text-primary); }
+    nav.tabs a:hover { color: #eaeaea; }
     nav.tabs a.active {
-      color: var(--color-accent);
-      border-bottom-color: var(--color-accent);
+      color: var(--pico-primary);
+      border-bottom-color: var(--pico-primary);
     }
+    nav.tabs a.disabled { opacity: 0.4; cursor: default; }
 
-    /* Main content */
-    main {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: var(--space-lg);
-    }
-
-    /* Common components */
-    button, .btn {
-      display: inline-block;
-      padding: var(--space-sm) var(--space-md);
-      background: var(--color-accent);
-      color: white;
-      border: none;
-      border-radius: var(--radius-sm);
-      font-family: var(--font-body);
-      font-size: 0.95em;
-      cursor: pointer;
-      min-height: 44px;
-      min-width: 44px;
-      text-decoration: none;
-    }
-    button:hover, .btn:hover { opacity: 0.9; }
-    button:focus-visible, .btn:focus-visible, a:focus-visible {
-      outline: 2px solid var(--color-accent);
-      outline-offset: 2px;
-    }
-
-    input, textarea, select {
-      font-family: var(--font-body);
-      font-size: 0.95em;
-      padding: var(--space-sm) var(--space-md);
-      background: var(--color-bg-secondary);
-      color: var(--color-text-primary);
-      border: 1px solid var(--color-border);
-      border-radius: var(--radius-sm);
-      min-height: 44px;
-    }
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--color-accent);
-      outline: none;
-    }
-
-    /* Empty states */
-    .empty-state {
-      text-align: center;
-      padding: var(--space-xl);
-      color: var(--color-text-secondary);
-    }
-
-    /* Progress stages */
+    /* ── Progress stages ── */
     .stage-list { list-style: none; padding: 0; }
     .stage-list li {
-      padding: var(--space-sm) var(--space-md);
-      margin-bottom: var(--space-xs);
-      border-radius: var(--radius-sm);
+      padding: var(--pico-spacing);
+      margin-bottom: 4px;
+      border-radius: var(--pico-border-radius);
     }
-    .stage-done { color: var(--color-success); }
-    .stage-current { color: var(--color-text-primary); background: var(--color-bg-secondary); }
-    .stage-pending { color: var(--color-text-secondary); }
-    .stage-error { color: var(--color-accent); }
-    .stage-error-detail { color: var(--color-accent); padding: var(--space-md); }
-    .stage-error-detail .hint { color: var(--color-text-secondary); font-size: 0.9em; }
-    .stage-detail { color: var(--color-text-secondary); font-size: 0.85em; margin-left: var(--space-md); }
+    .stage-done { color: var(--pico-form-element-valid-active-color, #4ade80); }
+    .stage-current {
+      color: var(--pico-color);
+      background: var(--color-bg-secondary);
+    }
+    .stage-pending { color: #a0a0b0; }
+    .stage-error { color: var(--pico-del-color, #e94560); }
+    .stage-error-detail {
+      color: var(--pico-del-color, #e94560);
+      padding: var(--pico-spacing);
+    }
+    .stage-error-detail .hint { color: #a0a0b0; font-size: 0.9em; }
+    .stage-detail { color: #a0a0b0; font-size: 0.85em; margin-left: var(--pico-spacing); }
 
-    /* Chat messages */
+    /* ── Chat messages ── */
     .chat-message {
-      padding: var(--space-sm) var(--space-md);
-      margin-bottom: var(--space-sm);
-      border-radius: var(--radius-sm);
+      padding: var(--pico-spacing);
+      margin-bottom: var(--pico-spacing);
+      border-radius: var(--pico-border-radius);
       cursor: pointer;
       transition: background 0.1s;
     }
     .chat-message:hover { background: var(--color-bg-secondary); }
-    .chat-message.selected { background: var(--color-accent-secondary); }
+    .chat-message.selected {
+      border: 1px solid var(--pico-primary);
+      background: var(--color-selected);
+    }
     .msg-header {
       display: flex;
       align-items: center;
-      gap: var(--space-sm);
-      margin-bottom: var(--space-xs);
+      gap: var(--pico-spacing);
+      margin-bottom: 4px;
     }
-    .msg-player { font-weight: 600; color: var(--color-accent); }
-    .msg-time { color: var(--color-text-secondary); font-size: 0.85em; font-family: var(--font-mono); }
-    .msg-original { color: var(--color-text-secondary); font-size: 0.85em; margin-bottom: var(--space-xs); }
-    .msg-translated { color: var(--color-text-primary); }
+    .msg-player { font-weight: 600; color: var(--pico-primary); }
+    .msg-time { color: #a0a0b0; font-size: 0.85em; font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace; }
+    .msg-original { color: #a0a0b0; font-size: 0.85em; margin-bottom: 4px; }
+    .msg-translated { color: var(--pico-color); }
     .edited-mark { font-size: 0.8em; }
 
-    /* Glossary table */
-    table { width: 100%; border-collapse: collapse; }
-    th, td {
-      text-align: left;
-      padding: var(--space-sm) var(--space-md);
-      border-bottom: 1px solid var(--color-border);
+    /* ── Glossary card list ── */
+    .glossary-card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: var(--pico-spacing);
     }
-    th { color: var(--color-text-secondary); font-weight: 600; font-size: 0.85em; }
-    tr:hover { background: var(--color-bg-secondary); }
-
-    /* Stats card */
-    .stats-card {
-      background: var(--color-bg-secondary);
-      padding: var(--space-lg);
-      border-radius: var(--radius-md);
+    .glossary-card h4 { margin-top: 0; color: var(--pico-primary); }
+    .glossary-card .aliases { color: #a0a0b0; font-size: 0.85em; }
+    .glossary-card .card-actions {
+      margin-top: var(--pico-spacing);
+      display: flex;
+      gap: var(--pico-spacing);
+      justify-content: flex-end;
     }
-    .stats-card ul { list-style: none; padding: 0; }
-    .stats-card li { padding: var(--space-xs) 0; }
 
-    /* File upload drop zone */
+    /* ── Upload zone ── */
     .upload-zone {
-      padding: var(--space-xl);
+      padding: var(--pico-spacing);
       border: 2px dashed var(--color-border);
-      border-radius: var(--radius-md);
+      border-radius: var(--pico-border-radius);
       text-align: center;
       cursor: pointer;
       transition: border-color 0.15s;
     }
-    .upload-zone:hover { border-color: var(--color-accent); }
+    .upload-zone:hover { border-color: var(--pico-primary); }
 
-    /* Preview layout */
-    .preview-grid {
-      display: grid;
-      grid-template-columns: 150px 1fr 320px;
-      gap: var(--space-lg);
-      height: calc(100vh - 140px);
-    }
-    .team-sidebar button {
-      display: block;
-      width: 100%;
-      margin-bottom: var(--space-sm);
+    /* ── Stats card ── */
+    .stats-card {
       background: var(--color-bg-secondary);
-      text-align: left;
-      padding: var(--space-md);
-      border-radius: var(--radius-sm);
-    }
-    .team-sidebar button.active {
-      background: var(--color-accent);
-    }
-    .message-flow {
-      overflow-y: auto;
-      border-left: 1px solid var(--color-border);
-      border-right: 1px solid var(--color-border);
-      padding: 0 var(--space-md);
-    }
-    .edit-panel {
-      background: var(--color-bg-secondary);
-      padding: var(--space-md);
-      border-radius: var(--radius-md);
-    }
-    .edit-panel textarea {
-      width: 100%;
-      min-height: 80px;
-      margin-bottom: var(--space-sm);
+      padding: var(--pico-spacing);
+      border-radius: var(--pico-border-radius);
     }
 
-    /* Config warning banner */
-    .config-warning {
-      background: var(--color-bg-secondary);
-      padding: var(--space-md);
-      margin-bottom: var(--space-lg);
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--color-border);
-      color: var(--color-text-secondary);
-    }
-
-    /* Button variants */
-    .btn-primary {
-      padding: var(--space-md) var(--space-xl);
-      font-size: 1.05em;
-    }
-    .btn-secondary {
-      background: var(--color-bg-primary);
-      color: var(--color-text-secondary);
-      font-size: 0.85em;
-    }
-    .btn-secondary:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    /* Settings */
+    /* ── Settings ── */
     .settings-section {
       background: var(--color-bg-secondary);
-      padding: var(--space-lg);
-      border-radius: var(--radius-md);
-      margin-bottom: var(--space-lg);
+      padding: var(--pico-spacing);
+      border-radius: var(--pico-border-radius);
+      margin-bottom: var(--pico-spacing);
     }
-    .settings-section h3 {
-      margin-top: 0;
-      margin-bottom: var(--space-md);
-    }
-    .settings-section .hint {
-      color: var(--color-text-secondary);
-      font-size: 0.85em;
-      margin-top: var(--space-sm);
-    }
-    .settings-section label {
-      display: block;
-      margin-bottom: var(--space-xs);
-      font-weight: 600;
-      font-size: 0.9em;
-    }
-    .settings-section input,
-    .settings-section select,
-    .settings-section textarea {
-      width: 100%;
-      margin-bottom: var(--space-sm);
-    }
-    .save-success {
-      color: var(--color-success);
-      padding: var(--space-sm);
-      font-weight: 600;
-    }
-    .save-error {
-      color: var(--color-accent);
-      padding: var(--space-sm);
-      font-weight: 600;
+    .settings-section h3 { margin-top: 0; margin-bottom: var(--pico-spacing); }
+    .save-success { color: #4ade80; padding: var(--pico-spacing); }
+    .save-error { color: var(--pico-primary); padding: var(--pico-spacing); }
+    .config-warning {
+      background: var(--color-bg-secondary);
+      padding: var(--pico-spacing);
+      margin-bottom: var(--pico-spacing);
+      border-radius: var(--pico-border-radius);
+      border: 1px solid var(--color-border);
+      color: #a0a0b0;
     }
 
-    /* Settings form layout */
-    .form-grid-2 {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: var(--space-md);
+    /* ── Modal dialog for edit panel ── */
+    dialog.edit-dialog {
+      background: #1a1a2e;
+      color: var(--pico-color);
+      border: 1px solid var(--pico-primary);
+      border-radius: var(--pico-border-radius);
+      padding: var(--pico-spacing);
+      max-width: 560px;
+      width: 90vw;
     }
-    .form-label-hint {
-      font-weight: 400;
-      color: var(--color-text-secondary);
+    dialog.edit-dialog::backdrop {
+      background: rgba(0, 0, 0, 0.6);
     }
-    .form-mono-input {
-      font-family: var(--font-mono);
-      font-size: 0.85em;
+    dialog.edit-dialog textarea {
+      width: 100%;
+      min-height: 80px;
+      margin-bottom: var(--pico-spacing);
     }
-    .form-row {
-      display: flex;
-      align-items: center;
-      gap: var(--space-md);
+
+    /* ── Badges ── */
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: var(--pico-border-radius);
+      font-size: 0.8em;
+      font-weight: 600;
     }
-    .form-row-tight {
-      display: flex;
-      gap: var(--space-sm);
-      margin-top: var(--space-sm);
+    .badge-zone, .badge-bombsite { background: #e945601a; color: var(--pico-primary); }
+    .badge-spawn { background: #f59e0b1a; color: #f59e0b; }
+    .badge-landmark { background: #4ade801a; color: #4ade80; }
+    .badge-position { background: #38bdf81a; color: #38bdf8; }
+    .badge-nade { background: #c084fc1a; color: #c084fc; }
+    .badge-weapon { background: #ef44441a; color: #ef4444; }
+    .badge-utility { background: #fb923c1a; color: #fb923c; }
+    .badge-tactic { background: #a78bfa1a; color: #a78bfa; }
+    .badge-user, .badge-other { background: #a0a0b01a; color: #a0a0b0; }
+
+    /* ── Visited link distinction ── */
+    a:visited { color: #c03a50; }
+
+    /* ── Responsive breakpoints ── */
+    @media (max-width: 1023px) {
+      main.container { padding: var(--pico-spacing); }
+      .glossary-card-grid { grid-template-columns: 1fr; }
     }
-    /* Visited link distinction (universal design rule) */
-    a:visited {
-      color: #c03a50;
+    @media (max-width: 767px) {
+      nav.tabs a {
+        padding: var(--pico-spacing);
+        font-size: 0.85em;
+      }
+      dialog.edit-dialog {
+        width: 100vw;
+        max-width: 100vw;
+        margin: 0;
+        border-radius: 0;
+      }
+      .stats-card ul { padding-left: var(--pico-spacing); }
+      .form-grid-2 { grid-template-columns: 1fr !important; }
     }
   </style>
 </head>
 <body>
   <nav class="tabs" role="tablist">
-    <a href="/import" role="tab" {% if active_tab == 'import' %}class="active"{% endif %}>📥 导入</a>
-    {% set nav_job_id = job_id if job_id else last_job_id %}
-    {% if nav_job_id %}
-    <a href="/preview/{{ nav_job_id }}" role="tab" {% if active_tab == 'preview' %}class="active"{% endif %}>💬 预览</a>
-    <a href="/export/{{ nav_job_id }}" role="tab" {% if active_tab == 'export' %}class="active"{% endif %}>📤 导出</a>
-    {% else %}
-    <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">💬 预览</a>
-    <a role="tab" style="opacity:0.4;cursor:default" title="导入 demo 后可用">📤 导出</a>
-    {% endif %}
-    <a href="/glossary" role="tab" {% if active_tab == 'glossary' %}class="active"{% endif %}>📖 词典</a>
-    <a href="/settings" role="tab" {% if active_tab == 'settings' %}class="active"{% endif %}>⚙️ 设置</a>
+    <ul>
+      <li><a href="/import" role="tab" {% if active_tab == 'import' %}aria-selected="true" class="active"{% endif %}><span aria-hidden="true">📥</span> 导入</a></li>
+      {% set nav_job_id = job_id if job_id else last_job_id %}
+      {% if nav_job_id %}
+      <li><a href="/preview/{{ nav_job_id }}" role="tab" {% if active_tab == 'preview' %}aria-selected="true" class="active"{% endif %}><span aria-hidden="true">💬</span> 预览</a></li>
+      <li><a href="/export/{{ nav_job_id }}" role="tab" {% if active_tab == 'export' %}aria-selected="true" class="active"{% endif %}><span aria-hidden="true">📤</span> 导出</a></li>
+      {% else %}
+      <li><a role="tab" class="disabled" title="导入 demo 后可用" aria-disabled="true"><span aria-hidden="true">💬</span> 预览</a></li>
+      <li><a role="tab" class="disabled" title="导入 demo 后可用" aria-disabled="true"><span aria-hidden="true">📤</span> 导出</a></li>
+      {% endif %}
+      <li><a href="/glossary" role="tab" {% if active_tab == 'glossary' %}aria-selected="true" class="active"{% endif %}><span aria-hidden="true">📖</span> 词典</a></li>
+      <li><a href="/settings" role="tab" {% if active_tab == 'settings' %}aria-selected="true" class="active"{% endif %}><span aria-hidden="true">⚙️</span> 设置</a></li>
+    </ul>
   </nav>
-  <main>
+  <main class="container">
     {% block content %}{% endblock %}
   </main>
   <script>
     // Ensure load-more sentinels are reprocessed after any HTMX swap.
-    // outerHTML replaces the sentinel with new content that includes a fresh
-    // #load-more element — htmx.process() re-attaches IntersectionObserver.
     document.body.addEventListener('htmx:afterSettle', function() {
       var sentinel = document.getElementById('load-more');
       if (sentinel) { htmx.process(sentinel); }
     });
 
-    function openEditor(index, el) {
-      document.querySelectorAll('.chat-message').forEach(m => m.classList.remove('selected'));
-      el.classList.add('selected');
-      const panel = document.getElementById('edit-panel');
-      if (!panel) return;
-      panel.style.display = 'block';
-      const seg = document.getElementById('msg-' + index);
-      const orig = seg?.querySelector('.msg-original')?.textContent || '';
-      const trans = seg?.querySelector('.msg-translated')?.textContent || '';
-      panel.querySelector('#edit-original').textContent = orig;
-      panel.querySelector('#edit-translated').value = trans;
-      panel.querySelector('#edit-form').setAttribute('hx-post', '/preview/{{ job_id }}/edit/' + index);
-      panel.querySelector('#edit-form').setAttribute('hx-target', '#msg-' + index);
-    }
-
     // ── Glossary inline edit ──
-    var _glossEditingIndex = -1;  // track currently-editing row for cleanup
+    var _glossEditingIndex = -1;
     function editGlossaryTerm(index) {
       var row = document.getElementById('term-' + index);
       if (!row) return;
-      // Clean up previous backup if switching from another row
       if (_glossEditingIndex >= 0) {
         delete window['_glossBackup' + _glossEditingIndex];
       }
       _glossEditingIndex = index;
-      // Save original HTML so Cancel can restore it
       window['_glossBackup' + index] = row.outerHTML;
-      // Fetch the edit form from the server
       htmx.ajax('GET', '/glossary/edit/' + index, {target: '#term-' + index, swap: 'outerHTML'});
     }
     function cancelGlossaryEdit(index) {

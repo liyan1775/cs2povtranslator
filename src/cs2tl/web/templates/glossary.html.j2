@@ -2,21 +2,24 @@
 {% block content %}
 <h1>词典管理</h1>
 
-<!-- Search -->
-<div style="margin-bottom: var(--space-lg);">
-  <input type="search" name="search" placeholder="搜索术语（英文或中文）..."
-         hx-get="/glossary" hx-trigger="keyup changed delay:300ms"
-         hx-target="#term-table" hx-swap="innerHTML"
+<!-- Tri-language search (client-side) -->
+<div style="margin-bottom: var(--pico-spacing);">
+  <input type="search" id="glossary-search" name="search"
+         placeholder="搜索术语（俄/英/中）…"
          value="{{ search }}"
-         style="width: 100%; max-width: 400px;">
+         style="width: 100%; max-width: 480px;"
+         aria-busy="false">
+  <p style="color:#a0a0b0;font-size:0.85em;margin-top:4px;">
+    共 <span id="total-count">{{ total }}</span> 个术语 · 支持俄语/英语/中文搜索
+  </p>
 </div>
 
-<!-- Term table (grouped by map) -->
+<!-- Glossary cards grouped by map -->
 <div id="term-table">
   {% if grouped_terms %}
     {% for group_name, group_terms in grouped_terms %}
-    <details open style="margin-bottom:var(--space-lg);">
-      <summary style="cursor:pointer;font-weight:600;padding:var(--space-sm) 0;font-size:1.05em;">
+    <details open style="margin-bottom:var(--pico-spacing);">
+      <summary style="cursor:pointer;font-weight:600;padding:var(--pico-spacing) 0;font-size:1.05em;">
         {% if group_name == 'user' %}
           ✏️ 用户自定义
         {% elif group_name == '其他' %}
@@ -24,108 +27,149 @@
         {% else %}
           🗺️ {{ group_name }}
         {% endif %}
-        <span style="color:var(--color-text-secondary);font-weight:400;">
+        <span style="color:#a0a0b0;font-weight:400;">
           · {{ group_terms|length }} 个术语
         </span>
       </summary>
-      <table style="margin-top:var(--space-sm);">
-        <thead>
-          <tr>
-            <th>英文术语</th>
-            <th>中文翻译</th>
-            <th>分类</th>
-            <th>别名</th>
-            <th style="width:60px;">操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for term in group_terms %}
-          {# Use a unique ID: group_index + term_index #}
-          <tr id="term-{{ term._flat_idx }}">
-            <td><strong>{{ term.en }}</strong></td>
-            <td>{{ term.zh }}</td>
-            <td><span class="badge badge-{{ term.category }}">{{ term.category }}</span></td>
-            <td style="color:var(--color-text-secondary);font-size:0.9em;">{{ term.aliases | join(', ') }}</td>
-            <td style="white-space:nowrap;">
-              <button onclick="editGlossaryTerm({{ term._flat_idx }})"
-                      style="background:transparent;color:var(--color-text-secondary);" title="编辑">✏️</button>
-              {% if term.source == 'user' %}
-              <button hx-delete="/glossary/delete/{{ term._flat_idx }}"
-                      hx-target="#term-{{ term._flat_idx }}" hx-swap="outerHTML"
-                      hx-confirm="确定删除 '{{ term.en }}'？"
-                      style="background:transparent;color:var(--color-accent);" title="删除">🗑</button>
-              {% else %}
-              <span style="color:var(--color-text-secondary);font-size:0.8em;" title="系统术语不可删除">🔒</span>
-              {% endif %}
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+
+      <div class="glossary-card-grid">
+        {% for term in group_terms %}
+        <div class="glossary-card" id="term-{{ term._flat_idx }}"
+             style="background:#16213e;padding:var(--pico-spacing);border-radius:var(--pico-border-radius);"
+             data-search-text="{{ term.en|lower }} {{ term.zh|lower }} {{ (term.ru|default([]))|join(' ')|lower }} {{ (term.aliases|default([]))|join(' ')|lower }}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:var(--pico-spacing);">
+            <div style="flex:1;min-width:0;">
+              <h4 style="margin:0 0 4px 0;word-break:break-all;">{{ term.en }}</h4>
+              <p style="margin:0;font-size:1.1em;font-weight:600;">{{ term.zh }}</p>
+            </div>
+            <span class="badge badge-{{ term.category }}" style="flex-shrink:0;">{{ term.category }}</span>
+          </div>
+
+          {% if term.ru %}
+          <div style="margin-top:var(--pico-spacing);">
+            <small style="color:#a0a0b0;">🇷🇺 俄语说法：</small>
+            <span style="color:#a0a0b0;font-size:0.9em;">{{ term.ru|join(', ') }}</span>
+          </div>
+          {% endif %}
+
+          {% if term.aliases %}
+          <div style="margin-top:4px;">
+            <small style="color:#a0a0b0;">🇬🇧 别名：</small>
+            <span style="color:#a0a0b0;font-size:0.9em;">{{ term.aliases|join(', ') }}</span>
+          </div>
+          {% endif %}
+
+          {% if not term.ru and not term.aliases %}
+          <div style="height:var(--pico-spacing);"></div>
+          {% endif %}
+
+          <div class="card-actions">
+            <button onclick="editGlossaryTerm({{ term._flat_idx }})"
+                    class="secondary" style="font-size:0.85em;" title="编辑">✏️ 编辑</button>
+            {% if term.source == 'user' %}
+            <button hx-delete="/glossary/delete/{{ term._flat_idx }}"
+                    hx-target="#term-{{ term._flat_idx }}" hx-swap="outerHTML"
+                    hx-confirm="确定删除 '{{ term.en }}'？"
+                    class="secondary" style="font-size:0.85em;color:var(--pico-primary);" title="删除">🗑 删除</button>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
     </details>
     {% endfor %}
-
-    <p style="color:var(--color-text-secondary);font-size:0.9em;">
-      共 {{ total }} 个术语 · {{ grouped_terms|length }} 个分组
-    </p>
   {% else %}
-  <div class="empty-state">
+  <div class="empty-state" style="text-align:center;padding:var(--pico-spacing);color:#a0a0b0;">
     {% if search %}
-    <p>没有找到匹配 "{{ search }}" 的术语。</p>
+    <p><strong>未找到匹配 "{{ search }}" 的术语</strong></p>
+    <p>试试其他关键词：英文术语、俄语说法、或中文翻译。</p>
+    <p style="font-size:0.85em;">建议关键词：A点、B点、лонг、короткий、中路、包点</p>
     {% else %}
-    <p>词典为空。</p>
-    <p style="color:var(--color-text-secondary);">
-      请确保词典目录存在（项目 <code>dictionaries/</code> 或 <code>~/.cs2tl/dictionaries/</code>），<br>
-      其中包含地图子目录（如 <code>de_dust2/zones.yml</code>）。
-    </p>
+    <p><strong>还没有术语数据</strong></p>
+    <p>CS2 地图报点术语库将在这里显示。内置词典随 cs2tl 自动加载，无需额外配置。</p>
     {% endif %}
   </div>
   {% endif %}
 </div>
 
 <!-- Add term form -->
-<details style="margin-top: var(--space-lg);">
-  <summary style="cursor:pointer;color:var(--color-accent);">+ 新增术语</summary>
+<details style="margin-top: var(--pico-spacing);">
+  <summary style="cursor:pointer;color:var(--pico-primary);">+ 新增术语</summary>
   <form hx-post="/glossary/add" hx-target="#term-table" hx-swap="innerHTML"
-        style="margin-top:var(--space-md);padding:var(--space-md);background:var(--color-bg-secondary);border-radius:var(--radius-md);">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-md);">
+        style="margin-top:var(--pico-spacing);padding:var(--pico-spacing);background:#16213e;border-radius:var(--pico-border-radius);">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--pico-spacing);">
       <div>
-        <label style="display:block;margin-bottom:var(--space-xs);">英文术语 *</label>
+        <label>英文术语 *</label>
         <input name="en" placeholder="如：AWP" required style="width:100%;">
       </div>
       <div>
-        <label style="display:block;margin-bottom:var(--space-xs);">中文翻译 *</label>
+        <label>中文翻译 *</label>
         <input name="zh" placeholder="如：大狙" required style="width:100%;">
       </div>
       <div>
-        <label style="display:block;margin-bottom:var(--space-xs);">别名（逗号分隔）</label>
+        <label>别名（逗号分隔）</label>
         <input name="aliases" placeholder="如：awp, AWP" style="width:100%;">
       </div>
       <div>
-        <label style="display:block;margin-bottom:var(--space-xs);">分类</label>
+        <label>分类</label>
         <select name="category" style="width:100%;">
+          <option value="zone">区域 (zone)</option>
+          <option value="bombsite">包点 (bombsite)</option>
+          <option value="position">位置 (position)</option>
+          <option value="landmark">地标 (landmark)</option>
+          <option value="spawn">出生点 (spawn)</option>
+          <option value="nade">道具位 (nade)</option>
           <option value="weapon">武器</option>
           <option value="utility">道具</option>
           <option value="tactic">战术</option>
-          <option value="position">位置</option>
           <option value="other">其他</option>
         </select>
       </div>
     </div>
-    <button type="submit" style="margin-top:var(--space-md);">新增术语</button>
+    <button type="submit" style="margin-top:var(--pico-spacing);">新增术语</button>
   </form>
 </details>
 
-<!-- Save: git push -->
-<div style="margin-top: var(--space-xl); padding: var(--space-md); background: var(--color-bg-secondary); border-radius: var(--radius-md); display: flex; align-items: center; gap: var(--space-md);">
-  <button hx-post="/glossary/save" hx-target="#save-status" hx-swap="innerHTML">
-    💾 保存并推送到 GitHub
-  </button>
-  <span id="save-status"></span>
-</div>
-
-<p style="color:var(--color-text-secondary);font-size:0.85em;margin-top:var(--space-md);">
-  💡 用户添加的术语保存在词典目录的 <code>common/glossary.yml</code> 中。<br>
-  翻译管线会自动加载系统词典 + 用户术语——新增或修改后需要重新翻译才能看到效果。
+<p style="color:#a0a0b0;font-size:0.85em;margin-top:var(--pico-spacing);">
+  💡 用户添加的术语保存在 <code>cs2tl-data/dictionaries/common/glossary.yml</code> 中。<br>
+  内置词典术语（系统术语）不可删除。用户术语可自由编辑和删除。
 </p>
+
+<!-- Client-side tri-language search -->
+<script>
+(function(){
+  var input = document.getElementById('glossary-search');
+  var countEl = document.getElementById('total-count');
+  if (!input || !countEl) return;
+
+  input.addEventListener('input', function() {
+    var query = this.value.toLowerCase().trim();
+    var cards = document.querySelectorAll('.glossary-card');
+    var details = document.querySelectorAll('#term-table > details');
+    var totalVisible = 0;
+
+    cards.forEach(function(card) {
+      var text = card.getAttribute('data-search-text') || '';
+      if (!query || text.indexOf(query) !== -1) {
+        card.style.display = '';
+        totalVisible++;
+      } else {
+        card.style.display = 'none';
+      }
+    });
+
+    // Hide empty <details> groups
+    details.forEach(function(detail) {
+      var visibleCards = detail.querySelectorAll('.glossary-card[style*="display: none"], .glossary-card[style=""]');
+      var hasVisible = false;
+      detail.querySelectorAll('.glossary-card').forEach(function(c) {
+        if (c.style.display !== 'none') hasVisible = true;
+      });
+      detail.open = !!query || hasVisible;
+    });
+
+    countEl.textContent = totalVisible;
+  });
+})();
+</script>
 {% endblock %}

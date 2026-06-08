@@ -1,67 +1,84 @@
 {% extends "base.html.j2" %}
 {% block content %}
-<div class="preview-grid">
+<h1>翻译预览</h1>
 
-  <!-- Left: Team selector -->
-  <aside class="team-sidebar">
-    <button hx-get="/preview/{{ job_id }}?team=2&offset=0&limit=50"
-            hx-target="#message-flow" hx-swap="innerHTML"
-            onclick="document.querySelectorAll('.team-sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');"
-            class="{% if team == '2' %}active{% endif %}">
-      Team 2<br><small>{{ team_2_count }} 条</small>
-    </button>
-    <button hx-get="/preview/{{ job_id }}?team=3&offset=0&limit=50"
-            hx-target="#message-flow" hx-swap="innerHTML"
-            onclick="document.querySelectorAll('.team-sidebar button').forEach(b=>b.classList.remove('active'));this.classList.add('active');"
-            class="{% if team == '3' %}active{% endif %}">
-      Team 3<br><small>{{ team_3_count }} 条</small>
-    </button>
-    <div style="margin-top: var(--space-lg); color: var(--color-text-secondary); font-size: 0.85em;">
-      共 {{ total }} 条消息
-    </div>
-  </aside>
+<!-- Team selector -->
+<div style="display:flex;gap:var(--pico-spacing);margin-bottom:var(--pico-spacing);align-items:center;flex-wrap:wrap;">
+  <select id="team-select"
+          hx-get="/preview/{{ job_id }}"
+          hx-target="#message-flow"
+          hx-swap="innerHTML"
+          hx-include="[name=team_selector]"
+          name="team_selector"
+          onchange="this.dispatchEvent(new Event('change',{bubbles:true}))">
+    <option value="2" {% if team == '2' %}selected{% endif %}>Team 2 ({{ team_2_count }} 条)</option>
+    <option value="3" {% if team == '3' %}selected{% endif %}>Team 3 ({{ team_3_count }} 条)</option>
+  </select>
+  <span style="color:#a0a0b0;font-size:0.9em;">共 {{ total }} 条消息</span>
+</div>
 
-  <!-- Center: Message flow -->
-  <div id="message-flow" class="message-flow" role="log">
-    {{ messages_html | safe }}
+<!-- Message flow (single column) -->
+<div id="message-flow" role="log" style="max-width:900px;">
+  {{ messages_html | safe }}
 
-    {% if has_more %}
-    <div id="load-more"
-         hx-get="/preview/{{ job_id }}?team={{ team }}&offset={{ next_offset }}&limit=50"
-         hx-trigger="intersect once"
-         hx-swap="outerHTML"
-         style="text-align:center;padding:var(--space-md);color:var(--color-text-secondary);">
-      加载更多消息...
-    </div>
-    {% endif %}
+  {% if has_more %}
+  <div id="load-more"
+       hx-get="/preview/{{ job_id }}?team={{ team }}&offset={{ next_offset }}&limit=50"
+       hx-trigger="intersect once"
+       hx-swap="outerHTML"
+       style="text-align:center;padding:var(--pico-spacing);color:#a0a0b0;">
+    加载更多消息...
   </div>
+  {% endif %}
+</div>
 
-  <!-- Right: Edit panel -->
-  <aside id="edit-panel" class="edit-panel" style="display:none;">
-    <h3 style="margin-top:0;">编辑译文</h3>
-    <p id="edit-original" style="color:var(--color-text-secondary);font-size:0.9em;"></p>
+<!-- Edit dialog (Pico.css modal) -->
+<dialog id="edit-dialog" class="edit-dialog">
+  <article>
+    <header>
+      <h3 style="margin:0;">编辑译文</h3>
+    </header>
+    <p id="edit-original" style="color:#a0a0b0;font-size:0.9em;"></p>
     <form id="edit-form" hx-post="" hx-swap="outerHTML">
       <textarea id="edit-translated" name="translated_text" rows="3"></textarea>
-      <div style="display:flex;gap:var(--space-sm);">
+      <div style="display:flex;gap:var(--pico-spacing);">
         <button type="submit">💾 保存</button>
-        <button type="button" onclick="document.getElementById('edit-panel').style.display='none'"
-                style="background:var(--color-bg-secondary);">取消</button>
+        <button type="button" onclick="closeEditor()" class="secondary">取消</button>
       </div>
     </form>
-    <p style="color:var(--color-text-secondary);font-size:0.8em;margin-top:var(--space-md);">
-      💡 点击左侧消息即可编辑译文。<br>
-      编辑后的文本将用于 SRT 导出。
-    </p>
-  </aside>
-
-</div>
+    <footer style="color:#a0a0b0;font-size:0.8em;margin-top:var(--pico-spacing);">
+      💡 点击左侧消息即可编辑译文。编辑后的文本将用于 SRT 导出。
+    </footer>
+  </article>
+</dialog>
 
 {% if total == 0 %}
-<div class="empty-state">
-  <p>还没有翻译结果。</p>
-  <p style="color: var(--color-text-secondary);">
-    翻译可能还在进行中——请切换到进度页查看状态。
-  </p>
+<div class="empty-state" style="text-align:center;padding:var(--pico-spacing);color:#a0a0b0;">
+  <p><strong>此 demo 无语音数据</strong></p>
+  <p>该 demo 中没有检测到语音通信，或者翻译尚未完成。</p>
+  <a href="/import" role="button" class="secondary">导入新 demo</a>
 </div>
 {% endif %}
+
+<script>
+  // ── Preview message edit (modal dialog) ──
+  function openEditor(index, el) {
+    document.querySelectorAll('.chat-message').forEach(function(m) { m.classList.remove('selected'); });
+    el.classList.add('selected');
+    var dialog = document.getElementById('edit-dialog');
+    if (!dialog) return;
+    var seg = document.getElementById('msg-' + index);
+    var orig = seg ? seg.querySelector('.msg-original')?.textContent || '' : '';
+    var trans = seg ? seg.querySelector('.msg-translated')?.textContent || '' : '';
+    dialog.querySelector('#edit-original').textContent = orig;
+    dialog.querySelector('#edit-translated').value = trans;
+    dialog.querySelector('#edit-form').setAttribute('hx-post', '/preview/{{ job_id }}/edit/' + index);
+    dialog.querySelector('#edit-form').setAttribute('hx-target', '#msg-' + index);
+    dialog.showModal();
+  }
+  function closeEditor() {
+    var dialog = document.getElementById('edit-dialog');
+    if (dialog) dialog.close();
+  }
+</script>
 {% endblock %}
