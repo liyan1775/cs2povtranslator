@@ -222,31 +222,32 @@ async def start_pipeline(demo: UploadFile = Form(...)):
     # (same filename + same size).  Re-use the cached results so the
     # user doesn't have to re-extract and re-transcribe.
     base_cache = Path(default_cache_dir())
-    for existing_dir in sorted(base_cache.iterdir()):
-        if not existing_dir.is_dir():
-            continue
-        existing_demo = existing_dir / demo.filename
-        if existing_demo.exists() and existing_demo.stat().st_size == len(content):
-            # Found matching demo on disk — check if its job is alive
-            existing_job_id = existing_dir.name
-            if job_store.get(existing_job_id):
-                logger.info("Reusing existing job %s for %s", existing_job_id, demo.filename)
-                return RedirectResponse(f"/progress/{existing_job_id}", status_code=302)
-            # Cached data exists but job not in store — recreate it briefly
-            # so the pipeline can resume from where it left off
-            logger.info("Resuming cached demo %s → job %s", demo.filename, existing_job_id)
-            job_id = existing_job_id
-            cache_dir = existing_dir
-            demo_path = existing_demo
-            break
-    else:
-        # New demo — create a fresh job
-        job_id = uuid.uuid4().hex[:8]
-        cache_dir = base_cache / job_id
+    job_id = uuid.uuid4().hex[:8]
+    cache_dir = base_cache / job_id
+    reused = False
+    if base_cache.exists():
+        for existing_dir in sorted(base_cache.iterdir()):
+            if not existing_dir.is_dir():
+                continue
+            existing_demo = existing_dir / demo.filename
+            if existing_demo.exists() and existing_demo.stat().st_size == len(content):
+                existing_job_id = existing_dir.name
+                if job_store.get(existing_job_id):
+                    logger.info("Reusing existing job %s for %s", existing_job_id, demo.filename)
+                    return RedirectResponse(f"/progress/{existing_job_id}", status_code=302)
+                logger.info("Resuming cached demo %s → job %s", demo.filename, existing_job_id)
+                job_id = existing_job_id
+                cache_dir = existing_dir
+                reused = True
+                break
+
+    if not reused:
         cache_dir.mkdir(parents=True, exist_ok=True)
         demo_path = cache_dir / demo.filename
         demo_path.write_bytes(content)
         logger.info("Job %s: saved demo to %s (%d bytes)", job_id, demo_path, len(content))
+    else:
+        demo_path = cache_dir / demo.filename
 
     demo_path = cache_dir / demo.filename
     demo_path.write_bytes(content)
@@ -971,6 +972,19 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
                     partial_segs, extraction.voice_packet_info
                 )
                 logger.info("Aligned %d segments to demo timestamps", len(partial_segs))
+                # Rewrite cache with aligned timestamps so subsequent runs
+                # that skip extraction get correct timestamps from the JSONL.
+                try:
+                    import dataclasses
+                    transcribed_cache.write_text(
+                        "\n".join(
+                            json.dumps(dataclasses.asdict(s), ensure_ascii=False)
+                            for s in partial_segs
+                        ),
+                        encoding="utf-8",
+                    )
+                except Exception:
+                    pass
 
             # Stage 3: Dictionary
             write_progress("dictionary", 2, "正在加载词典...")
