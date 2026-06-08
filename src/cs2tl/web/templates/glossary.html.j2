@@ -46,12 +46,14 @@
             <td>{{ term.zh }}</td>
             <td><span class="badge badge-{{ term.category }}">{{ term.category }}</span></td>
             <td style="color:var(--color-text-secondary);font-size:0.9em;">{{ term.aliases | join(', ') }}</td>
-            <td>
+            <td style="white-space:nowrap;">
               {% if term.source == 'user' %}
+              <button onclick="editGlossaryTerm({{ term._flat_idx }})"
+                      style="background:transparent;color:var(--color-text-secondary);" title="编辑">✏️</button>
               <button hx-delete="/glossary/delete/{{ term._flat_idx }}"
                       hx-target="#term-{{ term._flat_idx }}" hx-swap="outerHTML"
                       hx-confirm="确定删除 '{{ term.en }}'？"
-                      style="background:transparent;color:var(--color-accent);">🗑</button>
+                      style="background:transparent;color:var(--color-accent);" title="删除">🗑</button>
               {% else %}
               <span style="color:var(--color-text-secondary);font-size:0.8em;" title="系统术语不可删除">🔒</span>
               {% endif %}

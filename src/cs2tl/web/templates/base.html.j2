@@ -319,6 +319,14 @@
     {% block content %}{% endblock %}
   </main>
   <script>
+    // Ensure load-more sentinels are reprocessed after any HTMX swap.
+    // outerHTML replaces the sentinel with new content that includes a fresh
+    // #load-more element — htmx.process() re-attaches IntersectionObserver.
+    document.body.addEventListener('htmx:afterSettle', function() {
+      var sentinel = document.getElementById('load-more');
+      if (sentinel) { htmx.process(sentinel); }
+    });
+
     function openEditor(index, el) {
       document.querySelectorAll('.chat-message').forEach(m => m.classList.remove('selected'));
       el.classList.add('selected');
@@ -332,6 +340,24 @@
       panel.querySelector('#edit-translated').value = trans;
       panel.querySelector('#edit-form').setAttribute('hx-post', '/preview/{{ job_id }}/edit/' + index);
       panel.querySelector('#edit-form').setAttribute('hx-target', '#msg-' + index);
+    }
+
+    // ── Glossary inline edit ──
+    function editGlossaryTerm(index) {
+      var row = document.getElementById('term-' + index);
+      if (!row) return;
+      // Save original HTML so Cancel can restore it
+      window['_glossBackup' + index] = row.outerHTML;
+      // Fetch the edit form from the server
+      htmx.ajax('GET', '/glossary/edit/' + index, {target: '#term-' + index, swap: 'outerHTML'});
+    }
+    function cancelGlossaryEdit(index) {
+      var backup = window['_glossBackup' + index];
+      if (!backup) return;
+      var row = document.getElementById('term-' + index);
+      if (row) { row.outerHTML = backup; }
+      htmx.process(document.getElementById('term-' + index));
+      delete window['_glossBackup' + index];
     }
   </script>
 </body>

@@ -547,7 +547,12 @@ async def glossary_update(
     term_id: int,
     zh: str = Form(...),
 ):
-    """Update a term's Chinese translation."""
+    """Update a term's Chinese translation.
+
+    Returns the updated display row HTML so HTMX can swap it in-place.
+    """
+    import html as _html
+
     terms = _load_glossary_terms()
     if term_id < 0 or term_id >= len(terms):
         raise HTTPException(404, "术语不存在")
@@ -556,9 +561,18 @@ async def glossary_update(
     terms[term_id]["zh"] = zh.strip()
     _save_glossary_terms(terms)
     logger.info("Glossary: updated term %d", term_id)
-    return HTMLResponse(
-        f'<span hx-get="/glossary" hx-trigger="load" hx-target="#term-table" hx-swap="innerHTML"></span>'
-    )
+    return HTMLResponse(_render_glossary_display_row(terms[term_id], term_id))
+
+
+@router.get("/glossary/edit/{term_id}", response_class=HTMLResponse)
+async def glossary_edit_form(term_id: int):
+    """Return an inline edit form row for a single glossary term."""
+    terms = _load_glossary_terms()
+    if term_id < 0 or term_id >= len(terms):
+        raise HTTPException(404, "术语不存在")
+    if terms[term_id].get("source") != "user":
+        raise HTTPException(403, "系统术语不可修改")
+    return HTMLResponse(_render_glossary_edit_row(terms[term_id], term_id))
 
 
 @router.delete("/glossary/delete/{term_id}", response_class=HTMLResponse)
@@ -996,10 +1010,16 @@ def _render_messages(segments: list[dict]) -> str:
 
 
 def _render_load_more_sentinel(job_id: str, team: str, offset: int, limit: int) -> str:
-    """Render the HTMX sentinel div for infinite scroll lazy loading."""
+    """Render the HTMX sentinel div for infinite scroll lazy loading.
+
+    Uses ``intersect once`` (not ``revealed``) for more robust IntersectionObserver
+    behaviour across HTMX versions.  The ``id`` lets HTMX reprocess the element
+    after outerHTML swaps via the ``htmx:afterSettle`` listener in base.html.j2.
+    """
     return (
-        f'\n<div hx-get="/preview/{job_id}?team={team}&offset={offset}&limit={limit}"'
-        f'\n     hx-trigger="revealed"'
+        f'\n<div id="load-more"'
+        f'\n     hx-get="/preview/{job_id}?team={team}&offset={offset}&limit={limit}"'
+        f'\n     hx-trigger="intersect once"'
         f'\n     hx-swap="outerHTML"'
         f'\n     style="text-align:center;padding:var(--space-md);color:var(--color-text-secondary);">'
         f'\n  加载更多消息...'
@@ -1162,22 +1182,34 @@ def _save_glossary_terms(terms: list[dict]) -> None:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False)
 
 
-def _render_glossary_row(term: dict, index: int) -> str:
-    """Render a single glossary table row as HTML."""
-    aliases = ", ".join(term.get("aliases", []))
-    source_label = term.get("source", "")
-    if source_label == "user":
-        source_display = "✏️ 用户"
-    else:
-        source_display = source_label
+def _render_glossary_display_row(term: dict, index: int) -> str:
+    """Render a single glossary table row as HTML (display mode).
 
+    Used both for full-page rendering and for returning the row after a
+    successful edit via HTMX.
+    """
+    import html as _html
+
+    aliases = ", ".join(term.get("aliases", []))
+    aliases_esc = _html.escape(aliases)
+    en_esc = _html.escape(term.get("en", ""))
+    zh_esc = _html.escape(term.get("zh", ""))
+    category = term.get("category", "")
+
+    edit_btn = ""
     delete_btn = ""
     if term.get("source") == "user":
+        edit_btn = (
+            f'<button onclick="editGlossaryTerm({index})"'
+            f'        style="background:transparent;color:var(--color-text-secondary);"'
+            f'        title="编辑">✏️</button>'
+        )
         delete_btn = (
             f'<button hx-delete="/glossary/delete/{index}"'
             f'        hx-target="#term-{index}" hx-swap="outerHTML"'
-            f'        hx-confirm="确定删除 \'{term["en"]}\'？"'
-            f'        style="background:transparent;color:var(--color-accent);">🗑</button>'
+            f'        hx-confirm="确定删除 &#39;{en_esc}&#39;？"'
+            f'        style="background:transparent;color:var(--color-accent);"'
+            f'        title="删除">🗑</button>'
         )
     else:
         delete_btn = (
@@ -1187,13 +1219,51 @@ def _render_glossary_row(term: dict, index: int) -> str:
 
     return f"""
 <tr id="term-{index}">
-  <td><strong>{term['en']}</strong></td>
-  <td>{term['zh']}</td>
-  <td><span class="badge badge-{term.get('category', '')}">{term.get('category', '')}</span></td>
-  <td style="color:var(--color-text-secondary);font-size:0.85em;">{source_display}</td>
-  <td style="color:var(--color-text-secondary);font-size:0.9em;">{aliases}</td>
-  <td>{delete_btn}</td>
+  <td><strong>{en_esc}</strong></td>
+  <td>{zh_esc}</td>
+  <td><span class="badge badge-{category}">{category}</span></td>
+  <td style="color:var(--color-text-secondary);font-size:0.9em;">{aliases_esc}</td>
+  <td style="white-space:nowrap;">{edit_btn}{delete_btn}</td>
 </tr>"""
+
+
+def _render_glossary_edit_row(term: dict, index: int) -> str:
+    """Render an inline edit form row for a glossary term."""
+    import html as _html
+
+    en_esc = _html.escape(term.get("en", ""))
+    zh_esc = _html.escape(term.get("zh", ""))
+    category = term.get("category", "")
+    aliases = ", ".join(term.get("aliases", []))
+    aliases_esc = _html.escape(aliases)
+
+    return f"""
+<tr id="term-{index}">
+  <td><strong>{en_esc}</strong></td>
+  <td colspan="3">
+    <div style="display:flex;gap:var(--space-sm);align-items:center;">
+      <input name="zh" id="edit-zh-{index}" value="{zh_esc}"
+             style="flex:1;margin-bottom:0;">
+      <button hx-post="/glossary/update/{index}"
+              hx-include="#edit-zh-{index}"
+              hx-target="#term-{index}"
+              hx-swap="outerHTML"
+              style="font-size:0.85em;white-space:nowrap;">💾 保存</button>
+      <button type="button" onclick="cancelGlossaryEdit({index})"
+              style="font-size:0.85em;background:var(--color-bg-primary);white-space:nowrap;">取消</button>
+    </div>
+  </td>
+</tr>"""
+
+
+def _render_glossary_row(term: dict, index: int) -> str:
+    """Render a single glossary table row as HTML.
+
+    .. deprecated::
+        Use ``_render_glossary_display_row`` instead.  Kept for backward
+        compatibility with any external callers.
+    """
+    return _render_glossary_display_row(term, index)
 
 
 def _build_srt_preview(jsonl_path: Path) -> str:

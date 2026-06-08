@@ -42,3 +42,4 @@ apikey.txt
 # OS
 .DS_Store
 Thumbs.db
+.gstack/

@@ -26,8 +26,9 @@
     {{ messages_html | safe }}
 
     {% if has_more %}
-    <div hx-get="/preview/{{ job_id }}?team={{ team }}&offset={{ next_offset }}&limit=50"
-         hx-trigger="revealed"
+    <div id="load-more"
+         hx-get="/preview/{{ job_id }}?team={{ team }}&offset={{ next_offset }}&limit=50"
+         hx-trigger="intersect once"
          hx-swap="outerHTML"
          style="text-align:center;padding:var(--space-md);color:var(--color-text-secondary);">
       加载更多消息...
