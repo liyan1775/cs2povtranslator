@@ -124,21 +124,42 @@ def _resolve_device(device: str) -> str:
 def _transcribe_one(model, steam_id: str, wav_path: Path) -> list[PartialSegment]:
     """Transcribe a single WAV file.
 
-    VAD is disabled because CS2 demos use push-to-talk: the extractor only
-    outputs opus voice packets, so every WAV file is already 100% speech with
-    no background noise or silence to filter.  Applying Silero VAD on top of
-    pre-filtered voice data only adds false negatives (observed: 267 s of
-    push-to-talk audio → only 4 VAD-detected segments for some players).
+    VAD is kept ON for a reason that is not about filtering noise: CS2 voice
+    packets are push-to-talk (already 100% speech), but Whisper's internal
+    ``no_speech_threshold`` (default 0.6) is tuned for English and often
+    classifies non-English / accented speech as silence.  Silero VAD detects
+    speech on acoustic features alone — language-independent — so it acts as
+    a pre-segmenter that forces Whisper to process chunks it would otherwise
+    skip.  The lowered threshold (0.35 vs default 0.5) catches quiet or
+    heavily-accented speakers that the default misses.
+
+    Observed: a 297 s Russian-language WAV → 0 segments with VAD off (Whisper
+    internal detector rejected every 30 s chunk), → 22 segments with VAD on
+    at threshold 0.35 (Silero found the speech, Whisper transcribed it).
     """
+    # Total audio duration for diagnostics
+    import wave as _wave
+    try:
+        with _wave.open(str(wav_path), "rb") as wf:
+            total_duration = wf.getnframes() / wf.getframerate()
+    except Exception:
+        total_duration = 0.0
+
     segments_out, info = model.transcribe(
         str(wav_path),
         beam_size=5,
-        vad_filter=False,
+        vad_filter=True,
+        vad_parameters={
+            "threshold": 0.35,             # default 0.5 — too strict for quiet / accented speech
+            "min_speech_duration_ms": 100,  # catch short callouts ("A!", "B!", "one more")
+            "min_silence_duration_ms": 500, # longer silence before splitting phrases
+        },
     )
 
     result: list[PartialSegment] = []
+    speech_duration = 0.0
     for segment in segments_out:
-        if segment.text.strip():  # skip truly empty results
+        if segment.text.strip():
             result.append(
                 PartialSegment(
                     steam_id=steam_id,
@@ -148,12 +169,22 @@ def _transcribe_one(model, steam_id: str, wav_path: Path) -> list[PartialSegment
                     confidence=round(segment.avg_logprob, 3),
                 )
             )
+            speech_duration += segment.end - segment.start
 
-    logger.info(
-        "  → %d segments, avg confidence %.2f",
-        len(result),
-        sum(s.confidence for s in result) / max(len(result), 1),
-    )
+    if total_duration > 0 and result:
+        vad_ratio = speech_duration / total_duration * 100
+        logger.info(
+            "  → %d segments, speech: %.1fs / %.1fs total (%.0f%%), avg confidence %.2f",
+            len(result), speech_duration, total_duration,
+            vad_ratio,
+            sum(s.confidence for s in result) / max(len(result), 1),
+        )
+    elif total_duration > 0:
+        logger.warning(
+            "  → 0 segments from %.1fs of audio!  Language was detected as '%s' "
+            "(prob=%.2f).  Try a larger Whisper model or lower vad_parameters.threshold.",
+            total_duration, info.language, info.language_probability,
+        )
     return result
 
 
