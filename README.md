@@ -16,17 +16,13 @@ pip install cs2povtranslator
 cs2tl config init
 ```
 
-### 3. 更新术语词典
-
-```bash
-cs2tl dictionary update
-```
-
-### 4. 翻译演示文件
+### 3. 翻译演示文件
 
 ```bash
 cs2tl translate your_demo.dem --map de_dust2
 ```
+
+内置词典支持 7 张地图（de_dust2, de_mirage, de_inferno, de_nuke, de_overpass, de_anubis, de_ancient），无需手动下载。
 
 ### 5. 查看字幕
 
@@ -47,13 +43,14 @@ cs2tl translate your_demo.dem --map de_dust2
 ## 命令行参考
 
 ```
-cs2tl translate <demo.dem> [--map <map>] [--source auto] [--to zh]
-    [--from <stage>] [--to-stage <stage>] [--no-dictionary]
-    [--dry-run] [--verbose] [--quiet]
+cs2tl translate <demo.dem> [--map <map>] [--from <stage>] [--to-stage <stage>]
+    [--no-dictionary] [--prompt-template <file>] [--dry-run]
+    [--output <dir>] [--verbose] [--quiet]
 
-cs2tl dictionary update | list | show <map>
+cs2tl dictionary list | show <map>
 cs2tl config   init | show
 cs2tl doctor
+cs2tl web      [--host 127.0.0.1] [--port 8765] [--no-browser]
 ```
 
 ## 配置文件
