@@ -216,12 +216,39 @@ async def start_pipeline(demo: UploadFile = Form(...)):
     if not (demo.filename.endswith(".dem") or demo.filename.endswith(".dem.zst")):
         raise HTTPException(400, "请上传 .dem 或 .dem.zst 文件")
 
-    job_id = uuid.uuid4().hex[:8]
-    cache_dir = Path(default_cache_dir()) / job_id
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    content = await demo.read()
+
+    # Check if this exact demo was already uploaded in a previous job
+    # (same filename + same size).  Re-use the cached results so the
+    # user doesn't have to re-extract and re-transcribe.
+    base_cache = Path(default_cache_dir())
+    for existing_dir in sorted(base_cache.iterdir()):
+        if not existing_dir.is_dir():
+            continue
+        existing_demo = existing_dir / demo.filename
+        if existing_demo.exists() and existing_demo.stat().st_size == len(content):
+            # Found matching demo on disk — check if its job is alive
+            existing_job_id = existing_dir.name
+            if job_store.get(existing_job_id):
+                logger.info("Reusing existing job %s for %s", existing_job_id, demo.filename)
+                return RedirectResponse(f"/progress/{existing_job_id}", status_code=302)
+            # Cached data exists but job not in store — recreate it briefly
+            # so the pipeline can resume from where it left off
+            logger.info("Resuming cached demo %s → job %s", demo.filename, existing_job_id)
+            job_id = existing_job_id
+            cache_dir = existing_dir
+            demo_path = existing_demo
+            break
+    else:
+        # New demo — create a fresh job
+        job_id = uuid.uuid4().hex[:8]
+        cache_dir = base_cache / job_id
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        demo_path = cache_dir / demo.filename
+        demo_path.write_bytes(content)
+        logger.info("Job %s: saved demo to %s (%d bytes)", job_id, demo_path, len(content))
 
     demo_path = cache_dir / demo.filename
-    content = await demo.read()
     demo_path.write_bytes(content)
 
     logger.info("Job %s: saved demo to %s (%d bytes)", job_id, demo_path, len(content))
@@ -867,37 +894,79 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
 
     from cs2tl.cli.progress import PipelineProgress
 
+    # ── Cache-aware: check what's already done ──
+    voices_dir = cache / "voices"
+    transcribed_cache = cache / f"{demo.stem}.transcribed.jsonl"
+    translated_cache = cache / f"{demo.stem}.translated.jsonl"
+    skip_extract = voices_dir.exists() and any(voices_dir.iterdir())
+    skip_transcribe = transcribed_cache.exists()
+    skip_translate = translated_cache.exists()
+
+    # Load config once — needed by transcribe, dictionary, and translate stages
+    from cs2tl.config import load_config as _load_cfg, resolve_paths as _resolve_cfg
+    config = _load_cfg()
+    config = _resolve_cfg(config)
+
     with PipelineProgress(enabled=True) as pp:
         try:
-            # Stage 1: Extract
-            write_progress("extract", 0, "正在提取语音...")
-            t_extract = pp.task_extract()
-            from cs2tl.extractor import run_extraction
-            voices_dir = cache / "voices"
-            extraction = run_extraction(demo, voices_dir)
-            wav_files = extraction.wav_files
-            pp.stage_done(t_extract, f"提取 {len(wav_files)} 名玩家语音")
-            write_progress("extract", 1, f"已提取 {len(wav_files)} 名玩家语音")
+            # Stage 1: Extract (skip if WAVs exist)
+            if skip_extract:
+                wav_files_list = sorted(voices_dir.glob("*.wav"))
+                wav_files: dict[str, Path] = {f.stem: f for f in wav_files_list}
+                logger.info("Skipping extraction — %d WAVs already cached", len(wav_files))
+                write_progress("extract", 1, f"已缓存 {len(wav_files)} 名玩家语音")
+            else:
+                write_progress("extract", 0, "正在提取语音...")
+                t_extract = pp.task_extract()
+                from cs2tl.extractor import run_extraction
+                extraction = run_extraction(demo, voices_dir)
+                wav_files = extraction.wav_files
+                pp.stage_done(t_extract, f"提取 {len(wav_files)} 名玩家语音")
+                write_progress("extract", 1, f"已提取 {len(wav_files)} 名玩家语音")
+            extraction = None  # may be unset when skipping extract
 
-            # Stage 2: Transcribe
-            write_progress("transcribe", 1, "正在语音转写...")
-            t_transcribe = pp.task_transcribe(len(wav_files))
-            from cs2tl.config import load_config, resolve_paths
-            config = load_config()
-            config = resolve_paths(config)
-            from cs2tl.transcriber import transcribe_all
-            transcribed_cache = cache / f"{demo.stem}.transcribed.jsonl"
-            partial_segs = transcribe_all(
-                wav_files=wav_files,
-                model_name=config.whisper.model,
-                device=config.whisper.device,
-                cache_path=transcribed_cache,
-            )
-            pp.stage_done(t_transcribe, f"转录 {len(partial_segs)} 段")
-            write_progress("transcribe", 2, f"转录完成，共 {len(partial_segs)} 段")
+            # Stage 2: Transcribe (skip if JSONL cache exists)
+            if skip_transcribe:
+                import json as _json
+                partial_segs_raw = [
+                    _json.loads(line) for line in transcribed_cache.read_text(encoding="utf-8").splitlines() if line.strip()
+                ]
+                logger.info("Skipping transcription — %d segments cached", len(partial_segs_raw))
+                write_progress("transcribe", 2, f"已缓存 {len(partial_segs_raw)} 段转录")
+            else:
+                write_progress("transcribe", 1, "正在语音转写...")
+                t_transcribe = pp.task_transcribe(len(wav_files))
+                from cs2tl.config import load_config, resolve_paths
+                config = load_config()
+                config = resolve_paths(config)
+                from cs2tl.transcriber import transcribe_all
+                partial_segs_raw = transcribe_all(
+                    wav_files=wav_files,
+                    model_name=config.whisper.model,
+                    device=config.whisper.device,
+                    cache_path=transcribed_cache,
+                )
+                pp.stage_done(t_transcribe, f"转录 {len(partial_segs_raw)} 段")
+                write_progress("transcribe", 2, f"转录完成，共 {len(partial_segs_raw)} 段")
+
+            # Rebuild PartialSegment objects from the raw transcribed JSONL
+            from cs2tl.transcriber import PartialSegment
+            if skip_transcribe:
+                partial_segs = [
+                    PartialSegment(
+                        steam_id=s.get("steam_id", ""),
+                        start_time=float(s.get("start_time", 0.0)),
+                        end_time=float(s.get("end_time", 0.0)),
+                        text=s.get("text", ""),
+                        confidence=float(s.get("confidence", -1.0)),
+                    )
+                    for s in partial_segs_raw
+                ]
+            else:
+                partial_segs = partial_segs_raw
 
             # Align Whisper's WAV-relative timestamps → demo-relative (Bug 4 fix)
-            if extraction.voice_packet_info:
+            if extraction is not None and extraction.voice_packet_info:
                 partial_segs = _align_transcriber_timestamps(
                     partial_segs, extraction.voice_packet_info
                 )
@@ -908,8 +977,8 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
             t_dict = pp.task_dictionary()
             from cs2tl.dictionary import DictionaryManager
             dict_mgr = DictionaryManager(
-                repo_url=config.dictionary.repo_url,
-                local_path=Path(config.dictionary.local_path or ""),
+                repo_url="",
+                local_path=Path(default_dictionary_dir()),
             )
             dict_mgr.load_all()
             pp.stage_done(t_dict, "词典就绪")
