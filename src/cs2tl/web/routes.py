@@ -846,6 +846,8 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
     """Run the full 7-stage translation pipeline in a background thread.
 
     Writes progress.json after each stage so the Web UI can poll for updates.
+    Also renders Rich progress bars to the terminal so the user can see
+    what's happening without staring at the browser.
     Errors are caught and written to progress.json — the thread never crashes
     the web server.
     """
@@ -862,121 +864,139 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
             json.dumps(progress, ensure_ascii=False), encoding="utf-8"
         )
 
-    try:
-        # Stage 1: Extract
-        write_progress("extract", 0, "正在提取语音...")
-        from cs2tl.extractor import run_extraction
-        voices_dir = cache / "voices"
-        extraction = run_extraction(demo, voices_dir)
-        wav_files = extraction.wav_files
-        write_progress("extract", 1, f"已提取 {len(wav_files)} 名玩家语音")
+    from cs2tl.cli.progress import PipelineProgress
 
-        # Stage 2: Transcribe
-        write_progress("transcribe", 1, "正在语音转写...")
-        from cs2tl.config import load_config, resolve_paths
-        config = load_config()
-        config = resolve_paths(config)
-        from cs2tl.transcriber import transcribe_all
-        transcribed_cache = cache / f"{demo.stem}.transcribed.jsonl"
-        partial_segs = transcribe_all(
-            wav_files=wav_files,
-            model_name=config.whisper.model,
-            device=config.whisper.device,
-            cache_path=transcribed_cache,
-        )
-        write_progress("transcribe", 2, f"转录完成，共 {len(partial_segs)} 段")
+    with PipelineProgress(enabled=True) as pp:
+        try:
+            # Stage 1: Extract
+            write_progress("extract", 0, "正在提取语音...")
+            t_extract = pp.task_extract()
+            from cs2tl.extractor import run_extraction
+            voices_dir = cache / "voices"
+            extraction = run_extraction(demo, voices_dir)
+            wav_files = extraction.wav_files
+            pp.stage_done(t_extract, f"提取 {len(wav_files)} 名玩家语音")
+            write_progress("extract", 1, f"已提取 {len(wav_files)} 名玩家语音")
 
-        # Align Whisper's WAV-relative timestamps → demo-relative (Bug 4 fix)
-        if extraction.voice_packet_info:
-            partial_segs = _align_transcriber_timestamps(
-                partial_segs, extraction.voice_packet_info
+            # Stage 2: Transcribe
+            write_progress("transcribe", 1, "正在语音转写...")
+            t_transcribe = pp.task_transcribe(len(wav_files))
+            from cs2tl.config import load_config, resolve_paths
+            config = load_config()
+            config = resolve_paths(config)
+            from cs2tl.transcriber import transcribe_all
+            transcribed_cache = cache / f"{demo.stem}.transcribed.jsonl"
+            partial_segs = transcribe_all(
+                wav_files=wav_files,
+                model_name=config.whisper.model,
+                device=config.whisper.device,
+                cache_path=transcribed_cache,
             )
-            logger.info("Aligned %d segments to demo timestamps", len(partial_segs))
+            pp.stage_done(t_transcribe, f"转录 {len(partial_segs)} 段")
+            write_progress("transcribe", 2, f"转录完成，共 {len(partial_segs)} 段")
 
-        # Stage 3: Dictionary
-        write_progress("dictionary", 2, "正在加载词典...")
-        from cs2tl.dictionary import DictionaryManager
-        dict_mgr = DictionaryManager(
-            repo_url=config.dictionary.repo_url,
-            local_path=Path(config.dictionary.local_path or ""),
-        )
-        dict_mgr.load_all()
-        write_progress("dictionary", 3, "词典加载完成")
+            # Align Whisper's WAV-relative timestamps → demo-relative (Bug 4 fix)
+            if extraction.voice_packet_info:
+                partial_segs = _align_transcriber_timestamps(
+                    partial_segs, extraction.voice_packet_info
+                )
+                logger.info("Aligned %d segments to demo timestamps", len(partial_segs))
 
-        # Stage 4: Rounds
-        write_progress("rounds", 3, "正在识别回合...")
-        from cs2tl.round_detector import detect_rounds, annotate_segments, halftime_swap
-        try:
-            rounds = detect_rounds(demo)
-            annotated_segs, clock_offset, _ = annotate_segments(partial_segs, rounds)
-            partial_segs = annotated_segs
-            write_progress("rounds", 4, f"识别 {len(rounds)} 个回合")
+            # Stage 3: Dictionary
+            write_progress("dictionary", 2, "正在加载词典...")
+            t_dict = pp.task_dictionary()
+            from cs2tl.dictionary import DictionaryManager
+            dict_mgr = DictionaryManager(
+                repo_url=config.dictionary.repo_url,
+                local_path=Path(config.dictionary.local_path or ""),
+            )
+            dict_mgr.load_all()
+            pp.stage_done(t_dict, "词典就绪")
+            write_progress("dictionary", 3, "词典加载完成")
+
+            # Stage 4: Rounds
+            write_progress("rounds", 3, "正在识别回合...")
+            t_rounds = pp.task_rounds()
+            from cs2tl.round_detector import detect_rounds, annotate_segments, halftime_swap
+            try:
+                rounds = detect_rounds(demo)
+                annotated_segs, clock_offset, _ = annotate_segments(partial_segs, rounds)
+                partial_segs = annotated_segs
+                pp.stage_done(t_rounds, f"识别 {len(rounds)} 回合")
+                write_progress("rounds", 4, f"识别 {len(rounds)} 个回合")
+            except Exception as e:
+                logger.warning("Round detection failed: %s", e)
+                rounds = []
+                pp.stage_done(t_rounds, "回合跳过")
+                write_progress("rounds", 4, "回合识别跳过（非关键）")
+
+            # Stage 5: Players
+            write_progress("players", 4, "正在识别球员...")
+            t_players = pp.task_players(len(wav_files))
+            from cs2tl.player_resolver import resolve_players
+            players = resolve_players(demo, list(wav_files.keys()))
+            for seg in partial_segs:
+                pid = players.get(getattr(seg, "steam_id", ""))
+                if pid:
+                    setattr(seg, "team", pid.team)
+            pp.stage_done(t_players, f"识别 {len(players)} 名球员")
+            write_progress("players", 5, f"识别 {len(players)} 名球员")
+
+            # Halftime swap
+            if rounds:
+                partial_segs = halftime_swap(partial_segs, rounds)
+
+            # Stage 6: Translate
+            write_progress("translate", 5, "正在 LLM 翻译...")
+            from cs2tl.translator import translate_all
+            translated_cache = cache / f"{demo.stem}.translated.jsonl"
+            # Use custom prompt template if the user has saved one
+            custom_prompt = _load_prompt_template() if PROMPT_TEMPLATE_PATH.exists() else None
+
+            translated = translate_all(
+                segments=partial_segs,
+                players=players,
+                rounds=rounds,
+                map_name=None,
+                dictionary_manager=dict_mgr,
+                llm_config=config.llm,
+                target_language="zh",
+                no_dictionary=False,
+                prompt_template=custom_prompt,
+                cache_path=translated_cache,
+                dry_run=False,
+            )
+            t_translate = pp.task_translate(1)
+            pp.stage_done(t_translate, f"翻译 {len(translated)} 条")
+            write_progress("translate", 6, f"翻译完成，共 {len(translated)} 条")
+
+            # Stage 7: Subtitles
+            write_progress("subtitles", 6, "正在生成字幕...")
+            t_subs = pp.task_subtitles(1)
+            from cs2tl.subtitles import write_srt
+            srt_files = write_srt(translated, output, demo.stem)
+            pp.stage_done(t_subs, f"生成 {len(srt_files)} 个字幕文件")
+            write_progress("subtitles", 7, f"字幕已生成，共 {len(srt_files)} 个文件")
+
+            logger.info("Job %s: pipeline complete — %d segments, %d SRT files",
+                         job_id, len(translated), len(srt_files))
+
+            try:
+                job_store.complete(job_id)
+            except (KeyError, ValueError) as e:
+                logger.warning("Job %s: failed to mark complete — %s", job_id, e)
+
         except Exception as e:
-            logger.warning("Round detection failed: %s", e)
-            rounds = []
-            write_progress("rounds", 4, "回合识别跳过（非关键）")
-
-        # Stage 5: Players
-        write_progress("players", 4, "正在识别球员...")
-        from cs2tl.player_resolver import resolve_players
-        players = resolve_players(demo, list(wav_files.keys()))
-        for seg in partial_segs:
-            pid = players.get(getattr(seg, "steam_id", ""))
-            if pid:
-                setattr(seg, "team", pid.team)
-        write_progress("players", 5, f"识别 {len(players)} 名球员")
-
-        # Halftime swap
-        if rounds:
-            partial_segs = halftime_swap(partial_segs, rounds)
-
-        # Stage 6: Translate
-        write_progress("translate", 5, "正在 LLM 翻译...")
-        from cs2tl.translator import translate_all
-        translated_cache = cache / f"{demo.stem}.translated.jsonl"
-        # Use custom prompt template if the user has saved one
-        custom_prompt = _load_prompt_template() if PROMPT_TEMPLATE_PATH.exists() else None
-
-        translated = translate_all(
-            segments=partial_segs,
-            players=players,
-            rounds=rounds,
-            map_name=None,
-            dictionary_manager=dict_mgr,
-            llm_config=config.llm,
-            target_language="zh",
-            no_dictionary=False,
-            prompt_template=custom_prompt,
-            cache_path=translated_cache,
-            dry_run=False,
-        )
-        write_progress("translate", 6, f"翻译完成，共 {len(translated)} 条")
-
-        # Stage 7: Subtitles
-        write_progress("subtitles", 6, "正在生成字幕...")
-        from cs2tl.subtitles import write_srt
-        srt_files = write_srt(translated, output, demo.stem)
-        write_progress("subtitles", 7, f"字幕已生成，共 {len(srt_files)} 个文件")
-
-        logger.info("Job %s: pipeline complete — %d segments, %d SRT files",
-                     job_id, len(translated), len(srt_files))
-
-        try:
-            job_store.complete(job_id)
-        except (KeyError, ValueError) as e:
-            logger.warning("Job %s: failed to mark complete — %s", job_id, e)
-
-    except Exception as e:
-        logger.error("Job %s: pipeline failed — %s", job_id, e)
-        # Try to write error progress — stage may not be set
-        try:
-            write_progress("translate", 5, str(e)[:100], error=str(e))
-        except Exception:
-            pass
-        try:
-            job_store.fail(job_id, str(e)[:200])
-        except (KeyError, ValueError) as exc:
-            logger.warning("Job %s: failed to mark failed — %s", job_id, exc)
+            logger.error("Job %s: pipeline failed — %s", job_id, e)
+            # Try to write error progress — stage may not be set
+            try:
+                write_progress("translate", 5, str(e)[:100], error=str(e))
+            except Exception:
+                pass
+            try:
+                job_store.fail(job_id, str(e)[:200])
+            except (KeyError, ValueError) as exc:
+                logger.warning("Job %s: failed to mark failed — %s", job_id, exc)
 
 
 # ---------------------------------------------------------------------------
