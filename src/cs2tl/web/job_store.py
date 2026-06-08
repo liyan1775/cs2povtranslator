@@ -140,7 +140,18 @@ class JobStore:
 
     # -- lifecycle -----------------------------------------------------------
 
+    def _migrate_from_legacy_store(self) -> None:
+        """Move jobs.json from legacy location (~/.cs2tl/) to cs2tl-data/."""
+        legacy_path = Path.home() / ".cs2tl" / "jobs.json"
+        if legacy_path.exists() and not self._path.exists():
+            import shutil
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(legacy_path), str(self._path))
+            logger.info("JobStore: migrated %s → %s", legacy_path, self._path)
+
     def load(self) -> None:
+        """Load (or reload) the job registry from disk."""
+        self._migrate_from_legacy_store()
         """Load (or reload) the job registry from disk.
 
         Called once at startup.  Corrupted lines are skipped with a warning
@@ -380,8 +391,9 @@ class JobStore:
 
 
 def _default_store_path() -> Path:
-    """Return ``~/.cs2tl/jobs.json``, creating parent dirs as needed."""
-    path = Path.home() / ".cs2tl" / "jobs.json"
+    """Return ``{data_dir}/jobs.json`` so deleting cs2tl-data/ wipes everything."""
+    from cs2tl.config import default_data_dir
+    path = default_data_dir() / "jobs.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

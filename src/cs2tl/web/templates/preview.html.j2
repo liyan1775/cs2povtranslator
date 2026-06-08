@@ -8,9 +8,8 @@
           hx-get="/preview/{{ job_id }}"
           hx-target="#message-flow"
           hx-swap="innerHTML"
-          hx-include="[name=team_selector]"
-          name="team_selector"
-          onchange="this.dispatchEvent(new Event('change',{bubbles:true}))">
+          name="team"
+          hx-trigger="change">
     <option value="2" {% if team == '2' %}selected{% endif %}>Team 2 ({{ team_2_count }} 条)</option>
     <option value="3" {% if team == '3' %}selected{% endif %}>Team 3 ({{ team_3_count }} 条)</option>
   </select>

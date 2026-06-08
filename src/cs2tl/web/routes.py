@@ -49,6 +49,17 @@ if _pico_css_path.exists():
 _JINJA_ENV.globals["pico_css"] = _PICO_CSS
 
 
+def _get_job_or_raise(job_id: str) -> dict:
+    """Fetch a job record, raising 404 if unknown or 410 if cache was deleted."""
+    job = job_store.get(job_id)
+    if job is None:
+        raise HTTPException(404, "任务不存在")
+    cache_dir = Path(job.cache_dir)
+    if not cache_dir.exists():
+        raise HTTPException(410, "任务缓存已被清理，请重新导入 demo")
+    return job
+
+
 def _render(template_name: str, context: dict) -> HTMLResponse:
     """Render a Jinja2 template and return an HTMLResponse."""
     template = _JINJA_ENV.get_template(template_name)
@@ -417,10 +428,7 @@ async def preview_page(
         offset: starting message index
         limit:  messages per batch (default 50)
     """
-    job = job_store.get(job_id)
-    if job is None:
-        raise HTTPException(404, "任务不存在")
-
+    job = _get_job_or_raise(job_id)
     cache_dir = Path(job.cache_dir)
     demo_name = Path(job.demo_path).stem
 
