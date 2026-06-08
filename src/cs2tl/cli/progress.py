@@ -66,10 +66,7 @@ class PipelineProgress:
                 SpinnerColumn(),
                 TextColumn("[progress.description]{task.description}"),
                 BarColumn(),
-                MofNCompleteColumn(),
-                TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
                 TimeElapsedColumn(),
-                TimeRemainingColumn(),
                 console=self.console,
                 transient=self._transient,
             )
@@ -86,50 +83,55 @@ class PipelineProgress:
         """Spinner-only task for indeterminate-length operations (e.g. model download)."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task(description, total=None)
+        return self._progress.add_task(f"⏳ {description}", total=None)
 
     def task_extract(self, count: int | None = None) -> TaskID:
-        """Bar task with optional total (player voice extraction)."""
+        """Bar task with optional total (player voice extraction).
+
+        When count is unknown, renders as a spinner with elapsed time
+        rather than a stuck-at-0% bar.
+        """
         if self._progress is None:
             return TaskID(-1)
-        total = float(count) if count else None
-        return self._progress.add_task("提取语音...", total=total)
+        if count:
+            return self._progress.add_task(f"提取语音 (0/{count})...", total=float(count))
+        return self._progress.add_task("⏳ 提取语音...", total=None)
 
     def task_transcribe(self, total: int) -> TaskID:
-        """Bar + percentage task (Whisper transcription of N voice files)."""
+        """Bar task for Whisper transcription of N voice files."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("语音转写...", total=float(total))
+        return self._progress.add_task(f"语音转写 (0/{total})...", total=float(total))
 
     def task_dictionary(self) -> TaskID:
         """Spinner task for dictionary loading."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("加载词典...", total=None)
+        return self._progress.add_task("⏳ 加载词典...", total=None)
 
     def task_rounds(self) -> TaskID:
         """Spinner task for round detection."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("识别回合...", total=None)
+        return self._progress.add_task("⏳ 识别回合...", total=None)
 
     def task_players(self, count: int) -> TaskID:
         """Bar task for player resolution."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("识别球员...", total=float(count))
+        return self._progress.add_task(f"识别球员 (0/{count})...", total=float(count))
 
     def task_translate(self, total: int) -> TaskID:
-        """Bar + percentage task for LLM translation batches."""
+        """Bar task for LLM translation batches."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("LLM 翻译...", total=float(total))
+        return self._progress.add_task(f"LLM 翻译 (0/{total})...", total=float(total))
 
     def task_subtitles(self, total: int) -> TaskID:
         """Bar task for SRT generation."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task("生成字幕...", total=float(total))
+        return self._progress.add_task(f"生成字幕 (0/{total})...", total=float(total))
 
     # ---- status helpers ----
 
