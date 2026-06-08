@@ -321,7 +321,7 @@ class TestGlossaryCRUD:
             assert response.status_code == 404
 
     def test_update_term(self):
-        """POST /glossary/update/0 → updates zh."""
+        """POST /glossary/update/0 → updates zh and returns display row."""
         fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "user"}]
         with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms), \
              patch("cs2tl.web.routes._save_glossary_terms") as mock_save:
@@ -332,6 +332,31 @@ class TestGlossaryCRUD:
             assert response.status_code == 200
             mock_save.assert_called_once()
             assert fake_terms[0]["zh"] == "狙击枪"
+            # Should return display row HTML (not a redirect trigger)
+            assert "狙击枪" in response.text
+            assert "editGlossaryTerm" in response.text
+
+    def test_edit_form_route(self):
+        """GET /glossary/edit/0 → returns inline edit form row."""
+        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "user"}]
+        with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms):
+            response = client.get("/glossary/edit/0")
+            assert response.status_code == 200
+            assert 'edit-zh-0' in response.text
+            assert 'hx-post="/glossary/update/0"' in response.text
+
+    def test_edit_form_rejects_system_term(self):
+        """GET /glossary/edit/0 → 403 for system (non-user) term."""
+        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "de_dust2"}]
+        with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms):
+            response = client.get("/glossary/edit/0")
+            assert response.status_code == 403
+
+    def test_edit_form_404_for_invalid_index(self):
+        """GET /glossary/edit/999 → 404."""
+        with patch("cs2tl.web.routes._load_glossary_terms", return_value=[]):
+            response = client.get("/glossary/edit/999")
+            assert response.status_code == 404
 
 
 class TestGlossarySave:
