@@ -5,17 +5,26 @@ Config resolution precedence:
   2. CS2TL_CONFIG environment variable
   3. ./.cs2tl.yml (project-local, current directory)
   4. ~/.cs2tl/config.yml (default)
+
+Data directory resolution precedence:
+  1. CS2TL_DATA_DIR environment variable
+  2. ./cs2tl-data/ (project root)
+  3. ~/.cs2tl/ (fallback)
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import stat
 import sys
 from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -65,9 +74,40 @@ class AppConfig(BaseModel):
 # Path resolution
 # ---------------------------------------------------------------------------
 
+def _find_project_root() -> Path:
+    """Walk up from this source file's location to find the project root.
+
+    Looks for the first parent directory containing either ``.git/`` or
+    ``pyproject.toml``.  When running from a pip-installed wheel (site-packages
+    contains no .git), falls back to ``os.getcwd()``.
+    """
+    start = Path(__file__).resolve().parent
+    for ancestor in [start, *start.parents]:
+        if (ancestor / ".git").exists() or (ancestor / "pyproject.toml").exists():
+            return ancestor
+    # Fallback: running from a pip-installed wheel
+    return Path.cwd()
+
+
+def default_data_dir() -> Path:
+    """Return the preferred data directory (``{project_root}/cs2tl-data/``).
+
+    The directory is *not* created here — callers should mkdir when needed.
+    """
+    env_dir = os.environ.get("CS2TL_DATA_DIR", "")
+    if env_dir:
+        return Path(env_dir)
+    return _find_project_root() / "cs2tl-data"
+
+
+def _legacy_home_dir() -> Path:
+    """Return the legacy home directory path (~/.cs2tl/)."""
+    return Path.home() / ".cs2tl"
+
+
 def default_config_path() -> Path:
     """Return ~/.cs2tl/config.yml."""
-    return Path.home() / ".cs2tl" / "config.yml"
+    return _legacy_home_dir() / "config.yml"
 
 
 def project_config_path() -> Path:
@@ -76,18 +116,127 @@ def project_config_path() -> Path:
 
 
 def default_cache_dir() -> Path:
-    """Return ~/.cs2tl/cache/."""
-    return Path.home() / ".cs2tl" / "cache"
+    """Return the cache directory under the resolved data dir.
+
+    Prefers ``cs2tl-data/cache/`` → falls back to ``~/.cs2tl/cache/``.
+    """
+    data_dir = default_data_dir()
+    # If the env var is set or the project root has a cs2tl-data dir, use it
+    if os.environ.get("CS2TL_DATA_DIR") or (data_dir.parent / ".git").exists():
+        return data_dir / "cache"
+    # Fallback: use legacy home path
+    return _legacy_home_dir() / "cache"
 
 
 def default_dictionary_dir() -> Path:
-    """Return ~/.cs2tl/dictionaries/."""
-    return Path.home() / ".cs2tl" / "dictionaries"
+    """Return the dictionary directory under the resolved data dir.
+
+    Prefers ``cs2tl-data/dictionaries/`` → falls back to ``~/.cs2tl/dictionaries/``.
+    """
+    return default_data_dir() / "dictionaries"
 
 
 def _ensure_dir(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Data migration (legacy ~/.cs2tl/ → cs2tl-data/)
+# ---------------------------------------------------------------------------
+
+def migrate_old_data(interactive: bool = True) -> bool:
+    """Copy-then-verify migration from legacy ``~/.cs2tl/`` to ``cs2tl-data/``.
+
+    Steps:
+      1. Detect if ``~/.cs2tl/cache/`` has data.
+      2. Prompt in interactive mode, auto-migrate in non-interactive mode.
+      3. Copy files → verify count + sizes → delete source on success.
+      4. Rollback on failure (delete partial copies, keep source).
+
+    Returns:
+        True if migration was performed, False if nothing to migrate.
+    """
+    legacy_dir = _legacy_home_dir()
+    legacy_cache = legacy_dir / "cache"
+    if not legacy_cache.exists() or not any(legacy_cache.iterdir()):
+        return False
+
+    target_dir = default_data_dir()
+    target_cache = target_dir / "cache"
+
+    # Already migrated?
+    if target_cache.exists() and any(target_cache.iterdir()):
+        logger.info("Target cache already has data, skipping migration.")
+        return False
+
+    if interactive:
+        try:
+            answer = input(
+                f"\n检测到旧缓存 {legacy_cache}，迁移到 {target_cache}？[Y/n] "
+            ).strip().lower()
+            if answer and answer != "y":
+                print("跳过迁移。旧缓存保留在 ~/.cs2tl/ 中。")
+                return False
+        except (EOFError, KeyboardInterrupt):
+            print("\n跳过迁移。")
+            return False
+
+    print(f"正在迁移缓存数据: {legacy_cache} → {target_cache}")
+    logger.info("Migrating data from %s to %s", legacy_cache, target_cache)
+
+    # Collect source files
+    src_files: list[tuple[Path, Path]] = []
+    for root, _dirs, files in os.walk(legacy_cache):
+        root_path = Path(root)
+        for fname in files:
+            src = root_path / fname
+            rel = src.relative_to(legacy_cache)
+            dst = target_cache / rel
+            src_files.append((src, dst))
+
+    if not src_files:
+        return False
+
+    # copy-then-verify
+    target_cache.mkdir(parents=True, exist_ok=True)
+    copied: list[Path] = []
+    try:
+        for src, dst in src_files:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            copied.append(dst)
+
+        # Verify: file count and total size match
+        src_total = sum(f[0].stat().st_size for f in src_files)
+        dst_total = sum(c.stat().st_size for c in copied)
+        if len(copied) != len(src_files) or dst_total != src_total:
+            raise RuntimeError(
+                f"验证失败: 源文件 {len(src_files)} 个 ({src_total} bytes), "
+                f"目标文件 {len(copied)} 个 ({dst_total} bytes)"
+            )
+
+        # Success — remove legacy cache
+        shutil.rmtree(legacy_cache, ignore_errors=True)
+        print(f"✅ 迁移完成: {len(copied)} 个文件已移至 {target_cache}")
+        logger.info("Migration complete: %d files", len(copied))
+        return True
+
+    except Exception as e:
+        # Rollback: delete partially copied files
+        logger.warning("Migration failed, rolling back: %s", e)
+        for dst in copied:
+            try:
+                dst.unlink()
+            except OSError:
+                pass
+        # Remove empty directories in target_cache
+        try:
+            shutil.rmtree(target_cache, ignore_errors=True)
+        except OSError:
+            pass
+        print(f"⚠️ 迁移失败: {e}。旧缓存保留在 {legacy_cache} 中。")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +292,13 @@ def _check_permissions(path: Path) -> None:
 
 
 def resolve_paths(config: AppConfig) -> AppConfig:
-    """Set derived paths (cache_dir, dictionary.local_path) if not overridden."""
+    """Set derived paths (cache_dir, dictionary.local_path) if not overridden.
+
+    Priority chain for data directory:
+      1. CS2TL_DATA_DIR environment variable
+      2. ./cs2tl-data/ (project root)
+      3. ~/.cs2tl/ (fallback)
+    """
     if not config.cache_dir:
         config.cache_dir = str(_ensure_dir(default_cache_dir()))
     if not config.dictionary.local_path:

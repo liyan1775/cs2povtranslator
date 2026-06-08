@@ -46,9 +46,16 @@ def main(
         port: Bind port (default: 8765).
         open_browser: Whether to open the default browser on startup.
     """
+    import os
     import webbrowser
 
     import uvicorn
+
+    # Set HF_HOME before anything imports faster_whisper, so model weights
+    # land in ./cs2tl-data/huggingface/ instead of the global HF cache.
+    from cs2tl.config import default_data_dir
+    data_dir = default_data_dir()
+    os.environ["HF_HOME"] = str(data_dir / "huggingface")
 
     if open_browser:
         webbrowser.open(f"http://{host}:{port}")
