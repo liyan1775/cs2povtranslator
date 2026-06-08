@@ -124,32 +124,19 @@ def _resolve_device(device: str) -> str:
 def _transcribe_one(model, steam_id: str, wav_path: Path) -> list[PartialSegment]:
     """Transcribe a single WAV file.
 
-    VAD is configured with a lower-than-default threshold (0.35 instead of
-    0.5) because CS2 voice chat often includes quiet speakers, heavy accents,
-    and background game noise that the default Silero VAD threshold misses
-    (observed: 267s WAV → only 4 segments for some players).
+    VAD is disabled because CS2 demos use push-to-talk: the extractor only
+    outputs opus voice packets, so every WAV file is already 100% speech with
+    no background noise or silence to filter.  Applying Silero VAD on top of
+    pre-filtered voice data only adds false negatives (observed: 267 s of
+    push-to-talk audio → only 4 VAD-detected segments for some players).
     """
-    # Total audio duration for diagnostics
-    import wave as _wave
-    try:
-        with _wave.open(str(wav_path), "rb") as wf:
-            total_duration = wf.getnframes() / wf.getframerate()
-    except Exception:
-        total_duration = 0.0
-
     segments_out, info = model.transcribe(
         str(wav_path),
         beam_size=5,
-        vad_filter=True,
-        vad_parameters={
-            "threshold": 0.35,            # default 0.5 — too strict for gaming comms
-            "min_speech_duration_ms": 100,  # catch short callouts ("A!", "B!", "one more")
-            "min_silence_duration_ms": 500, # longer silence before splitting (was 300)
-        },
+        vad_filter=False,
     )
 
     result: list[PartialSegment] = []
-    speech_duration = 0.0
     for segment in segments_out:
         if segment.text.strip():  # skip truly empty results
             result.append(
@@ -161,22 +148,12 @@ def _transcribe_one(model, steam_id: str, wav_path: Path) -> list[PartialSegment
                     confidence=round(segment.avg_logprob, 3),
                 )
             )
-            speech_duration += segment.end - segment.start
 
-    if total_duration > 0 and result:
-        vad_ratio = speech_duration / total_duration * 100
-        logger.info(
-            "  → %d segments, VAD speech: %.1fs / %.1fs total (%.0f%%), avg confidence %.2f",
-            len(result), speech_duration, total_duration,
-            vad_ratio,
-            sum(s.confidence for s in result) / max(len(result), 1),
-        )
-    elif total_duration > 0:
-        logger.warning(
-            "  → 0 segments from %.1fs of audio! VAD may be filtering all speech. "
-            "Check audio quality or lower vad_parameters.threshold further.",
-            total_duration,
-        )
+    logger.info(
+        "  → %d segments, avg confidence %.2f",
+        len(result),
+        sum(s.confidence for s in result) / max(len(result), 1),
+    )
     return result
 
 
