@@ -24,7 +24,7 @@ _STAGE_LABELS = {
     "transcribe": "语音转写",
     "dictionary": "加载词典",
     "rounds": "识别回合",
-    "players": "识别球员",
+    "players": "识别玩家",
     "translate": "LLM 翻译",
     "subtitles": "生成字幕",
 }
@@ -119,7 +119,7 @@ class PipelineProgress:
         """Bar task for player resolution."""
         if self._progress is None:
             return TaskID(-1)
-        return self._progress.add_task(f"识别球员 (0/{count})...", total=float(count))
+        return self._progress.add_task(f"识别玩家 (0/{count})...", total=float(count))
 
     def task_translate(self, total: int) -> TaskID:
         """Bar task for LLM translation batches."""

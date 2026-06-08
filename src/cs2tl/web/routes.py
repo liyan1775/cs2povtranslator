@@ -67,7 +67,7 @@ STAGE_LABELS = {
     "transcribe": "语音转写",
     "dictionary": "加载词典",
     "rounds": "识别回合",
-    "players": "识别球员",
+    "players": "识别玩家",
     "translate": "LLM 翻译",
     "subtitles": "生成字幕",
 }
@@ -341,7 +341,7 @@ def _render_progress_fragment(data: dict | None) -> str:
         ("transcribe", "语音转写"),
         ("dictionary", "加载词典"),
         ("rounds", "识别回合"),
-        ("players", "识别球员"),
+        ("players", "识别玩家"),
         ("translate", "LLM 翻译"),
         ("subtitles", "生成字幕"),
     ]
@@ -1001,7 +1001,7 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
                 write_progress("rounds", 4, "回合识别跳过（非关键）")
 
             # Stage 5: Players
-            write_progress("players", 4, "正在识别球员...")
+            write_progress("players", 4, "正在识别玩家...")
             t_players = pp.task_players(len(wav_files))
             from cs2tl.player_resolver import resolve_players
             players = resolve_players(demo, list(wav_files.keys()))
@@ -1009,8 +1009,8 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
                 pid = players.get(getattr(seg, "steam_id", ""))
                 if pid:
                     setattr(seg, "team", pid.team)
-            pp.stage_done(t_players, f"识别 {len(players)} 名球员")
-            write_progress("players", 5, f"识别 {len(players)} 名球员")
+            pp.stage_done(t_players, f"识别 {len(players)} 名玩家")
+            write_progress("players", 5, f"识别 {len(players)} 名玩家")
 
             # Halftime swap
             if rounds:
