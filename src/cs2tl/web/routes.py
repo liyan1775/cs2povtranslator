@@ -554,9 +554,10 @@ async def glossary_update(
     terms = _load_glossary_terms()
     if term_id < 0 or term_id >= len(terms):
         raise HTTPException(404, "术语不存在")
-    if terms[term_id].get("source") != "user":
-        raise HTTPException(403, "系统术语不可修改")
     terms[term_id]["zh"] = zh.strip()
+    # Promote system terms to user overrides so edits persist
+    if terms[term_id].get("source") != "user":
+        terms[term_id]["source"] = "user"
     _save_glossary_terms(terms)
     logger.info("Glossary: updated term %d", term_id)
     return HTMLResponse(_render_glossary_display_row(terms[term_id], term_id))
@@ -568,8 +569,6 @@ async def glossary_edit_form(term_id: int):
     terms = _load_glossary_terms()
     if term_id < 0 or term_id >= len(terms):
         raise HTTPException(404, "术语不存在")
-    if terms[term_id].get("source") != "user":
-        raise HTTPException(403, "系统术语不可修改")
     return HTMLResponse(_render_glossary_edit_row(terms[term_id], term_id))
 
 
@@ -1194,14 +1193,13 @@ def _render_glossary_display_row(term: dict, index: int) -> str:
     zh_esc = _html.escape(term.get("zh", ""))
     category = term.get("category", "")
 
-    edit_btn = ""
+    edit_btn = (
+        f'<button onclick="editGlossaryTerm({index})"'
+        f'        style="background:transparent;color:var(--color-text-secondary);"'
+        f'        title="编辑">✏️</button>'
+    )
     delete_btn = ""
     if term.get("source") == "user":
-        edit_btn = (
-            f'<button onclick="editGlossaryTerm({index})"'
-            f'        style="background:transparent;color:var(--color-text-secondary);"'
-            f'        title="编辑">✏️</button>'
-        )
         delete_btn = (
             f'<button hx-delete="/glossary/delete/{index}"'
             f'        hx-target="#term-{index}" hx-swap="outerHTML"'

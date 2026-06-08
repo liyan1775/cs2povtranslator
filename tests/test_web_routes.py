@@ -345,12 +345,27 @@ class TestGlossaryCRUD:
             assert 'edit-zh-0' in response.text
             assert 'hx-post="/glossary/update/0"' in response.text
 
-    def test_edit_form_rejects_system_term(self):
-        """GET /glossary/edit/0 → 403 for system (non-user) term."""
+    def test_update_system_term_promotes_to_user(self):
+        """POST /glossary/update/0 on system term → succeeds and promotes source to user."""
+        fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "de_dust2"}]
+        with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms), \
+             patch("cs2tl.web.routes._save_glossary_terms") as mock_save:
+            response = client.post(
+                "/glossary/update/0",
+                data={"zh": "狙击枪"},
+            )
+            assert response.status_code == 200
+            mock_save.assert_called_once()
+            assert fake_terms[0]["zh"] == "狙击枪"
+            assert fake_terms[0]["source"] == "user"  # promoted to user override
+
+    def test_edit_form_allows_system_term(self):
+        """GET /glossary/edit/0 → 200 for system terms too (editing saves as user override)."""
         fake_terms = [{"en": "AWP", "zh": "大狙", "category": "weapon", "aliases": [], "source": "de_dust2"}]
         with patch("cs2tl.web.routes._load_glossary_terms", return_value=fake_terms):
             response = client.get("/glossary/edit/0")
-            assert response.status_code == 403
+            assert response.status_code == 200
+            assert 'edit-zh-0' in response.text
 
     def test_edit_form_404_for_invalid_index(self):
         """GET /glossary/edit/999 → 404."""
