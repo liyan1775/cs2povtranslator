@@ -343,9 +343,15 @@
     }
 
     // ── Glossary inline edit ──
+    var _glossEditingIndex = -1;  // track currently-editing row for cleanup
     function editGlossaryTerm(index) {
       var row = document.getElementById('term-' + index);
       if (!row) return;
+      // Clean up previous backup if switching from another row
+      if (_glossEditingIndex >= 0) {
+        delete window['_glossBackup' + _glossEditingIndex];
+      }
+      _glossEditingIndex = index;
       // Save original HTML so Cancel can restore it
       window['_glossBackup' + index] = row.outerHTML;
       // Fetch the edit form from the server
@@ -358,6 +364,7 @@
       if (row) { row.outerHTML = backup; }
       htmx.process(document.getElementById('term-' + index));
       delete window['_glossBackup' + index];
+      _glossEditingIndex = -1;
     }
   </script>
 </body>

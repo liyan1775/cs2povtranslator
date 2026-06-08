@@ -551,8 +551,6 @@ async def glossary_update(
 
     Returns the updated display row HTML so HTMX can swap it in-place.
     """
-    import html as _html
-
     terms = _load_glossary_terms()
     if term_id < 0 or term_id >= len(terms):
         raise HTTPException(404, "术语不存在")
@@ -1233,14 +1231,11 @@ def _render_glossary_edit_row(term: dict, index: int) -> str:
 
     en_esc = _html.escape(term.get("en", ""))
     zh_esc = _html.escape(term.get("zh", ""))
-    category = term.get("category", "")
-    aliases = ", ".join(term.get("aliases", []))
-    aliases_esc = _html.escape(aliases)
 
     return f"""
 <tr id="term-{index}">
   <td><strong>{en_esc}</strong></td>
-  <td colspan="3">
+  <td colspan="4">
     <div style="display:flex;gap:var(--space-sm);align-items:center;">
       <input name="zh" id="edit-zh-{index}" value="{zh_esc}"
              style="flex:1;margin-bottom:0;">
