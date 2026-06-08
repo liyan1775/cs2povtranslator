@@ -907,8 +907,28 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
     voices_dir = cache / "voices"
     transcribed_cache = cache / f"{demo.stem}.transcribed.jsonl"
     translated_cache = cache / f"{demo.stem}.translated.jsonl"
-    skip_extract = voices_dir.exists() and any(voices_dir.iterdir())
-    skip_transcribe = transcribed_cache.exists()
+
+    # Check if transcribed cache has unaligned timestamps (all near 0).
+    # If so, force re-extraction to get voice_packet_info for alignment.
+    _need_realign = False
+    if transcribed_cache.exists():
+        try:
+            first_line = next(iter(transcribed_cache.read_text(encoding="utf-8").splitlines()[:1]), "")
+            if first_line.strip():
+                last_lines = transcribed_cache.read_text(encoding="utf-8").splitlines()[-5:]
+                for line in reversed(last_lines):
+                    if line.strip():
+                        seg = json.loads(line)
+                        last_t = float(seg.get("start_time", 0))
+                        if last_t < 90:  # suspicious: 30-min demo shouldn't end at 90s
+                            _need_realign = True
+                            logger.warning("Cached timestamps look unaligned (max ~%.0fs), forcing re-extraction", last_t)
+                        break
+        except Exception:
+            pass
+
+    skip_extract = voices_dir.exists() and any(voices_dir.iterdir()) and not _need_realign
+    skip_transcribe = transcribed_cache.exists() and not _need_realign
     skip_translate = translated_cache.exists()
 
     # Load config once — needed by transcribe, dictionary, and translate stages
