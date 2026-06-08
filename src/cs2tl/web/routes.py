@@ -16,6 +16,7 @@ import os
 import subprocess
 import tempfile
 import threading
+import traceback
 import uuid
 from pathlib import Path
 
@@ -987,10 +988,16 @@ def _run_pipeline(job_id: str, demo_path: str, output_dir: str, cache_dir: str) 
                 logger.warning("Job %s: failed to mark complete — %s", job_id, e)
 
         except Exception as e:
-            logger.error("Job %s: pipeline failed — %s", job_id, e)
+            full_tb = traceback.format_exc()
+            logger.error("Job %s: pipeline failed — %s\n%s", job_id, e, full_tb)
             # Try to write error progress — stage may not be set
             try:
                 write_progress("translate", 5, str(e)[:100], error=str(e))
+            except Exception:
+                pass
+            # Also write full traceback to a file for debugging
+            try:
+                (cache / "error_traceback.txt").write_text(full_tb, encoding="utf-8")
             except Exception:
                 pass
             try:
