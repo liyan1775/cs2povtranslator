@@ -218,9 +218,10 @@ class TestRussianAliases:
             }],
         }), encoding="utf-8")
         mgr = DictionaryManager(repo_url="unused", local_path=tmp_dir)
-        loaded = mgr.load_all()
-        assert "de_cache" in loaded
-        term = loaded["de_cache"].terms[0]
+        # Use _load_one directly since load_all() now only scans *.tsv files
+        loaded_dict = mgr._load_one("de_cache", zones)
+        assert loaded_dict.map_name == "de_cache"
+        term = loaded_dict.terms[0]
         assert term.russian_aliases == []
 
     def test_ru_string_handled_as_list(self, tmp_dir):
