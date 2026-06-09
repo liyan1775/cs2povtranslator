@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.3.1 (2026-06-09)
+
+### Added
+- TSV 词典系统：每张地图独立 `.tsv` 文件（Tab 分隔），用记事本即可编辑
+- `cs2tl dictionary edit <map>` — 用默认编辑器打开词典文件
+- `cs2tl dictionary init` — 一键导出全部 7 张地图为 TSV 文件
+- `cs2tl wizard` — 交互式翻译向导（4 步引导：环境检查 → 选文件 → 确认参数 → 执行）
+- 时间戳对齐：Whisper WAV 时间戳自动修正为 demo 实际时间
+
+### Changed
+- SRT 输出格式改为 `[EN]` / `[中]` 双语对照标签
+- `cs2tl dictionary list` 显示 TSV/内置来源
+- `start-cs2tl.bat` 改为启动交互式向导（不再启动 Web 服务）
+
+### Fixed
+- `doctor.py` 移除已废弃的 csgove 检查和自动下载逻辑
+- `doctor.py` 修复 Windows GBK 终端 Rich 渲染崩溃（自动 UTF-8 包装）
+- `doctor.py` 修复 `*_()` 笔误为 `*()`
+- `dict_update` 帮助文案更新为 TSV 操作指引
+
+### Removed
+- `doctor.py` 中 `_check_csgove()` 函数及交互式下载逻辑
+- `DictionaryManager.load_all()` 中对旧 YAML 子目录的合并逻辑（改为 TSV 覆盖）
+- `web/routes.py` 中重复的 `_align_transcriber_timestamps`（移至 `extractor.py`）
+
 ## v0.3.0 (2026-06-08)
 
 ### Added
