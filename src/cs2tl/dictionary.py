@@ -156,47 +156,87 @@ class DictionaryManager:
         return loaded
 
     def load_all(self) -> dict[str, MapDictionary]:
-        """Load dictionaries — built-in first, then local overrides if available.
+        """Load dictionaries — TSV files first, then built-in YAML fallback.
 
-        Local YAML files in ``{local_path}/{map_name}/zones.yml`` can supplement
-        the built-in data.  They are merged on top: new terms are appended,
-        existing terms are NOT replaced (the built-in values take precedence).
+        Priority for each map:
+          1. ``{local_path}/{map_name}.tsv`` — user-editable TSV file
+          2. Built-in YAML (shipped with the wheel)
         """
         self._loaded.clear()
 
-        # 1. Load built-in (always available)
+        # 1. Load built-in YAML (always available, fallback)
         self._loaded = self.load_builtin()
 
-        # 2. Overlay local files if present
+        # 2. Overlay TSV files if present (complete override per map)
         if self.local_path and self.local_path.exists():
-            for entry in sorted(self.local_path.iterdir()):
-                if not entry.is_dir() or entry.name.startswith("."):
-                    continue
-                zones_yml = entry / "zones.yml"
-                if not zones_yml.exists():
-                    continue
+            for tsv_file in sorted(self.local_path.glob("*.tsv")):
+                map_name = tsv_file.stem  # e.g., "de_dust2" from "de_dust2.tsv"
                 try:
-                    local_dict = self._load_one(entry.name, zones_yml)
-                    if entry.name in self._loaded:
-                        # Merge: append terms from local that don't exist in built-in
-                        builtin = self._loaded[entry.name]
-                        builtin_aliases = {a.lower().strip() for t in builtin.terms for a in t.aliases}
-                        for term in local_dict.terms:
-                            if not any(a.lower().strip() in builtin_aliases for a in term.aliases):
-                                builtin.terms.append(term)
-                                builtin.build_index()
-                                self._loaded[entry.name] = builtin
-                        logger.info("Merged local terms for %s (total: %d)", entry.name, len(builtin.terms))
-                    else:
-                        self._loaded[entry.name] = local_dict
-                        logger.info("Loaded local dictionary for %s: %d terms", entry.name, len(local_dict.terms))
+                    tsv_dict = self._load_tsv(map_name, tsv_file)
+                    # TSV completely replaces built-in for this map
+                    self._loaded[map_name] = tsv_dict
+                    logger.info(
+                        "Loaded TSV dictionary for %s: %d terms (overrides built-in)",
+                        map_name, len(tsv_dict.terms),
+                    )
                 except Exception as e:
-                    logger.warning("Skipping local %s: %s", entry.name, e)
+                    logger.warning("Skipping TSV %s: %s", tsv_file.name, e)
 
         return self._loaded
 
+    def _load_tsv(self, map_name: str, tsv_path: Path) -> MapDictionary:
+        """Parse a TSV dictionary file.
+
+        Format (tab-separated)::
+
+            en_alias / en_alias \\t ru_alias / ru_alias \\t zh_name \\t category
+
+        Lines starting with ``#`` are comments and skipped.
+        Empty lines are skipped.
+        """
+        terms: list[CalloutTerm] = []
+        with open(tsv_path, "r", encoding="utf-8") as f:
+            for lineno, line in enumerate(f, 1):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                parts = stripped.split("\t")
+                if len(parts) < 3:
+                    logger.warning(
+                        "%s:%d: expected at least 3 tab-separated fields, got %d — skipping",
+                        tsv_path.name, lineno, len(parts),
+                    )
+                    continue
+                en_aliases = [a.strip() for a in parts[0].split("/") if a.strip()]
+                ru_aliases = [a.strip() for a in parts[1].split("/") if a.strip()] if len(parts) > 1 and parts[1].strip() != "-" else []
+                zh = parts[2].strip()
+                category = parts[3].strip() if len(parts) > 3 else "zone"
+                if not en_aliases or not zh:
+                    logger.warning(
+                        "%s:%d: empty en aliases or zh name — skipping",
+                        tsv_path.name, lineno,
+                    )
+                    continue
+                terms.append(CalloutTerm(
+                    aliases=en_aliases,
+                    chinese_name=zh,
+                    map_name=map_name,
+                    category=category,
+                    russian_aliases=ru_aliases,
+                ))
+
+        md = MapDictionary(map_name=map_name, version="tsv", terms=terms)
+        md.build_index()
+        return md
+
     def _load_one(self, map_name: str, yml_path: Path) -> MapDictionary:
-        """Parse a single zones.yml into a MapDictionary."""
+        """Parse a single zones.yml into a MapDictionary.
+
+        .. deprecated:: 0.3.1
+            YAML merge was replaced by TSV override in ``load_all()``.
+            This method is kept only for test compatibility and will be
+            removed in a future version.
+        """
         from cs2tl.errors import dictionary_yaml_error
 
         try:
