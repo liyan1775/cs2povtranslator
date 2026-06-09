@@ -19,6 +19,8 @@ from cs2tl.transcriber import PartialSegment
 import typer
 from rich.console import Console
 
+logger = logging.getLogger(__name__)
+
 from cs2tl.cli.progress import PipelineProgress
 from cs2tl.config import load_config, resolve_paths
 from cs2tl.dictionary import DictionaryManager
@@ -108,6 +110,7 @@ def translate_cmd(
 
         # wav_files is set in stage 1; may be empty list if --from skips extract
         wav_files: list[Path] = []
+        voice_packet_info: dict[str, list[dict]] | None = None
 
         # Stage 1: Extract
         if should_run("extract"):
@@ -115,6 +118,7 @@ def translate_cmd(
             try:
                 extraction = run_extraction(demo, voices_dir)
                 wav_files = extraction.wav_files
+                voice_packet_info = extraction.voice_packet_info
                 pp.stage_done(task, f"已提取 {len(wav_files)} 名玩家语音")
                 if machine_readable:
                     _write_progress("extract", 1, 7, f"已提取 {len(wav_files)} 名玩家语音", cache_dir=progress_dir)
@@ -155,6 +159,24 @@ def translate_cmd(
                     _write_progress("transcribe", 2, 7, e.message, error=e.message, cache_dir=progress_dir)
                 pp.stage_failed(task, e.message)
                 exit_with_error(e)
+
+        # Align Whisper's WAV-relative timestamps → demo timestamps
+        if voice_packet_info:
+            from cs2tl.extractor import align_transcriber_timestamps
+            partial_segs = align_transcriber_timestamps(partial_segs, voice_packet_info)
+            logger.info("Aligned %d segments to demo timestamps", len(partial_segs))
+            # Rewrite transcribed cache with aligned timestamps
+            try:
+                import dataclasses
+                transcribed_cache.write_text(
+                    "\n".join(
+                        json.dumps(dataclasses.asdict(s), ensure_ascii=False)
+                        for s in partial_segs
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
 
         # Stage 3: Dictionary
         if should_run("dictionary"):
