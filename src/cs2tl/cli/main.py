@@ -30,6 +30,7 @@ from cs2tl.cli.config_cmd import config_app
 from cs2tl.cli.dictionary_cmd import dict_app
 from cs2tl.cli.doctor import doctor_cmd
 from cs2tl.cli.translate import translate_cmd
+from cs2tl.cli.wizard import wizard_cmd
 from cs2tl.web.app import main as web_main
 
 app = typer.Typer(
@@ -40,6 +41,9 @@ app = typer.Typer(
 
 # cs2tl translate
 app.command(name="translate")(translate_cmd)
+
+# cs2tl wizard
+app.command(name="wizard")(wizard_cmd)
 
 # cs2tl dictionary | dict (P1-10: shortcut alias)
 app.add_typer(dict_app, name="dictionary", help="Manage CS2 callout dictionaries")

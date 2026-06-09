@@ -235,3 +235,65 @@ def run_extraction(
                 logger.debug("Cleaned up temp file: %s", tmp_dem)
             except OSError:
                 pass
+
+
+def align_transcriber_timestamps(
+    partial_segs: list,
+    voice_packet_info: dict[str, list[dict]],
+) -> list:
+    """Map Whisper's WAV-relative timestamps back to demo-relative time.
+
+    The transcriber sees concatenated voice packets as one WAV file, so its
+    timestamps are relative to WAV start (0:00).  Real demo timestamps come
+    from the extractor's per-packet ``voice_packet_info`` which records the
+    (demo_start, wav_offset, duration) of every decoded opus frame.
+
+    Mutates each segment's ``start_time`` and ``end_time`` in-place and
+    returns the same list.  Callers should use the return value for
+    clarity but reassignment is not strictly required.
+
+    Algorithm:
+      For each segment, find the voice packet whose WAV range contains the
+      segment's ``start_time``, then apply:
+          offset = packet.demo_start - packet.wav_offset
+          segment.start_time += offset
+          segment.end_time   += offset
+
+    Segments that don't fall cleanly into any packet (edge cases like VAD
+    splitting a phrase across packet boundaries) are snapped to the nearest
+    packet — we use the packet whose WAV range overlaps the segment's start.
+    """
+    if not voice_packet_info:
+        return list(partial_segs)
+
+    for seg in partial_segs:
+        sid = getattr(seg, "steam_id", "")
+        packets = voice_packet_info.get(sid, [])
+        if not packets:
+            continue
+
+        wav_start = getattr(seg, "start_time", 0.0)
+        wav_end = getattr(seg, "end_time", wav_start + 1.0)
+
+        # Find the packet whose WAV range covers wav_start
+        best_pkt = None
+        for pkt in packets:
+            pkt_wav_end = pkt["wav_offset"] + pkt["duration"]
+            if pkt["wav_offset"] <= wav_start < pkt_wav_end + 0.05:
+                best_pkt = pkt
+                break
+
+        if best_pkt is None:
+            # Fallback: snap to the chronologically closest packet
+            if packets:
+                best_pkt = min(
+                    packets,
+                    key=lambda p: abs(p["wav_offset"] - wav_start),
+                )
+
+        if best_pkt is not None:
+            offset = best_pkt["demo_start"] - best_pkt["wav_offset"]
+            seg.start_time = round(wav_start + offset, 3)
+            seg.end_time = round(wav_end + offset, 3)
+
+    return partial_segs

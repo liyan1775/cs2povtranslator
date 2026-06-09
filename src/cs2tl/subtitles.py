@@ -77,7 +77,9 @@ def _write_one_srt(path: Path, segments: list, encoding: str) -> None:
 def _build_srt_content(segments: list) -> str:
     """Build the full SRT content string from segments.
 
-    Outputs bilingual format: original language on line 1, Chinese on line 2.
+    Outputs bilingual format:
+        [EN] player: original text
+        [中] Chinese translation
     """
     if not segments:
         return "1\n00:00:00,000 --> 00:00:01,000\n无语音通讯\n\n"
@@ -120,8 +122,8 @@ def format_srt_entry(
     Output format (original language on top, Chinese below):
         1
         00:00:01,500 --> 00:00:03,200
-        donk: let's go A short
-        donk: 走A小
+        [EN] donk: let's go A short
+        [中] 走A小
 
     If original and translated are identical (e.g. callsigns / untranslated
     terms), only one line is emitted to avoid duplication.
@@ -131,9 +133,9 @@ def format_srt_entry(
 
     lines: list[str] = []
     if original_text:
-        lines.append(f"{player_name}: {original_text}")
+        lines.append(f"[EN] {player_name}: {original_text}")
     if translated_text and translated_text != original_text:
-        lines.append(f"{player_name}: {translated_text}")
+        lines.append(f"[中] {translated_text}")
 
     if not lines:
         return ""

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cs2povtranslator"
-version = "0.3.0"
+version = "0.3.1"
 description = "CS2 POV subtitle translator: extract CS2 Faceit demo voice comms, transcribe with Whisper, and translate with esports terminology"
 readme = "README.md"
 license = { text = "MIT" }
