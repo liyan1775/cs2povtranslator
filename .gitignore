@@ -1,46 +1,37 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-*.whl
-
-# Virtual environment
-.venv/
-venv/
-env/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Testing
 .pytest_cache/
-.coverage
-htmlcov/
-.tox/
-tests/screenshots/
-
-# Type checking
 .mypy_cache/
 .ruff_cache/
+*.egg-info/
+build/
+dist/
 
-# Project-specific
-*.srt
-*.jsonl
-voices/
-subtitles/
-.cs2tl_cache/
-cs2tl-data/
-apikey.txt
+# Virtual environments
+.venv/
+venv/
 
-# OS
+# Local outputs and feedback
+output/
+output_*/
+cs2pov_feedback_*.zip
+feedback_*.zip
+
+# Demo/audio artifacts
+*.dem
+*.dem.zst
+*.wav
+artifacts/voice/
+artifacts/temp_audio/
+
+# Secrets and local config
+.env
+*.local
+*.key
+
+# IDE / OS
+.idea/
+.vscode/
 .DS_Store
 Thumbs.db
-.gstack/

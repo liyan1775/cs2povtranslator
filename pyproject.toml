@@ -1,82 +1,31 @@
 [build-system]
-requires = ["hatchling>=1.21"]
+requires = ["hatchling>=1.24"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cs2povtranslator"
-version = "0.3.0"
-description = "CS2 POV subtitle translator: extract CS2 Faceit demo voice comms, transcribe with Whisper, and translate with esports terminology"
-readme = "README.md"
-license = { text = "MIT" }
-requires-python = ">=3.10"
-authors = [
-    { name = "Yan Li" }
-]
-keywords = ["cs2", "counter-strike", "pov", "subtitles", "whisper", "translation", "esports"]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Environment :: Console",
-    "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Multimedia :: Sound/Audio :: Speech",
-    "Topic :: Text Processing :: Linguistic",
-]
-
-dependencies = [
-    "typer[all]>=0.15",
-    "faster-whisper>=1.0",
-    "awpy>=1.0",
-    "openai>=1.0",
-    "pyyaml>=6.0",
-    "pydantic>=2.0",
-    "rich>=13.0",
-    "gitpython>=3.1",
-    "platformdirs>=4.0",
-    "tiktoken>=0.5",
-    "demoparser2>=0.41",
-    "pyogg>=0.3",
-    "zstandard>=0.22",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "jinja2>=3.1",
-    "python-multipart>=0.0.9",
-]
+name = "cs2-pov-translator"
+version = "0.7.1"
+description = "Local-first guided CLI toolkit for CS2 POV bilingual subtitles, job artifacts, release-ready documentation, and a Mirage glossary pilot."
+readme = "README.zh.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "liyan1775"}]
+dependencies = []
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-mock>=3.12",
-    "pytest-asyncio>=0.23",
-    "respx>=0.20",
-    "ruff>=0.3",
-    "mypy>=1.8",
-    "coverage>=7.4",
-]
+cs2 = ["demoparser2>=0.41", "zstandard>=0.23", "pyogg>=0.6.1a1"]
+asr = ["faster-whisper>=1.1"]
+dev = ["pytest>=8.0"]
+all = ["demoparser2>=0.41", "zstandard>=0.23", "pyogg>=0.6.1a1", "faster-whisper>=1.1", "pytest>=8.0"]
 
 [project.scripts]
-cs2tl = "cs2tl.cli.main:app"
-
-[tool.ruff]
-target-version = "py310"
-line-length = 100
-
-[tool.ruff.lint]
-select = ["E", "F", "I", "N", "W", "UP"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-ignore_missing_imports = true
+cs2pov = "cs2pov.cli.commands:main"
+cs2pov-wizard = "cs2pov.cli.wizard:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/cs2tl"]
-force-include = { "src/cs2tl/data" = "cs2tl/data" }
+packages = ["src/cs2pov"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-q"

@@ -1,32 +1,59 @@
-# Changelog
+# CHANGELOG
 
-## v0.3.0 (2026-06-08)
+所有重要版本变化记录在这里。当前版本号采用「迭代里程碑」语义，不代表已经发布到 PyPI。
 
-### Added
-- 存储路径迁移：默认 `./cs2tl-data/`，支持 `CS2TL_DATA_DIR` 环境变量覆盖，copy-then-verify 迁移旧数据
-- Pico.css v2.1.1 内联替换手写 CSS，暗色主题 + CS2 品牌色覆盖
-- 管线主页单栏渐进式布局 + `<dialog>` 模态编辑面板
-- Rich 终端进度条（7 阶段：提取/转写/词典/回合/球员/翻译/字幕）
-- 内置三语词典（俄/英/中），975 行 YAML，7 张服役地图术语库
-- `CalloutTerm` 新增 `russian_aliases` 字段
-- 词典页面卡片列表 + 客户端三语 substring 搜索
-- `cs2tl doctor` 自动下载 csgove 二进制（OS/架构检测 + GitHub Releases）
-- `DESIGN.md` 设计系统文档
-- 交互状态表（7 功能 × 5 态：加载/空/错误/成功/局部）
-- `doc/prompt.md` 实施指南（供新会话参考）
+## v0.7.1 - Feedback 隐私脱敏小修
 
-### Changed
-- `dictionary.py` 删除 git clone/pull 逻辑，内置词典随 wheel 发布
-- `config.py` 新增 `_find_project_root()`、`default_data_dir()`、`migrate_old_data()`
-- `HF_HOME` 在 CLI 入口点设置（import faster_whisper 之前）
-- 预览页预览/edit 交互改为 Team select + 模态对话框
-- 词典「RAG」命名改为「术语增强 / CS2 术语库」
+- 修复 `cs2pov feedback` 中 `progress.log` 仍可能包含 Windows 本地绝对路径的问题。
+- 反馈包中的 log/txt 诊断文件现在会保留 job 内相对路径，同时隐藏本地盘符、用户目录和 demo 所在路径。
+- 不改 ASR、LLM、字幕策略、词典和 CLI 主流程。
 
-### Removed
-- `cs2tl dictionary update` 命令（git pull 已移除）
-- DictionaryManager 的全部 git 操作代码
-- 300 行手写 CSS（替换为内联 Pico.css + 品牌覆盖）
+## v0.7.0 - GitHub 仓库落地 / 作品集发布整理
 
-### Tests
-- 22 个新测试（russian_aliases、内置词典加载、config 路径解析、progress 模块）
-- 总计 191 测试全部通过
+- 重写 `README.zh.md`，新增英文 `README.md`。
+- 新增 `CHANGELOG.md`、`ROADMAP.md`、`CONTRIBUTING.md`、`LICENSE`、`.gitignore`。
+- 新增发布相关文档：`docs/TESTING_GUIDE.zh.md`、`docs/SECURITY_AND_PRIVACY.zh.md`、`docs/RELEASE_CHECKLIST.zh.md`、`docs/SHOWCASE.zh.md`、`docs/DEVELOPMENT_WORKFLOW.zh.md`。
+- 扩展架构文档，明确 Pipeline / Job / Manifest / Artifact / Adapter 边界。
+- 更新版本号与 `.bat` 启动文案为 v0.7.0。
+- 新增仓库就绪度测试，确保关键文档存在且版本号一致。
+
+## v0.6.x - Mirage 词典试点机制
+
+- 只试点 `de_mirage`，不铺全地图词典。
+- 新增结构化英文 / 俄语 / 中文术语对照。
+- 翻译阶段注入 glossary prompt。
+- 生成 `glossary_used.json` 和 `glossary_warnings.json`。
+- 反馈包加入 glossary 诊断，并脱敏本地绝对路径。
+
+## v0.5.x - 字幕格式与剪辑体验
+
+- 新增导出预设：`editing / review / debug / compact`。
+- 新增字幕格式：`compact / zh_clean / debug`。
+- 默认产品心智改为双语优先。
+- `.bat` 菜单解释字幕预设和重叠策略。
+
+## v0.4.x - 发布准备 / 普通用户可用性
+
+- 新增 `setup-check`、`explain-output`。
+- 新增安装脚本和 acceptance smoke 脚本。
+- 新增 Windows 安装、输出文件、FAQ 文档。
+- 修复 Windows 路径分隔符导致输出解释错误的问题。
+
+## v0.3.x - 字幕工程工具化
+
+- 新增 `inspect-job / export / retranslate / resume / feedback`。
+- `.bat` 改成菜单式入口。
+- 子菜单支持 `0 / q / back / 返回` 回到主菜单。
+
+## v0.2.x - 强引导 CLI 产品化
+
+- `cs2pov-wizard` 改成 8 步向导。
+- 支持 POV 玩家选择、Whisper 配置、快速测试、翻译配置。
+- 新增反馈包命令。
+- 修复字幕拆词和长 cue 挂屏策略。
+
+## v0.1.x - Pipeline 主链路稳定
+
+- 新建 PipelineEngine / Job / Manifest / ArtifactStore 架构。
+- 真实 demo 验证：解压、地图识别、语音提取、round 清洗、转录、导出、DeepSeek 翻译。
+- 修复 API key 泄露、Windows `.bat` 乱码、PyOgg 依赖、ASR 长 cue 等问题。
