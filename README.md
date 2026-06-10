@@ -1,81 +1,60 @@
-# CS2 POV Translator (cs2tl)
+# CS2 POV Translator
 
-将 CS2 Faceit 演示文件中的队伍语音通讯提取、转录、并用中文电竞术语翻译为 SRT 字幕文件。
+Local-first guided CLI toolkit for generating bilingual CS2 POV subtitles from `.dem` / `.dem.zst` demo files.
 
-## 快速开始
+The project focuses on a practical workflow for CS2 video creators:
 
-### 1. 安装
+1. Parse a CS2 demo.
+2. Extract team voice comms.
+3. Transcribe audio with local faster-whisper models.
+4. Group comms by round.
+5. Translate with an OpenAI-compatible LLM.
+6. Export bilingual SRT subtitles for video editors.
 
-```bash
-pip install cs2povtranslator
+The current recommended interface is the Windows launcher:
+
+```text
+Install_CS2_POV_Translator.bat
+Start_CS2_POV_Translator.bat
 ```
 
-### 2. 初始化配置
+Power-user flow:
 
-```bash
-cs2tl config init
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[all]"
+pytest -q
+cs2pov setup-check
+cs2pov-wizard
 ```
 
-### 3. 翻译演示文件
+Common commands:
 
-```bash
-cs2tl translate your_demo.dem --map de_dust2
+```powershell
+cs2pov inspect-job output
+cs2pov explain-output output
+cs2pov export output --preset editing
+cs2pov retranslate output --dry-run
+cs2pov resume output --from-stage translate
+cs2pov feedback output
+cs2pov glossary list --map de_mirage
 ```
 
-内置词典支持 7 张地图（de_dust2, de_mirage, de_inferno, de_nuke, de_overpass, de_anubis, de_ancient），无需手动下载。
+Chinese documentation is the primary documentation for now: see [README.zh.md](README.zh.md).
 
-### 5. 查看字幕
+## Current status
 
-字幕文件在 `./subtitles/` 目录下：
-- `your_demo.team_T.srt`（T阵营）
-- `your_demo.team_CT.srt`（CT阵营）
-
-导入剪映/PR 即可使用。
-
-## 依赖
-
-- [csgo-voice-extractor](https://github.com/akiver/csgo-voice-extractor) — Go 二进制，需手动安装并加入 PATH
-- faster-whisper — 本地语音转录
-- LLM API (OpenAI / Anthropic) — 术语感知翻译
-
-运行 `cs2tl doctor` 检查所有依赖是否就绪。
-
-## 命令行参考
-
-```
-cs2tl translate <demo.dem> [--map <map>] [--from <stage>] [--to-stage <stage>]
-    [--no-dictionary] [--prompt-template <file>] [--dry-run]
-    [--output <dir>] [--verbose] [--quiet]
-
-cs2tl dictionary list | show <map>
-cs2tl config   init | show
-cs2tl doctor
-cs2tl web      [--host 127.0.0.1] [--port 8765] [--no-browser]
+```text
+v0.1.x  Stable pipeline baseline
+v0.2.x  Guided CLI product entry
+v0.3.x  Job tooling: inspect/export/retranslate/resume/feedback
+v0.4.x  Release readiness and user onboarding
+v0.5.x  Subtitle export presets and editing experience
+v0.6.x  Mirage glossary pilot
+v0.7.x  GitHub/readme/docs/release-readiness package
 ```
 
-## 配置文件
+## Privacy
 
-```yaml
-# ~/.cs2tl/config.yml
-llm:
-  provider: openai
-  api_key: sk-...     # 或使用环境变量 OPENAI_API_KEY
-  model: gpt-4o
-
-whisper:
-  model: base
-  device: auto
-
-dictionaries:
-  repo_url: https://github.com/<user>/cs2-callout-dictionary
-  auto_update: true
-```
-
-配置优先级：`--config` > `$CS2TL_CONFIG` > `./.cs2tl.yml` > `~/.cs2tl/config.yml`
-
-## 词典
-
-词典是一个独立的 Git 仓库，存放各地图的报点术语（中英文别名对照）。
-
----
-Built with ♥ for the CS2 community.
+This is a local-first tool. It does not upload demo files or audio by default. LLM translation sends only the text selected for translation to the configured OpenAI-compatible API endpoint. Feedback packages intentionally exclude raw demo files, large audio artifacts, API keys, and local absolute paths.
