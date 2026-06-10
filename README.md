@@ -41,7 +41,8 @@ cs2pov feedback output
 cs2pov glossary list --map de_mirage
 ```
 
-Chinese documentation is the primary documentation for now: see [README.zh.md](README.zh.md).
+Chinese documentation is the primary documentation for now: see [README.zh.md](README.zh.md).  
+Full doc index: [docs/INDEX.zh.md](docs/INDEX.zh.md).
 
 ## Current status
 

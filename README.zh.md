@@ -179,6 +179,8 @@ v0.7.x  GitHub 仓库落地 / 作品集发布整理 ✅
 
 ## 文档入口
 
+完整索引见 [docs/INDEX.zh.md](docs/INDEX.zh.md)。
+
 - [安装教程](docs/INSTALL_WINDOWS.zh.md)
 - [输出文件说明](docs/OUTPUT_FILES.zh.md)
 - [架构说明](docs/ARCHITECTURE.zh.md)
