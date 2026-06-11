@@ -4,6 +4,7 @@
 
 - `INSTALL_WINDOWS.zh.md`：Windows 安装与首次使用
 - `OUTPUT_FILES.zh.md`：输出文件说明
+- `PLAYER_ALIAS_WORKFLOW.zh.md`：玩家识别、K-D-A 辅助确认和字幕显示名映射
 - `FAQ.zh.md`：常见问题
 - `MODEL_MANAGEMENT.zh.md`：Whisper 模型缓存、大小、质量档位
 - `ASR_BENCHMARK.zh.md`：base/small/medium 等模型对比实验

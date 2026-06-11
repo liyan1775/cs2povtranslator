@@ -951,7 +951,7 @@ def build_glossary_used_report(map_name: str | None, texts: Iterable[str]) -> di
         "map_supported": is_glossary_supported(map_name),
         "pilot_map": PILOT_MAP,
         "pilot_maps": list(PILOT_MAPS),
-        "scope_note": "v0.8.5 启用 global CS2 通用术语 pilot，并提供 de_mirage / de_dust2 / de_anubis 三张地图试点词典。词典用于 prompt 约束和 warning 报告，不做硬替换。",
+        "scope_note": "v0.8.6 启用 global CS2 通用术语 pilot，并提供 de_mirage / de_dust2 / de_anubis 三张地图试点词典。词典用于 prompt 约束和 warning 报告，不做硬替换。",
         "global_term_count": len(global_terms),
         "map_term_count": len(map_terms),
         "term_count": len(all_terms),

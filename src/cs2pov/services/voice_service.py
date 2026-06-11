@@ -6,7 +6,7 @@ from pathlib import Path
 from cs2pov.adapters.demoparser_adapter import DemoparserAdapter
 from cs2pov.domain.models import Player, VoiceActivityCue, player_from_dict
 from cs2pov.storage.artifact_store import ArtifactStore, safe_name
-from cs2pov.storage.jsonl import read_json, write_jsonl
+from cs2pov.storage.jsonl import read_json, write_json, write_jsonl
 
 
 class VoiceService:
@@ -15,6 +15,18 @@ class VoiceService:
 
     def extract(self, demo_path: Path, store: ArtifactStore, tick_rate: float = 64.0) -> list[Player]:
         manifest = self.adapter.extract_voice(demo_path, store.voice_dir, tick_rate=tick_rate)
+        stats = self.adapter.parse_player_stats(demo_path)
+        if stats:
+            for player in manifest.get("players", []):
+                sid = str(player.get("steamid", ""))
+                stat = stats.get(sid)
+                if stat:
+                    player["kills"] = stat.get("kills", 0)
+                    player["deaths"] = stat.get("deaths", 0)
+                    player["assists"] = stat.get("assists", 0)
+                    player["kda"] = f"{player['kills']}-{player['deaths']}-{player['assists']}"
+            write_json(store.voice_manifest_path, manifest)
+            write_json(store.player_stats_path, {"players": list(stats.values())})
         return [player_from_dict(row) for row in manifest.get("players", [])]
 
     def build_activity(self, store: ArtifactStore, gap_seconds: float = 0.35, min_duration: float = 0.05) -> list[VoiceActivityCue]:

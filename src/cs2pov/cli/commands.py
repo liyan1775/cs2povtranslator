@@ -30,6 +30,12 @@ from cs2pov.cli.model_manager import (
     set_cache_dir,
     test_model_load,
 )
+from cs2pov.cli.player_ops import (
+    build_players_report,
+    clear_player_alias,
+    print_players_report,
+    set_player_alias,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -44,6 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--pov-steamid")
     run.add_argument("--team", type=int, dest="team_number")
     run.add_argument("--export-scope", choices=["pov_team", "pov_player", "all"], default="pov_team")
+    run.add_argument("--player-alias", action="append", default=[], help="字幕显示名映射，格式 steamid=显示名。适合 Ebule=donk 这类职业选手小号/临时昵称。")
     run.add_argument("--transcription-profile", choices=list(TRANSCRIPTION_PROFILES), default=None, help="转录质量档位：fast/balanced/quality/medium_cpu/cuda_quality。会自动设置模型、设备和 compute_type。")
     run.add_argument("--whisper-model", default=None)
     run.add_argument("--whisper-device", choices=["cpu", "cuda", "auto"], default=None, help="faster-whisper 设备：cpu/cuda/auto。普通用户建议用 profile。")
@@ -108,6 +115,25 @@ def main(argv: list[str] | None = None) -> int:
     glossary_check = glossary_sub.add_parser("check", help="查看已有 Job 的 glossary_used / glossary_warnings")
     glossary_check.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
     glossary_check.add_argument("--json", action="store_true", help="输出 JSON")
+
+
+    players = sub.add_parser("players", help="玩家识别与字幕显示名：查看 K-D-A/语音时长，并设置 Ebule -> donk 这类别名")
+    players_sub = players.add_subparsers(dest="players_cmd")
+    players_list = players_sub.add_parser("list", help="列出 Job 中有语音的玩家、K-D-A 和字幕显示名")
+    players_list.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_list.add_argument("--json", action="store_true")
+    players_alias = players_sub.add_parser("alias", help="设置字幕显示名。设置后重新 export 即可生效，不需要重跑 Whisper/LLM")
+    players_alias.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_alias.add_argument("--steamid", help="推荐：用 SteamID 精确指定玩家")
+    players_alias.add_argument("--name", help="用 demo 昵称匹配玩家；若重名请改用 --steamid")
+    players_alias.add_argument("--as", dest="display_name", required=True, help="字幕中显示的名字，例如 donk")
+    players_alias.add_argument("--json", action="store_true")
+    players_clear = players_sub.add_parser("clear-alias", help="清除字幕显示名映射")
+    players_clear.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_clear.add_argument("--steamid")
+    players_clear.add_argument("--name")
+    players_clear.add_argument("--all", action="store_true", help="清除全部别名")
+    players_clear.add_argument("--json", action="store_true")
 
     models = sub.add_parser("models", help="Whisper 模型管理：缓存位置、已下载模型、质量档位、模型可用性测试")
     models_sub = models.add_subparsers(dest="models_cmd")
@@ -218,6 +244,9 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "glossary":
         return run_glossary(args, parser)
 
+    if args.cmd == "players":
+        return run_players(args, parser)
+
     if args.cmd == "models":
         return run_models(args, parser)
 
@@ -279,6 +308,39 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 2
 
 
+
+
+def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.players_cmd == "list":
+        report = build_players_report(Path(args.path))
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print_players_report(report)
+            print("\n常用：确认 Ebule 是 donk 后，可运行：")
+            print(f"  cs2pov players alias \"{args.path}\" --name Ebule --as donk")
+            print("再运行：")
+            print(f"  cs2pov export \"{args.path}\" --preset editing")
+        return 0
+    if args.players_cmd == "alias":
+        report = set_player_alias(Path(args.path), steamid=args.steamid, name=args.name, display_name=args.display_name)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print("字幕显示名已保存。重新导出字幕即可生效：")
+            print(f"  cs2pov export \"{args.path}\" --preset editing")
+            print_players_report(report)
+        return 0
+    if args.players_cmd == "clear-alias":
+        report = clear_player_alias(Path(args.path), steamid=args.steamid, name=args.name, all_aliases=args.all)
+        if args.json:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            print("字幕显示名映射已清除。重新导出字幕即可生效。")
+            print_players_report(report)
+        return 0
+    parser.error("players 需要 list/alias/clear-alias")
+    return 2
 
 
 def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -524,12 +586,27 @@ def run_pipeline(args: argparse.Namespace) -> int:
         subtitle_overlap_policy=args.overlap_policy or defaults.get("subtitle_overlap_policy") or "shift",
         subtitle_min_duration_seconds=float(defaults.get("subtitle_min_duration_seconds", 0.7)) if args.min_subtitle_duration is None else float(args.min_subtitle_duration),
         glossary_enabled=bool(defaults.get("glossary_enabled", True)) if args.glossary is None else bool(args.glossary),
+        player_aliases=_parse_player_alias_args(args.player_alias),
     )
     engine = PipelineEngine(config)
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
     engine.run(Path(args.demo), from_stage=from_stage, to_stage=to_stage)
     return 0
+
+
+def _parse_player_alias_args(values: list[str] | None) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for value in values or []:
+        if "=" not in value:
+            raise ValueError("--player-alias 格式必须是 steamid=显示名，例如 7656119...=donk")
+        sid, display = value.split("=", 1)
+        sid = sid.strip()
+        display = display.strip()
+        if not sid or not display:
+            raise ValueError("--player-alias 不能为空。格式：steamid=显示名")
+        aliases[sid] = display
+    return aliases
 
 
 def run_doctor() -> int:
@@ -588,7 +665,7 @@ def run_glossary(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
             "scope": getattr(args, "scope", "all"),
             "term_count": len(terms),
             "terms": terms,
-            "note": "v0.8.5 包含 global 通用术语 + de_mirage/de_dust2/de_anubis 地图试点。词典用于 prompt 约束和 warning 报告，不会硬替换字幕文本。",
+            "note": "v0.8.6 包含 global 通用术语 + de_mirage/de_dust2/de_anubis 地图试点。词典用于 prompt 约束和 warning 报告，不会硬替换字幕文本。",
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -599,7 +676,7 @@ def run_glossary(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
             if not terms:
                 print("当前版本没有这张地图的地图词典；仍可使用 global 通用术语。试点地图：de_mirage / de_dust2 / de_anubis。")
                 return 0
-            print("说明：词典仅用于翻译提示和术语 warning，不做硬替换。v0.8.5 包含 global 通用术语 pilot + Mirage/Dust2/Anubis 地图试点。")
+            print("说明：词典仅用于翻译提示和术语 warning，不做硬替换。v0.8.6 包含 global 通用术语 pilot + Mirage/Dust2/Anubis 地图试点。")
             print("来源：英文/中文/俄语社区资料交叉整理，完整说明见 docs/GLOSSARY_MIRAGE_PILOT.zh.md、docs/GLOSSARY_DUST2_PILOT.zh.md 与 docs/GLOSSARY_ANUBIS_PILOT.zh.md。")
             for item in terms:
                 ru = ", ".join(item.get("ru") or []) or "-"
@@ -730,6 +807,8 @@ def _feedback_files(job_dir: Path) -> list[Path]:
         "artifacts/transcription_coverage.json",
         "artifacts/glossary_used.json",
         "artifacts/glossary_warnings.json",
+        "artifacts/player_stats.json",
+        "artifacts/player_aliases.json",
     ]
     files = [job_dir / name for name in names]
     for folder in ["final", "review", "debug"]:

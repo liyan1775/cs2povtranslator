@@ -1,4 +1,4 @@
-# CS2 POV Translator v0.8.5
+# CS2 POV Translator v0.8.6
 
 **CS2 POV Translator** 是一个本地优先的 CS2 POV 双语字幕工程工具。
 
@@ -16,8 +16,9 @@
 - 转录语音：通过 faster-whisper 支持 `tiny / base / small / medium` 等本地模型，并提供质量档位与模型管理。
 - 按回合翻译：比逐句翻译更适合 CS2 队内语音。
 - 导出双语字幕：默认推荐双语 SRT，纯中文/原文/debug 版本可选。
-- 管理字幕工程：支持 `inspect-job / export / retranslate / resume / feedback`。
+- 管理字幕工程：支持 `inspect-job / players / export / retranslate / resume / feedback`。
 - 反馈包脱敏：不会打包原始 demo、WAV、大音频、API key 和本地绝对路径。
+- 玩家识别：用 K-D-A、语音时长和队伍帮助确认职业选手小号/临时昵称，并可设置 `Ebule -> donk` 这样的字幕显示名。
 - 模型管理：查看 Hugging Face/Whisper 缓存目录、已下载模型、模型近似大小，并可把模型缓存放到 D 盘。
 - Mirage / Dust2 / Anubis + 通用词典试点：`de_mirage`、`de_dust2`、`de_anubis` 报点和 push/trade/AWP 等通用术语可注入翻译 prompt，并输出 glossary 报告。
 
@@ -96,6 +97,14 @@ cs2pov inspect-job output
 
 ```powershell
 cs2pov explain-output output
+```
+
+确认玩家身份并设置字幕显示名：
+
+```powershell
+cs2pov players list output
+cs2pov players alias output --name Ebule --as donk
+cs2pov export output --preset editing
 ```
 
 重新导出字幕，不重新转录/翻译：

@@ -13,6 +13,7 @@ from cs2pov.services.translation_service import TranslationService
 from cs2pov.services.voice_service import VoiceService
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_json, write_json
+from cs2pov.services.player_alias_service import save_player_aliases
 
 
 class PipelineEngine:
@@ -72,6 +73,9 @@ class PipelineEngine:
                 demo_path = self._require_demo_path()
                 players = self.voice_service.extract(demo_path, self.store, tick_rate=self._tick_rate())
                 self.progress.emit(stage, f"检测到 {len(players)} 名玩家有语音。")
+                if self.store.player_stats_path.exists():
+                    self.progress.emit(stage, "已尝试解析玩家 K-D-A，便于确认职业选手小号/临时昵称。")
+                    self.manifest.set_artifact("player_stats", self.store.player_stats_path)
                 self.manifest.set_artifact("voice_manifest", self.store.voice_manifest_path)
             elif stage == StageName.BUILD_VOICE_ACTIVITY:
                 self.progress.emit(stage, "根据语音包时间戳生成 voice activity 时间轴。")
@@ -148,6 +152,10 @@ class PipelineEngine:
                 self.manifest.set_artifact("translations", self.store.translations_path)
             elif stage == StageName.EXPORT_SUBTITLES:
                 self.progress.emit(stage, "按字幕策略导出双语/中文/紧凑/调试 SRT。")
+                if self.config.player_aliases:
+                    save_player_aliases(self.store, self.config.player_aliases, source="pipeline_config")
+                    self.manifest.set_artifact("player_aliases", self.store.player_aliases_path)
+                    self.progress.emit(stage, f"已应用 {len(self.config.player_aliases)} 条玩家显示名映射。")
                 outputs = self.subtitle_service.export(
                     self.store,
                     selected_team_number=self.config.selected_team_number,
