@@ -144,9 +144,11 @@ class PipelineConfig:
     export_scope: str = "pov_team"  # pov_team | pov_player | all
     target_language: str = "zh-CN"
     asr_language: str = "auto"
+    transcription_profile: str = "balanced"
     whisper_model: str = "base"
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
+    whisper_cache_dir: str | None = None
     translate_mode: str = "round"
     glossary_enabled: bool = True
     llm_base_url: str | None = None

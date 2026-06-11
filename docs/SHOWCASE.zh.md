@@ -10,7 +10,7 @@
 4. **Job 工程化**：支持 inspect/export/retranslate/resume/feedback。
 5. **字幕导出体验**：双语优先，支持 editing/review/debug/compact 预设。
 6. **安全反馈包**：排除原始 demo、WAV、API key、本地绝对路径。
-7. **领域词典试点**：Mirage 词典不硬替换，而是 prompt 约束 + warning 报告。
+7. **领域词典试点**：Mirage/Dust2/Anubis 词典不硬替换，而是 prompt 约束 + warning 报告。
 8. **版本化闭环开发**：每个版本都有主题、测试计划和反馈核查。
 
 ## 演示建议

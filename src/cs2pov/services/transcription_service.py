@@ -25,6 +25,7 @@ class TranscriptionService:
         model_name: str,
         device: str = "cpu",
         compute_type: str = "int8",
+        cache_dir: str | None = None,
         language: str = "auto",
         selected_team_number: int | None = None,
         vad_filter: bool = True,
@@ -44,6 +45,7 @@ class TranscriptionService:
             model_name=model_name,
             device=device,
             compute_type=compute_type,
+            cache_dir=cache_dir,
             language=language,
             vad_filter=vad_filter,
         )

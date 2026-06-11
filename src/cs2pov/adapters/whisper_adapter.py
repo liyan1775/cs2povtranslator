@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ class FasterWhisperAdapter:
         compute_type: str = "int8",
         language: str = "auto",
         vad_filter: bool = True,
+        cache_dir: str | None = None,
     ):
         try:
             from faster_whisper import WhisperModel  # type: ignore
@@ -24,7 +26,16 @@ class FasterWhisperAdapter:
         self.model_name = model_name
         self.language = None if language == "auto" else language
         self.vad_filter = bool(vad_filter)
-        self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        kwargs = {"device": device, "compute_type": compute_type}
+        if cache_dir:
+            cache_root = Path(cache_dir).expanduser()
+            cache_root.mkdir(parents=True, exist_ok=True)
+            # Project-level cache: keep models off C: without changing the user's
+            # global environment.  Setting HF_HOME helps downstream Hugging Face
+            # calls, while download_root directs faster-whisper itself.
+            os.environ.setdefault("HF_HOME", str(cache_root))
+            kwargs["download_root"] = str(cache_root)
+        self.model = WhisperModel(model_name, **kwargs)
 
     def transcribe(self, wav_path: Path) -> list[dict[str, Any]]:
         # v0.1.4 defaults VAD on after real-demo feedback showed better coverage

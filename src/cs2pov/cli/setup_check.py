@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from cs2pov.storage.config_store import load_config, llm_model_warning
+from cs2pov.services.dictionary_service import SUPPORTED_MAPS
 
 REQUIRED_MODULES: list[tuple[str, str, str]] = [
     ("demoparser2", "CS2 demo 解析和语音包读取", 'pip install -e ".[all]"'),
@@ -49,7 +50,11 @@ def build_setup_report(project_root: Path | None = None) -> dict[str, Any]:
         "installer_bat_exists": installer_bat.exists(),
         "modules": modules,
         "missing_required": missing_required,
+        "transcription_profile": cfg.get("transcription_profile") or "balanced",
         "whisper_model": cfg.get("whisper_model") or "base",
+        "whisper_device": cfg.get("whisper_device") or "cpu",
+        "whisper_compute_type": cfg.get("whisper_compute_type") or "int8",
+        "whisper_cache_dir": cfg.get("whisper_cache_dir"),
         "transcription_mode": cfg.get("transcription_mode") or "round",
         "whisper_vad_filter": bool(cfg.get("whisper_vad_filter", True)),
         "max_subtitle_segment_seconds": cfg.get("max_subtitle_segment_seconds", 10.0),
@@ -57,7 +62,7 @@ def build_setup_report(project_root: Path | None = None) -> dict[str, Any]:
         "subtitle_overlap_policy": cfg.get("subtitle_overlap_policy") or "shift",
         "subtitle_bilingual_format": cfg.get("subtitle_bilingual_format") or "label",
         "glossary_enabled": bool(cfg.get("glossary_enabled", True)),
-        "glossary_pilot_maps": ["de_mirage"],
+        "glossary_pilot_maps": list(SUPPORTED_MAPS),
         "llm_base_url_configured": bool(llm_base_url),
         "llm_model": llm_model,
         "llm_api_key_configured": api_key_configured,
@@ -82,7 +87,10 @@ def print_setup_report(report: dict[str, Any]) -> int:
         if not item["ok"]:
             print(f"           修复建议：{item['fix']}")
     print("\n默认处理配置：")
+    print(f"  转录质量档位:     {report['transcription_profile']}")
     print(f"  Whisper 模型:     {report['whisper_model']}")
+    print(f"  Whisper 设备:     {report['whisper_device']} / compute_type={report['whisper_compute_type']}")
+    print(f"  模型缓存目录:     {report['whisper_cache_dir'] or '[未设置，使用默认 Hugging Face 缓存]'}")
     print(f"  转录切片模式:     {report['transcription_mode']}")
     print(f"  Whisper VAD:      {'ON' if report['whisper_vad_filter'] else 'OFF'}")
     print(f"  最长字幕显示阈值: {report['max_subtitle_segment_seconds']}s")

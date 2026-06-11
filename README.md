@@ -38,11 +38,13 @@ cs2pov export output --preset editing
 cs2pov retranslate output --dry-run
 cs2pov resume output --from-stage translate
 cs2pov feedback output
-cs2pov glossary list --map de_mirage
+cs2pov models recommend
+cs2pov glossary list --map de_mirage --scope all
+cs2pov glossary list --map de_dust2 --scope all
+cs2pov glossary list --map de_anubis --scope all
 ```
 
-Chinese documentation is the primary documentation for now: see [README.zh.md](README.zh.md).  
-Full doc index: [docs/INDEX.zh.md](docs/INDEX.zh.md).
+Chinese documentation is the primary documentation for now: see [README.zh.md](README.zh.md).
 
 ## Current status
 
@@ -54,6 +56,7 @@ v0.4.x  Release readiness and user onboarding
 v0.5.x  Subtitle export presets and editing experience
 v0.6.x  Mirage glossary pilot
 v0.7.x  GitHub/readme/docs/release-readiness package
+v0.8.x  Model management, ASR profiles, benchmark-asr, global CS2 glossary pilot, Dust2 glossary pilot, and Anubis glossary pilot
 ```
 
 ## Privacy

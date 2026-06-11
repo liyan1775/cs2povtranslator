@@ -8,6 +8,7 @@ from typing import Iterable
 from cs2pov.cli.encoding import configure_utf8_stdio
 from cs2pov.domain.models import PipelineConfig, StageName, Player, player_from_dict
 from cs2pov.pipeline.engine import PipelineEngine
+from cs2pov.cli.model_manager import TRANSCRIPTION_PROFILES, profile_to_config
 from cs2pov.storage.config_store import (
     DEFAULT_DEEPSEEK_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
@@ -74,7 +75,7 @@ def run_wizard(args: argparse.Namespace) -> int:
     if detected_map != "unknown" and ask_yes_no("地图识别是否正确？", default=True):
         config.map_name = detected_map
     else:
-        config.map_name = ask_text("请输入地图名，例如 de_mirage / de_dust2", default=None if detected_map == "unknown" else detected_map)
+        config.map_name = ask_text("请输入地图名，例如 de_mirage / de_dust2 / de_anubis", default=None if detected_map == "unknown" else detected_map)
 
     step(3, "选择 POV 主角", "默认会导出该玩家所在队伍的全部语音，最适合 POV 视频剪辑。")
     players = load_players(engine.store.voice_manifest_path)
@@ -92,10 +93,15 @@ def run_wizard(args: argparse.Namespace) -> int:
     else:
         config.export_scope = "pov_player"
 
-    step(4, "选择转录配置", "推荐 tiny/base/small。办公本 CPU 可先 tiny 快速验证，再用 base/small 提升质量。")
-    config.whisper_model = choose_whisper_model(default=config.whisper_model)
+    step(4, "选择转录配置", "v0.8.5 新增质量档位。办公本剪视频推荐 quality/small；首次测试可用 fast/tiny。")
+    profile_values = choose_transcription_profile(default=config.transcription_profile)
+    config.transcription_profile = profile_values["transcription_profile"]
+    config.whisper_model = profile_values["whisper_model"]
+    config.whisper_device = profile_values["whisper_device"]
+    config.whisper_compute_type = profile_values["whisper_compute_type"]
     config.asr_language = choose_asr_language(default="auto")
     config.transcription_mode = choose_transcription_mode(default=config.transcription_mode)
+    print(f"Whisper：profile={config.transcription_profile} / model={config.whisper_model} / device={config.whisper_device} / compute_type={config.whisper_compute_type}")
     print(f"Whisper VAD：{'ON' if config.whisper_vad_filter else 'OFF'}；幻觉过滤：{'ON' if config.filter_hallucinations else 'OFF'}；长 cue 阈值：{config.max_subtitle_segment_seconds}s。")
 
     step(5, "选择运行范围", "首次测试建议只跑前 3 个含语音回合；确认效果后再完整处理。")
@@ -123,9 +129,11 @@ def run_wizard(args: argparse.Namespace) -> int:
 def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
     return PipelineConfig(
         output_root=str(output_root),
+        transcription_profile=defaults.get("transcription_profile") or "balanced",
         whisper_model=defaults.get("whisper_model") or "base",
         whisper_device=defaults.get("whisper_device") or "cpu",
         whisper_compute_type=defaults.get("whisper_compute_type") or "int8",
+        whisper_cache_dir=defaults.get("whisper_cache_dir"),
         whisper_vad_filter=bool(defaults.get("whisper_vad_filter", True)),
         transcription_mode=defaults.get("transcription_mode") or "round",
         filter_hallucinations=bool(defaults.get("filter_hallucinations", True)),
@@ -141,8 +149,8 @@ def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.7.1")
-    print("强引导 CLI：把 CS2 demo 的队伍语音生成 POV 双语 SRT 字幕；Mirage 词典试点与发布文档已就绪")
+    print("CS2 POV Translator v0.8.5")
+    print("强引导 CLI：新增 Whisper 模型管理、转录质量档位和 CS2 通用术语词典试点")
     print("=" * 72)
     print("这个向导会带你完成 8 步：")
     print("1. 选择 demo 文件")
@@ -153,7 +161,7 @@ def print_banner() -> None:
     print("6. 配置翻译")
     print("7. 确认并运行")
     print("8. 查看输出和反馈包指引")
-    print("\n提示：第一次建议先跑前 3 个回合。de_mirage 会启用试点词典；其他地图暂不强行套词典。生成后可回到 .bat 主菜单，用 inspect/export/retranslate/resume/glossary 继续处理。")
+    print("\n提示：第一次建议先跑前 3 个回合。de_mirage / de_dust2 / de_anubis 会启用地图试点词典；其他地图仅使用 global 通用术语。生成后可回到 .bat 主菜单，用 inspect/export/retranslate/resume/glossary 继续处理。")
 
 
 def step(index: int, title: str, body: str) -> None:
@@ -243,6 +251,18 @@ def print_player_table(players: list[Player]) -> None:
     print("\n建议：做某个选手 POV 时，选择该选手；默认会导出他所在队伍的全部语音。")
 
 
+def choose_transcription_profile(default: str) -> dict[str, str]:
+    print("\n转录质量档位：")
+    order = ["fast", "balanced", "quality", "medium_cpu", "cuda_quality"]
+    for idx, key in enumerate(order, 1):
+        p = TRANSCRIPTION_PROFILES[key]
+        print(f"{idx}. {p.label:<12} model={p.model:<7} device={p.device:<4} compute={p.compute_type:<12} {p.description}")
+    print("提示：你实测办公本 CPU 跑 small 完整 demo 约 18 分钟，因此认真剪视频可优先试 3=高质量 CPU。")
+    default_idx = max(1, order.index(default) + 1) if default in order else 2
+    choice = ask_int("请选择转录质量档位", 1, len(order), default_idx)
+    return profile_to_config(order[choice - 1])
+
+
 def choose_whisper_model(default: str) -> str:
     print("\nWhisper 模型建议：")
     print("1. tiny  - 最快，适合快速测试")
@@ -328,7 +348,10 @@ def configure_translation(config: PipelineConfig, defaults: dict) -> None:
                 "llm_base_url": config.llm_base_url,
                 "llm_api_key": config.llm_api_key,
                 "llm_model": config.llm_model,
+                "transcription_profile": config.transcription_profile,
                 "whisper_model": config.whisper_model,
+                "whisper_device": config.whisper_device,
+                "whisper_compute_type": config.whisper_compute_type,
                 "transcription_mode": config.transcription_mode,
             })
         choice = 1 if config.llm_base_url and config.llm_api_key and config.llm_model else 2
@@ -355,7 +378,7 @@ def print_run_summary(config: PipelineConfig, demo_path: Path, job_dir: Path) ->
     print(f"map:        {config.map_name}")
     print(f"team:       {config.selected_team_number}")
     print(f"scope:      {config.export_scope}")
-    print(f"whisper:    {config.whisper_model} / language={config.asr_language} / mode={config.transcription_mode}")
+    print(f"whisper:    profile={config.transcription_profile} / {config.whisper_model} / {config.whisper_device} / {config.whisper_compute_type} / language={config.asr_language} / mode={config.transcription_mode}")
     print(f"max_rounds: {'完整处理' if config.max_rounds is None else config.max_rounds}")
     if config.dry_run_translation:
         translation = "dry-run 演示翻译"

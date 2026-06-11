@@ -91,6 +91,10 @@ class PipelineManifest:
         cfg["llm_api_key_configured"] = bool(api_key)
         if api_key:
             cfg["llm_api_key"] = REDACTED_SECRET
+        cache_dir = cfg.get("whisper_cache_dir")
+        cfg["whisper_cache_dir_configured"] = bool(cache_dir)
+        if cache_dir:
+            cfg["whisper_cache_dir"] = "[已配置-已隐藏]"
         data["config"] = cfg
         return data
 
@@ -106,6 +110,8 @@ class PipelineManifest:
         # shareable job artifact.
         if cfg_data.get("llm_api_key") == REDACTED_SECRET:
             cfg_data["llm_api_key"] = None
+        if cfg_data.get("whisper_cache_dir") == "[已配置-已隐藏]":
+            cfg_data["whisper_cache_dir"] = None
         allowed = set(PipelineConfig.__dataclass_fields__.keys())
         cfg_data = {k: v for k, v in cfg_data.items() if k in allowed}
         config = PipelineConfig(**cfg_data)

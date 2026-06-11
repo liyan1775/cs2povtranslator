@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cs2-pov-translator"
-version = "0.7.1"
-description = "Local-first guided CLI toolkit for CS2 POV bilingual subtitles, job artifacts, release-ready documentation, and a Mirage glossary pilot."
+version = "0.8.5"
+description = "Local-first guided CLI toolkit for CS2 POV bilingual subtitles, job artifacts, model management, transcription profiles, global/Dust2/Anubis glossary pilots, and bilingual subtitle export."
 readme = "README.zh.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
