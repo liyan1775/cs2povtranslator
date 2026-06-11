@@ -1,4 +1,27 @@
 # Changelog
+
+## v0.8.8 - 剪映观感优先的 max-2 字幕栈策略
+
+- 新增字幕重叠策略 `stack`：同一时刻最多显示 2 条字幕；当第 3 条字幕开始时，后来者直接替代最早显示的字幕，不把新字幕延后。
+- `editing` 与 `compact` 预设默认改为 `stack`，避免 v0.8.7 `merge` 把多人语音合成半屏大段字幕。
+- 保留 `merge` 作为高级/兜底策略，但不再作为剪映默认推荐。
+- `.bat` 重新导出菜单新增 `stack` 选项，CLI `--overlap-policy stack` 可直接使用；已有 Job 只需重新 export，不需要重跑 Whisper/LLM。
+- 新增 max-2 字幕栈回归测试，覆盖“第 3 条替代最早条”“被替代字幕不恢复”“单 cue 不超过 2 个玩家文本”。
+
+## v0.8.6.post2 - K-D-A NaN 崩溃热修复
+
+- 修复真实 Anubis demo 在 `extract_voice` 阶段因 `float('nan')` 转 `int` 崩溃的问题。
+- K/D/A 写入 voice manifest 时改用安全整数转换，`NaN` / 非法值按 0 安全降级。
+- `players list` 从旧 `player_stats.json` 回填 K-D-A 时同样容忍 `NaN`。
+- `_normalize_steamid(float('nan'))` 现在返回 `None`，避免异常 SteamID 值打断流程。
+- 新增 NaN 回归测试，覆盖新 Job 合并、旧 Job 回填和 SteamID 归一化边界。
+
+## v0.8.6.post1 - K-D-A 显示热修复
+
+- 修复 `players list` / `.bat` 玩家识别菜单中 K-D-A 显示为 `?-?-?` 的问题。
+- 修复 17 位 SteamID64 被 `float` 转换后发生尾数漂移，导致 voice manifest、player_stats、alias 文件无法稳定对齐的问题。
+- 新增旧 Job 兼容：当 `artifacts/player_stats.json` 已有 K-D-A、但 `artifacts/voice/manifest.json` 没有统计字段时，`players list` 会按精确 SteamID 或唯一 `name + team_number` 回填显示。
+- 新增回归测试覆盖 SteamID 精度与旧 Job K-D-A 回填。
 ## v0.8.6 - 玩家识别与字幕显示名映射
 
   * 新增 `cs2pov players list`：查看 Job 中有语音的玩家、Team、K-D-A、语音时长、语音包数和当前字幕显示名。

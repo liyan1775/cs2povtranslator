@@ -1,4 +1,4 @@
-# CS2 POV Translator v0.8.6
+# CS2 POV Translator v0.8.8
 
 **CS2 POV Translator** 是一个本地优先的 CS2 POV 双语字幕工程工具。
 
@@ -15,7 +15,7 @@
 - 提取队伍语音：按玩家、队伍和回合组织语音片段。
 - 转录语音：通过 faster-whisper 支持 `tiny / base / small / medium` 等本地模型，并提供质量档位与模型管理。
 - 按回合翻译：比逐句翻译更适合 CS2 队内语音。
-- 导出双语字幕：默认推荐双语 SRT，纯中文/原文/debug 版本可选。
+- 导出双语字幕：默认推荐双语 SRT，纯中文/原文/debug 版本可选；v0.8.8 起剪辑预设采用 stack：同屏最多2条字幕，第三条替代最早条，避免半屏大段字幕。
 - 管理字幕工程：支持 `inspect-job / players / export / retranslate / resume / feedback`。
 - 反馈包脱敏：不会打包原始 demo、WAV、大音频、API key 和本地绝对路径。
 - 玩家识别：用 K-D-A、语音时长和队伍帮助确认职业选手小号/临时昵称，并可设置 `Ebule -> donk` 这样的字幕显示名。

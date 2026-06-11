@@ -9,7 +9,7 @@ The project focuses on a practical workflow for CS2 video creators:
 3. Transcribe audio with local faster-whisper models.
 4. Group comms by round.
 5. Translate with an OpenAI-compatible LLM.
-6. Export bilingual SRT subtitles for video editors.
+6. Export bilingual SRT subtitles for video editors, including an editing-friendly max-2 stack policy for Jianying/CapCut-style timelines.
 
 The current recommended interface is the Windows launcher:
 
@@ -58,7 +58,7 @@ v0.4.x  Release readiness and user onboarding
 v0.5.x  Subtitle export presets and editing experience
 v0.6.x  Mirage glossary pilot
 v0.7.x  GitHub/readme/docs/release-readiness package
-v0.8.x  Model management, ASR profiles, benchmark-asr, global/Dust2/Anubis glossary pilots, K-D-A identity hints, and player alias mapping
+v0.8.x  Model management, ASR profiles, benchmark-asr, global/Dust2/Anubis glossary pilots, K-D-A identity hints, player alias mapping, and max-2 stack editing SRT exports
 ```
 
 ## Privacy

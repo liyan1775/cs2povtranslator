@@ -183,11 +183,18 @@ def export_job(
             max_duration_seconds=cfg.max_subtitle_segment_seconds, min_duration_seconds=cfg.subtitle_min_duration_seconds,
         )
     else:
+        if fmt in {"debug", "voice"}:
+            export_policy = policy_from_preset("debug")
+        else:
+            export_policy = policy_from_preset(
+                preset or cfg.subtitle_export_preset,
+                overlap_policy=cfg.subtitle_overlap_policy,
+                max_duration_seconds=cfg.max_subtitle_segment_seconds,
+                min_duration_seconds=cfg.subtitle_min_duration_seconds,
+            )
         outputs = service.export_format(
             store, fmt, cfg.selected_team_number, cfg.selected_pov_steamid, cfg.export_scope, cfg.subtitle_bilingual_format,
-            policy=None if not (overlap_policy or max_duration_seconds or min_duration_seconds) else policy_from_preset(
-                preset or cfg.subtitle_export_preset, overlap_policy=overlap_policy, max_duration_seconds=max_duration_seconds, min_duration_seconds=min_duration_seconds
-            ),
+            policy=export_policy,
         )
     _update_manifest_config_and_artifacts(store, cfg, outputs)
     return outputs

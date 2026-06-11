@@ -30,7 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "voice_cluster_gap_seconds": 1.0,
     "subtitle_bilingual_format": "label",
     "subtitle_export_preset": "editing",
-    "subtitle_overlap_policy": "shift",
+    "subtitle_overlap_policy": "stack",
     "subtitle_min_duration_seconds": 0.7,
     "glossary_enabled": True,
 }

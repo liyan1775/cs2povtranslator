@@ -29,11 +29,11 @@ def test_release_readiness_docs_exist():
     assert missing == []
 
 
-def test_version_markers_are_updated_to_v082():
-    assert 'version = "0.8.6"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '__version__ = "0.8.6"' in (ROOT / "src/cs2pov/__init__.py").read_text(encoding="utf-8")
-    assert "CS2 POV Translator v0.8.6" in (ROOT / "README.zh.md").read_text(encoding="utf-8")
-    assert "CS2 POV Translator v0.8.6" in (ROOT / "Start_CS2_POV_Translator.bat").read_text(encoding="utf-8")
+def test_version_markers_are_updated_to_v088():
+    assert 'version = "0.8.8"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '__version__ = "0.8.8"' in (ROOT / "src/cs2pov/__init__.py").read_text(encoding="utf-8")
+    assert "CS2 POV Translator v0.8.8" in (ROOT / "README.zh.md").read_text(encoding="utf-8")
+    assert "CS2 POV Translator v0.8.8" in (ROOT / "Start_CS2_POV_Translator.bat").read_text(encoding="utf-8")
 
 
 def test_docs_describe_privacy_and_feedback_boundaries():
