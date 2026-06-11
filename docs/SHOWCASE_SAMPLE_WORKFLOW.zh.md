@@ -54,7 +54,23 @@ quality / small / cpu / int8
 
 medium 目前只适合实验，不建议普通 CPU 用户日常使用。
 
-### 2. 导出剪辑友好字幕
+### 2. 确认玩家身份并设置字幕显示名
+
+如果 demo 里显示的是临时昵称，例如 `Ebule`，先用 K-D-A 和语音时长确认谁是谁：
+
+```powershell
+cs2pov players list output_showcase
+```
+
+确认 `Ebule = donk` 后设置字幕显示名：
+
+```powershell
+cs2pov players alias output_showcase --name Ebule --as donk
+```
+
+这样最终字幕会显示 `[donk]`，而不是 `[Ebule]`。重新导出即可生效，不需要重跑 Whisper/LLM。
+
+### 3. 导出剪辑友好字幕
 
 ```powershell
 cs2pov export output_showcase --preset editing
@@ -67,7 +83,7 @@ final/team_*.bilingual.srt
 final/team_*.compact.srt
 ```
 
-### 3. 人工微调展示版
+### 4. 人工微调展示版
 
 样片用于展示时，可以人工微调少量字幕，但要保留“工具生成”的主体效果。
 
@@ -79,7 +95,7 @@ final/team_*.compact.srt
 
 这样诚实，也避免别人误以为工具已经做到完全无人校对。
 
-### 4. 选择对比例子
+### 5. 选择对比例子
 
 每个对比例子只展示一个重点：
 
@@ -103,7 +119,7 @@ final/team_*.compact.srt
 本工具：Temple/神庙
 ```
 
-### 5. 视频结构建议
+### 6. 视频结构建议
 
 ```text
 0:00  问题：平台机翻看不懂 CS2 报点

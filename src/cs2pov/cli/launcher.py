@@ -5,7 +5,7 @@ from pathlib import Path
 
 from cs2pov.cli.encoding import configure_utf8_stdio
 from cs2pov.cli.job_ops import export_job, inspect_job, print_job_inspection, retranslate_job, resume_job
-from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary, run_models
+from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary, run_models, run_players
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.domain.models import StageName
@@ -59,13 +59,15 @@ def main(argv: list[str] | None = None) -> int:
             elif choice == "10":
                 run_glossary_menu()
             elif choice == "11":
-                run_models_menu()
+                run_players_menu()
             elif choice == "12":
-                run_install_help_page()
+                run_models_menu()
             elif choice == "13":
+                run_install_help_page()
+            elif choice == "14":
                 run_help_page()
             else:
-                print("没有这个选项。请输入 0-13。")
+                print("没有这个选项。请输入 0-14。")
         except ReturnToMainMenu:
             print("已返回主菜单。")
             if args.once:
@@ -86,11 +88,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.8.5")
-    print("模型管理与词典试点：Whisper 缓存、质量档位、global + Mirage/Dust2/Anubis glossary pilot")
+    print("CS2 POV Translator v0.8.6")
+    print("玩家识别与别名映射：K-D-A 辅助确认，字幕显示名可改为 donk 等职业 ID")
     print("=" * 72)
     print("新用户建议：先选 2 启动前检查，再选 1 新建字幕工程。")
-    print("已有 output 目录：可用 3/4/5/6/7 继续查看、解释、导出、重翻译和恢复；10 可查看词典；11 管理 Whisper 模型。")
+    print("已有 output 目录：可用 3/4/5/6/7 继续查看、解释、导出、重翻译和恢复；10 可查看词典；11 设置玩家字幕显示名；12 管理 Whisper 模型。")
     print("在子菜单中输入 0、q、back 或 返回，可随时回到主菜单。")
 
 
@@ -108,9 +110,10 @@ def print_menu() -> None:
     print("8. 打包反馈包 feedback（排除大音频和原始 demo）")
     print("9. 技术环境诊断 doctor（更偏开发者的依赖检查）")
     print("10. 词典试点 glossary（查看 global 通用术语 + Mirage/Dust2/Anubis 报点 / 检查术语报告）")
-    print("11. Whisper 模型管理 models（缓存目录、已下载模型、质量档位、模型测试）")
-    print("12. 查看安装/首次使用教程")
-    print("13. 查看命令帮助和常见场景")
+    print("11. 玩家识别 players（查看 K-D-A/语音时长，设置 Ebule -> donk 这类别名）")
+    print("12. Whisper 模型管理 models（缓存目录、已下载模型、质量档位、模型测试）")
+    print("13. 查看安装/首次使用教程")
+    print("14. 查看命令帮助和常见场景")
     print("0. 退出")
 
 
@@ -246,6 +249,43 @@ def run_glossary_menu() -> None:
     print("没有这个选项。")
 
 
+def run_players_menu() -> None:
+    print("\n玩家识别与字幕显示名")
+    print("=" * 72)
+    print("用途：用 K-D-A、语音时长和队伍确认谁是谁，并把 demo 临时昵称改成最终字幕显示名。")
+    print("例如确认 Ebule 是 donk 后，可以设置 Ebule -> donk；重新导出即可生效，不需要重跑 Whisper/LLM。")
+    print("输入 0 / q / back 可返回主菜单。")
+    print("1. 查看玩家列表 / K-D-A / 当前显示名")
+    print("2. 设置字幕显示名")
+    print("3. 清除字幕显示名")
+    choice = _read_choice("请选择 [1]\n> ", default="1")
+    import argparse
+    if choice == "1":
+        job = ask_job_path()
+        run_players(argparse.Namespace(players_cmd="list", path=str(job), json=False), argparse.ArgumentParser())
+        return
+    if choice == "2":
+        job = ask_job_path()
+        print("请输入 demo 中的玩家名，例如 Ebule。若重名，请改用专家命令 --steamid。")
+        name = _read_choice("> ")
+        print("请输入字幕显示名，例如 donk。")
+        display = _read_choice("> ")
+        run_players(argparse.Namespace(players_cmd="alias", path=str(job), name=name, steamid=None, display_name=display, json=False), argparse.ArgumentParser())
+        return
+    if choice == "3":
+        job = ask_job_path()
+        print("清除方式：1=按玩家名清除，2=清除全部。")
+        mode = _read_choice("请选择 [1]\n> ", default="1")
+        if mode == "2":
+            run_players(argparse.Namespace(players_cmd="clear-alias", path=str(job), name=None, steamid=None, all=True, json=False), argparse.ArgumentParser())
+        else:
+            print("请输入 demo 中的玩家名。")
+            name = _read_choice("> ")
+            run_players(argparse.Namespace(players_cmd="clear-alias", path=str(job), name=name, steamid=None, all=False, json=False), argparse.ArgumentParser())
+        return
+    print("没有这个选项。")
+
+
 def run_models_menu() -> None:
     print("\nWhisper 模型管理")
     print("=" * 72)
@@ -313,7 +353,8 @@ def run_help_page() -> None:
     print("7. 程序中途失败：选择主菜单 7，从失败阶段继续。")
     print("8. 要发给开发者分析：选择主菜单 8。")
     print("9. 想查看 Mirage/Dust2/Anubis 术语词典：选择主菜单 10。")
-    print("10. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
+    print("10. 想把 Ebule 这类 demo 昵称显示成 donk：选择主菜单 11。")
+    print("11. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
     print("\n对应专家命令：")
     print("  cs2pov setup-check")
     print("  cs2pov inspect-job output")
@@ -324,6 +365,8 @@ def run_help_page() -> None:
     print("  cs2pov feedback output")
     print("  cs2pov glossary list --map de_mirage")
     print("  cs2pov glossary check output")
+    print("  cs2pov players list output")
+    print("  cs2pov players alias output --name Ebule --as donk")
 
 
 if __name__ == "__main__":

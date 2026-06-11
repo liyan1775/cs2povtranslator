@@ -92,8 +92,9 @@ def run_wizard(args: argparse.Namespace) -> int:
         config.export_scope = "pov_team"
     else:
         config.export_scope = "pov_player"
+    config.player_aliases = choose_player_aliases(players, pov, config.export_scope)
 
-    step(4, "选择转录配置", "v0.8.5 新增质量档位。办公本剪视频推荐 quality/small；首次测试可用 fast/tiny。")
+    step(4, "选择转录配置", "v0.8.6 新增质量档位。办公本剪视频推荐 quality/small；首次测试可用 fast/tiny。")
     profile_values = choose_transcription_profile(default=config.transcription_profile)
     config.transcription_profile = profile_values["transcription_profile"]
     config.whisper_model = profile_values["whisper_model"]
@@ -149,8 +150,8 @@ def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.8.5")
-    print("强引导 CLI：新增 Whisper 模型管理、转录质量档位和 CS2 通用术语词典试点")
+    print("CS2 POV Translator v0.8.6")
+    print("强引导 CLI：新增玩家识别、K-D-A 辅助确认和字幕显示名映射")
     print("=" * 72)
     print("这个向导会带你完成 8 步：")
     print("1. 选择 demo 文件")
@@ -243,12 +244,35 @@ def recommended_player_index(players: list[Player]) -> int:
 
 def print_player_table(players: list[Player]) -> None:
     print("\n检测到有语音的玩家：")
-    print("编号  Team  玩家名                     语音时长   包数")
-    print("----  ----  ------------------------  --------  ------")
+    print("编号  Team  玩家名                     K-D-A      语音时长   包数")
+    print("----  ----  ------------------------  ---------  --------  ------")
     for idx, p in enumerate(players, 1):
         team = str(p.team_number) if p.team_number is not None else "?"
-        print(f"{idx:>2}.   {team:>4}  {p.name[:24]:<24}  {p.compact_wav_seconds:>7.1f}s  {p.voice_packets:>6}")
-    print("\n建议：做某个选手 POV 时，选择该选手；默认会导出他所在队伍的全部语音。")
+        print(f"{idx:>2}.   {team:>4}  {p.name[:24]:<24}  {p.kda_display:<9}  {p.compact_wav_seconds:>7.1f}s  {p.voice_packets:>6}")
+    print("\n建议：先用 K-D-A 和语音时长确认职业选手小号/临时昵称；做 POV 时选主角，字幕显示名可改成 donk 等熟悉 ID。")
+
+
+def choose_player_aliases(players: list[Player], pov: Player, export_scope: str) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    print("\n字幕显示名设置：")
+    print("demo 里的昵称可能是 FACEIT/Steam 临时名，例如 Ebule。你可以让最终字幕显示为 donk。")
+    pov_alias = input(f"字幕里把 {pov.name} 显示为什么？直接回车保留原名\n> ").strip()
+    if pov_alias and pov_alias != pov.name:
+        aliases[pov.steamid] = pov_alias
+    if export_scope == "pov_team" and ask_yes_no("是否继续为同队其他有语音玩家设置显示名？", default=False):
+        team_players = [p for p in players if p.team_number == pov.team_number and p.steamid != pov.steamid]
+        for player in team_players:
+            value = input(f"{player.name} 显示为？直接回车保留原名\n> ").strip()
+            if value and value != player.name:
+                aliases[player.steamid] = value
+    if aliases:
+        print("已设置字幕显示名：")
+        name_by_sid = {p.steamid: p.name for p in players}
+        for sid, alias in aliases.items():
+            print(f"  {name_by_sid.get(sid, sid)} -> {alias}")
+    else:
+        print("未设置别名；字幕将使用 demo 原始昵称。之后也可用 cs2pov players alias 修改，不需要重跑 Whisper/LLM。")
+    return aliases
 
 
 def choose_transcription_profile(default: str) -> dict[str, str]:

@@ -1,4 +1,13 @@
 # Changelog
+## v0.8.6 - 玩家识别与字幕显示名映射
+
+  * 新增 `cs2pov players list`：查看 Job 中有语音的玩家、Team、K-D-A、语音时长、语音包数和当前字幕显示名。
+  * 新增 `cs2pov players alias`：将 demo 临时昵称映射为字幕显示名，例如 `Ebule -> donk`，重新导出即可生效，不需要重跑 Whisper/LLM。
+  * 新增 `cs2pov players clear-alias`：清除单个或全部字幕显示名映射。
+  * 向导选择 POV 主角后增加字幕显示名设置，适合制作 POV 视频时把 FACEIT/Steam 临时昵称改成职业 ID。
+  * 尝试从 `player_death` 事件解析 K-D-A，并写入 `artifacts/player_stats.json` 与 voice manifest，帮助用户确认谁是谁。
+  * `.bat` 主菜单新增玩家识别入口。
+
 
 ## v0.8.5 - 中文社区报点校准
 

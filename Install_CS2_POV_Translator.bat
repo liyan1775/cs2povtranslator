@@ -7,7 +7,7 @@ cd /d "%~dp0"
 title Install CS2 POV Translator
 
 echo ===============================================================
-echo CS2 POV Translator v0.8.5 installer
+echo CS2 POV Translator v0.8.6 installer
 echo ===============================================================
 echo This script prepares the local Python environment for this folder.
 echo It may take several minutes because dependencies are downloaded.

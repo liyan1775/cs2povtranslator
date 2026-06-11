@@ -15,6 +15,7 @@ from cs2pov.domain.subtitle import (
 )
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_jsonl
+from cs2pov.services.player_alias_service import apply_player_aliases
 
 
 class SubtitleService:
@@ -90,18 +91,18 @@ class SubtitleService:
         fmt = fmt.lower().strip()
         label = _label(selected_team_number, selected_pov_steamid, export_scope)
         if fmt == "bilingual":
-            translations = _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope)
+            translations = apply_player_aliases(store, _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.final_dir / f"{label}.bilingual.srt"
             path.write_text(render_srt(translations, lambda seg: bilingual_text(seg, style=bilingual_format), policy=policy), encoding="utf-8")
             return {"bilingual_srt": str(path)}
         if fmt == "compact":
-            translations = _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope)
+            translations = apply_player_aliases(store, _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.final_dir / f"{label}.compact.srt"
             compact_policy = policy or policy_from_preset("compact")
             path.write_text(render_srt(translations, lambda seg: compact_bilingual_text(seg, style=bilingual_format), policy=compact_policy), encoding="utf-8")
             return {"compact_srt": str(path)}
         if fmt == "zh":
-            translations = _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope)
+            translations = apply_player_aliases(store, _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.final_dir / f"{label}.zh.srt"
             path.write_text(render_srt(translations, zh_text, policy=policy), encoding="utf-8")
             # Keep the historical review copy too, so old workflows do not break.
@@ -109,22 +110,22 @@ class SubtitleService:
             review_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
             return {"zh_srt": str(path)}
         if fmt == "zh_clean":
-            translations = _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope)
+            translations = apply_player_aliases(store, _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.final_dir / f"{label}.zh_clean.srt"
             path.write_text(render_srt(translations, zh_text_no_player, policy=policy), encoding="utf-8")
             return {"zh_clean_srt": str(path)}
         if fmt == "original":
-            transcripts = _filter([transcript_from_dict(row) for row in read_jsonl(store.transcripts_path)], selected_team_number, selected_pov_steamid, export_scope)
+            transcripts = apply_player_aliases(store, _filter([transcript_from_dict(row) for row in read_jsonl(store.transcripts_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.review_dir / f"{label}.original.srt"
             path.write_text(render_srt(transcripts, original_text, policy=policy), encoding="utf-8")
             return {"original_srt": str(path)}
         if fmt == "debug":
-            translations = _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope)
+            translations = apply_player_aliases(store, _filter([translation_from_dict(row) for row in read_jsonl(store.translations_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.debug_dir / f"{label}.debug.srt"
             path.write_text(render_srt(translations, debug_translation_text, policy=policy), encoding="utf-8")
             return {"debug_srt": str(path)}
         if fmt in {"voice", "voice_activity"}:
-            voice_cues = _filter([_voice_from_row(row) for row in read_jsonl(store.voice_activity_path)], selected_team_number, selected_pov_steamid, export_scope)
+            voice_cues = apply_player_aliases(store, _filter([_voice_from_row(row) for row in read_jsonl(store.voice_activity_path)], selected_team_number, selected_pov_steamid, export_scope))
             path = store.debug_dir / f"{label}.voice_activity.srt"
             path.write_text(render_srt(voice_cues, voice_activity_text, policy=policy), encoding="utf-8")
             return {"voice_activity_srt": str(path)}

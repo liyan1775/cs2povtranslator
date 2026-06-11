@@ -49,6 +49,19 @@ class Player:
     compact_wav_seconds: float = 0.0
     wav_path: str | None = None
     packet_info_path: str | None = None
+    kills: int | None = None
+    deaths: int | None = None
+    assists: int | None = None
+    display_name: str | None = None
+
+    @property
+    def kda_display(self) -> str:
+        if self.kills is None and self.deaths is None and self.assists is None:
+            return "?-?-?"
+        k = 0 if self.kills is None else self.kills
+        d = 0 if self.deaths is None else self.deaths
+        a = 0 if self.assists is None else self.assists
+        return f"{k}-{d}-{a}"
 
 
 @dataclass(slots=True)
@@ -172,6 +185,7 @@ class PipelineConfig:
     subtitle_export_preset: str = "editing"  # editing | review | compact | debug
     subtitle_overlap_policy: str = "shift"  # allow | shift | compact
     subtitle_min_duration_seconds: float = 0.7
+    player_aliases: dict[str, str] = field(default_factory=dict)
 
 
 def to_jsonable(value: Any) -> Any:
@@ -190,6 +204,15 @@ def to_jsonable(value: Any) -> Any:
     return value
 
 
+def _optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def player_from_dict(data: dict[str, Any]) -> Player:
     return Player(
         steamid=str(data.get("steamid", "")),
@@ -200,6 +223,10 @@ def player_from_dict(data: dict[str, Any]) -> Player:
         compact_wav_seconds=float(data.get("compact_wav_seconds", data.get("duration", 0.0)) or 0.0),
         wav_path=data.get("wav_path") or data.get("wav"),
         packet_info_path=data.get("packet_info_path"),
+        kills=_optional_int(data.get("kills")),
+        deaths=_optional_int(data.get("deaths")),
+        assists=_optional_int(data.get("assists")),
+        display_name=data.get("display_name"),
     )
 
 

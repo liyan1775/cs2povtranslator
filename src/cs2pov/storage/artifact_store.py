@@ -82,6 +82,14 @@ class ArtifactStore:
         return self.voice_dir / "manifest.json"
 
     @property
+    def player_stats_path(self) -> Path:
+        return self.artifacts_dir / "player_stats.json"
+
+    @property
+    def player_aliases_path(self) -> Path:
+        return self.artifacts_dir / "player_aliases.json"
+
+    @property
     def voice_activity_path(self) -> Path:
         return self.artifacts_dir / "voice_activity.jsonl"
 

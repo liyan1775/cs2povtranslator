@@ -40,6 +40,7 @@ def inspect_job(path: Path) -> dict[str, Any]:
     glossary_warnings = _safe_json(store.glossary_warnings_path)
     rounds = _safe_json(store.rounds_path, default=[])
     voice_manifest = _safe_json(store.voice_manifest_path)
+    player_aliases = _safe_json(store.player_aliases_path)
     translations = read_jsonl(store.translations_path)
     transcripts = read_jsonl(store.transcripts_path)
     contexts = read_jsonl(store.round_contexts_path)
@@ -67,6 +68,7 @@ def inspect_job(path: Path) -> dict[str, Any]:
         "pending_stages": pending_stages,
         "rounds": len(rounds) if isinstance(rounds, list) else 0,
         "players_with_voice": len((voice_manifest or {}).get("players", [])) if isinstance(voice_manifest, dict) else 0,
+        "player_alias_count": len((player_aliases or {}).get("aliases", {})) if isinstance(player_aliases, dict) else 0,
         "transcript_segments": len(transcripts),
         "round_contexts": len(contexts),
         "translation_segments": len(translations),
@@ -97,6 +99,7 @@ def print_job_inspection(summary: dict[str, Any]) -> None:
         print(f"  {marker:<4} {name:<22} {status}")
     print("\n产物统计：")
     print(f"  players_with_voice: {summary.get('players_with_voice')}")
+    print(f"  player_alias_count: {summary.get('player_alias_count')}")
     print(f"  rounds:             {summary.get('rounds')}")
     print(f"  transcript_segments:{summary.get('transcript_segments')}")
     print(f"  round_contexts:     {summary.get('round_contexts')}")
@@ -303,6 +306,10 @@ def _update_manifest_config_and_artifacts(store: ArtifactStore, cfg: PipelineCon
         manifest.set_artifact("glossary_used", store.glossary_used_path)
     if store.glossary_warnings_path.exists():
         manifest.set_artifact("glossary_warnings", store.glossary_warnings_path)
+    if store.player_aliases_path.exists():
+        manifest.set_artifact("player_aliases", store.player_aliases_path)
+    if store.player_stats_path.exists():
+        manifest.set_artifact("player_stats", store.player_stats_path)
     manifest.save(store.manifest_path)
 
 

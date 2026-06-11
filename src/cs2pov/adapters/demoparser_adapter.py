@@ -239,6 +239,46 @@ class DemoparserAdapter:
         cleaned = _clean_round_candidates(raw_rounds, min_duration_seconds=min_duration_seconds)
         return cleaned or [Round(round_number=1, start_time=0.0, end_time=max(1.0, fallback_end_time), source="fallback_empty_clean_rounds")]
 
+    def parse_player_stats(self, demo_path: Path) -> dict[str, dict[str, Any]]:
+        """Return lightweight K/D/A stats keyed by SteamID when demo events allow it.
+
+        demoparser2 has changed event column names across versions, so this
+        method is deliberately tolerant: it tries common attacker/victim/assister
+        SteamID fields and silently returns zeroed stats if player_death cannot
+        be parsed.  The stats are only used as a user-facing identity hint.
+        """
+        DemoParser = _import_demoparser()
+        parser = DemoParser(str(demo_path))
+        try:
+            player_rows = _df_to_dicts(parser.parse_player_info())
+        except Exception:
+            player_rows = []
+        stats: dict[str, dict[str, Any]] = {}
+        for row in player_rows:
+            sid = _normalize_steamid(row.get("steamid") or row.get("steam_id") or row.get("xuid"))
+            if not sid:
+                continue
+            stats[sid] = {
+                "steamid": sid,
+                "name": str(row.get("name", row.get("player_name", sid))),
+                "team_number": _safe_int(row.get("team_number", row.get("team"))),
+                "kills": 0,
+                "deaths": 0,
+                "assists": 0,
+            }
+        rows = self._try_parse_event(parser, "player_death")
+        for row in rows:
+            victim = _first_steamid(row, ["user_steamid", "victim_steamid", "userid_steamid", "player_steamid", "steamid"])
+            attacker = _first_steamid(row, ["attacker_steamid", "killer_steamid"])
+            assister = _first_steamid(row, ["assister_steamid", "assist_steamid"])
+            if victim and victim in stats:
+                stats[victim]["deaths"] += 1
+            if attacker and attacker != victim and attacker in stats:
+                stats[attacker]["kills"] += 1
+            if assister and assister not in {victim, attacker} and assister in stats:
+                stats[assister]["assists"] += 1
+        return stats
+
     def _try_parse_event(self, parser: Any, event_name: str) -> list[dict[str, Any]]:
         # demoparser2 API has changed across releases and has Python/JS naming differences.
         candidates = ["parse_event", "parse_events"]
@@ -257,6 +297,27 @@ class DemoparserAdapter:
             except Exception:
                 continue
         return []
+
+
+def _normalize_steamid(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    text = str(value)
+    try:
+        if text.replace(".", "", 1).isdigit():
+            return str(int(float(text)))
+    except Exception:
+        pass
+    return text
+
+
+def _first_steamid(row: dict[str, Any], keys: list[str]) -> str | None:
+    for key in keys:
+        if key in row:
+            sid = _normalize_steamid(row.get(key))
+            if sid and sid not in {"0", "None"}:
+                return sid
+    return None
 
 
 def _clean_round_candidates(raw_rounds: list[Round], min_duration_seconds: float = 10.0) -> list[Round]:

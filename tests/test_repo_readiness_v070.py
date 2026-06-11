@@ -30,10 +30,10 @@ def test_release_readiness_docs_exist():
 
 
 def test_version_markers_are_updated_to_v082():
-    assert 'version = "0.8.5"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert '__version__ = "0.8.5"' in (ROOT / "src/cs2pov/__init__.py").read_text(encoding="utf-8")
-    assert "CS2 POV Translator v0.8.5" in (ROOT / "README.zh.md").read_text(encoding="utf-8")
-    assert "CS2 POV Translator v0.8.5" in (ROOT / "Start_CS2_POV_Translator.bat").read_text(encoding="utf-8")
+    assert 'version = "0.8.6"' in (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '__version__ = "0.8.6"' in (ROOT / "src/cs2pov/__init__.py").read_text(encoding="utf-8")
+    assert "CS2 POV Translator v0.8.6" in (ROOT / "README.zh.md").read_text(encoding="utf-8")
+    assert "CS2 POV Translator v0.8.6" in (ROOT / "Start_CS2_POV_Translator.bat").read_text(encoding="utf-8")
 
 
 def test_docs_describe_privacy_and_feedback_boundaries():
@@ -49,7 +49,7 @@ def test_docs_describe_privacy_and_feedback_boundaries():
 def test_changelog_and_roadmap_include_v070():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
-    assert "v0.8.5" in changelog
+    assert "v0.8.6" in changelog
     assert "v0.8.x" in roadmap
     assert "模型管理" in roadmap
     assert "de_dust2" in roadmap

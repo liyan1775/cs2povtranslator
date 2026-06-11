@@ -34,6 +34,8 @@ Common commands:
 ```powershell
 cs2pov inspect-job output
 cs2pov explain-output output
+cs2pov players list output
+cs2pov players alias output --name Ebule --as donk
 cs2pov export output --preset editing
 cs2pov retranslate output --dry-run
 cs2pov resume output --from-stage translate
@@ -56,7 +58,7 @@ v0.4.x  Release readiness and user onboarding
 v0.5.x  Subtitle export presets and editing experience
 v0.6.x  Mirage glossary pilot
 v0.7.x  GitHub/readme/docs/release-readiness package
-v0.8.x  Model management, ASR profiles, benchmark-asr, global CS2 glossary pilot, Dust2 glossary pilot, and Anubis glossary pilot
+v0.8.x  Model management, ASR profiles, benchmark-asr, global/Dust2/Anubis glossary pilots, K-D-A identity hints, and player alias mapping
 ```
 
 ## Privacy
