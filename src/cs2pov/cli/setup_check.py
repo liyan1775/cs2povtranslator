@@ -59,7 +59,7 @@ def build_setup_report(project_root: Path | None = None) -> dict[str, Any]:
         "whisper_vad_filter": bool(cfg.get("whisper_vad_filter", True)),
         "max_subtitle_segment_seconds": cfg.get("max_subtitle_segment_seconds", 10.0),
         "subtitle_export_preset": cfg.get("subtitle_export_preset") or "editing",
-        "subtitle_overlap_policy": cfg.get("subtitle_overlap_policy") or "shift",
+        "subtitle_overlap_policy": cfg.get("subtitle_overlap_policy") or "stack",
         "subtitle_bilingual_format": cfg.get("subtitle_bilingual_format") or "label",
         "glossary_enabled": bool(cfg.get("glossary_enabled", True)),
         "glossary_pilot_maps": list(SUPPORTED_MAPS),

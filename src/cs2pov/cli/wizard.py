@@ -150,7 +150,7 @@ def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.8.6")
+    print("CS2 POV Translator v0.8.8")
     print("强引导 CLI：新增玩家识别、K-D-A 辅助确认和字幕显示名映射")
     print("=" * 72)
     print("这个向导会带你完成 8 步：")

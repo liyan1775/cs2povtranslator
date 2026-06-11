@@ -70,9 +70,9 @@ def test_default_subtitle_config_is_bilingual_editing_first():
 
     cfg = PipelineConfig()
     assert cfg.subtitle_export_preset == "editing"
-    assert cfg.subtitle_overlap_policy == "shift"
+    assert cfg.subtitle_overlap_policy == "stack"
     assert DEFAULT_CONFIG["subtitle_export_preset"] == "editing"
-    assert DEFAULT_CONFIG["subtitle_overlap_policy"] == "shift"
+    assert DEFAULT_CONFIG["subtitle_overlap_policy"] == "stack"
 
 
 def test_editing_preset_keeps_bilingual_as_first_class_output(tmp_path: Path):
@@ -83,3 +83,17 @@ def test_editing_preset_keeps_bilingual_as_first_class_output(tmp_path: Path):
     text = Path(outputs["bilingual_srt"]).read_text(encoding="utf-8")
     assert "[p1] one bench" in text
     assert "[中文] 长椅一个" in text
+
+
+def test_export_single_bilingual_format_uses_default_stack_policy(tmp_path: Path):
+    store = _make_job(tmp_path)
+    write_jsonl(store.translations_path, [
+        TranslationSegment("seg1", "s1", "p1", 2, 1.0, 3.0, "one bench", "沙发一个", round_number=1),
+        TranslationSegment("seg2", "s2", "p2", 2, 2.0, 4.0, "flash out", "给闪出去", round_number=1),
+    ])
+    outputs = export_job(store.job_dir, fmt="bilingual")
+    text = Path(outputs["bilingual_srt"]).read_text(encoding="utf-8")
+    assert "1\n00:00:01,000 --> 00:00:02,000" in text
+    assert "2\n00:00:02,000 --> 00:00:03,000" in text
+    assert "[p1] one bench" in text
+    assert "[p2] flash out" in text

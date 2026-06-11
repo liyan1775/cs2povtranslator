@@ -183,7 +183,7 @@ class PipelineConfig:
     voice_cluster_gap_seconds: float = 1.0
     subtitle_bilingual_format: str = "label"  # label | arrow
     subtitle_export_preset: str = "editing"  # editing | review | compact | debug
-    subtitle_overlap_policy: str = "shift"  # allow | shift | compact
+    subtitle_overlap_policy: str = "stack"  # allow | shift | compact | merge | stack
     subtitle_min_duration_seconds: float = 0.7
     player_aliases: dict[str, str] = field(default_factory=dict)
 

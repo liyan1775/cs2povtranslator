@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from cs2pov.adapters.demoparser_adapter import _safe_int
 from cs2pov.cli.job_ops import resolve_job_dir
 from cs2pov.services.player_alias_service import load_player_aliases, merge_player_aliases, remove_player_alias, save_player_aliases
 from cs2pov.storage.artifact_store import ArtifactStore
@@ -19,6 +20,7 @@ def load_player_rows(path: Path) -> tuple[Path, list[dict[str, Any]], dict[str, 
         raise FileNotFoundError("该 Job 尚未生成 voice manifest。请先运行到 extract_voice / build_voice_activity 阶段。")
     manifest = read_json(store.voice_manifest_path)
     rows = list(manifest.get("players", [])) if isinstance(manifest, dict) else []
+    _backfill_stats_from_player_stats(store, rows)
     aliases = load_player_aliases(store)
     return job_dir, rows, aliases
 
@@ -120,4 +122,48 @@ def _resolve_name_to_steamid(rows: list[dict[str, Any]], name: str | None) -> st
 def _kda(kills: Any, deaths: Any, assists: Any) -> str:
     if kills is None and deaths is None and assists is None:
         return "?-?-?"
-    return f"{int(kills or 0)}-{int(deaths or 0)}-{int(assists or 0)}"
+    return f"{_safe_int(kills) or 0}-{_safe_int(deaths) or 0}-{_safe_int(assists) or 0}"
+
+
+def _backfill_stats_from_player_stats(store: ArtifactStore, rows: list[dict[str, Any]]) -> None:
+    """Fill missing K-D-A for report-only use from artifacts/player_stats.json.
+
+    Existing v0.8.6 jobs may have player_stats.json but an older voice manifest
+    without kills/deaths/assists.  Also tolerate old player_stats generated with
+    float-rounded SteamIDs by falling back to a unique name+team match.
+    """
+    if not store.player_stats_path.exists():
+        return
+    try:
+        stats_doc = read_json(store.player_stats_path)
+    except Exception:
+        return
+    stats_rows = stats_doc.get("players", []) if isinstance(stats_doc, dict) else []
+    if not isinstance(stats_rows, list):
+        return
+    stats_by_sid = {str(stat.get("steamid", "")): stat for stat in stats_rows if isinstance(stat, dict)}
+    stats_by_name_team: dict[tuple[str, Any], list[dict[str, Any]]] = {}
+    for stat in stats_rows:
+        if not isinstance(stat, dict):
+            continue
+        key = (str(stat.get("name", "")).strip().lower(), stat.get("team_number"))
+        stats_by_name_team.setdefault(key, []).append(stat)
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if any(row.get(field) is not None for field in ("kills", "deaths", "assists")):
+            continue
+        stat = stats_by_sid.get(str(row.get("steamid", "")))
+        if stat is None:
+            key = (str(row.get("name", "")).strip().lower(), row.get("team_number"))
+            candidates = stats_by_name_team.get(key, [])
+            if len(candidates) == 1:
+                stat = candidates[0]
+        if stat is None:
+            continue
+        for field in ("kills", "deaths", "assists"):
+            if field in stat and stat.get(field) is not None:
+                row[field] = _safe_int(stat.get(field)) or 0
+        if all(row.get(field) is not None for field in ("kills", "deaths", "assists")):
+            row["kda"] = f"{row['kills']}-{row['deaths']}-{row['assists']}"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from decimal import Decimal, InvalidOperation
+import math
 from pathlib import Path
 from typing import Any
 import json
@@ -64,11 +66,11 @@ class DemoparserAdapter:
         except Exception:
             player_rows = []
         for row in player_rows:
-            steamid = row.get("steamid") or row.get("steam_id") or row.get("xuid")
+            steamid = _normalize_steamid(row.get("steamid") or row.get("steam_id") or row.get("xuid"))
             if steamid is None:
                 continue
             players.append(Player(
-                steamid=str(int(steamid)) if str(steamid).replace(".", "", 1).isdigit() else str(steamid),
+                steamid=steamid,
                 name=str(row.get("name", row.get("player_name", ""))),
                 team_number=_safe_int(row.get("team_number", row.get("team"))),
             ))
@@ -91,10 +93,9 @@ class DemoparserAdapter:
         name_by_sid: dict[str, str] = {}
         team_by_sid: dict[str, int | None] = {}
         for row in player_rows:
-            sid = row.get("steamid") or row.get("steam_id") or row.get("xuid")
-            if sid is None:
+            sid_s = _normalize_steamid(row.get("steamid") or row.get("steam_id") or row.get("xuid"))
+            if sid_s is None:
                 continue
-            sid_s = str(int(sid)) if str(sid).replace(".", "", 1).isdigit() else str(sid)
             name_by_sid[sid_s] = str(row.get("name", row.get("player_name", sid_s)))
             team_by_sid[sid_s] = _safe_int(row.get("team_number", row.get("team")))
 
@@ -106,8 +107,8 @@ class DemoparserAdapter:
             data = pkt.get("bytes") if isinstance(pkt, dict) else getattr(pkt, "bytes", None)
             if sid is None or tick is None or data is None:
                 continue
-            sid_s = str(int(sid)) if str(sid).replace(".", "", 1).isdigit() else str(sid)
-            if len(sid_s) == 17 and sid_s.startswith("7656"):
+            sid_s = _normalize_steamid(sid)
+            if sid_s and len(sid_s) == 17 and sid_s.startswith("7656"):
                 grouped[sid_s].append((int(tick), bytes(data)))
 
         manifest: dict[str, Any] = {
@@ -300,14 +301,35 @@ class DemoparserAdapter:
 
 
 def _normalize_steamid(value: Any) -> str | None:
+    """Normalize SteamID values without routing long integer strings through float.
+
+    SteamID64 is 17 digits.  Converting a digit string such as
+    ``76561198386265483`` with ``float(...)`` rounds it to a nearby even value
+    (for example ``...65488``), which breaks joins between voice packets, player
+    stats and alias files.  Keep plain digit strings exact; only use Decimal for
+    decimal/scientific string forms that optional parser backends may emit.
+    """
     if value is None or value == "":
         return None
-    text = str(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if value == 0 or not math.isfinite(value):
+            return None
+        return str(int(value))
+    text = str(value).strip()
+    if not text or text in {"None", "nan", "NaN"}:
+        return None
+    if text.isdigit():
+        return str(int(text))
     try:
-        if text.replace(".", "", 1).isdigit():
-            return str(int(float(text)))
-    except Exception:
-        pass
+        dec = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return text
+    if dec == 0:
+        return None
+    if dec == dec.to_integral_value():
+        return str(int(dec))
     return text
 
 
@@ -386,6 +408,8 @@ def _winner_from_end_row(row: dict[str, Any] | None) -> int | None:
 
 def _safe_int(value: Any) -> int | None:
     if value is None:
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     try:
         return int(value)

@@ -74,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--voice-cluster-gap", type=float, default=None, help="重贴长 cue 时，间隔小于该秒数的 voice activity 会合并为一簇，默认 1.0 秒。")
     run.add_argument("--bilingual-format", choices=["label", "arrow"], default=None, help="双语字幕格式：label=[中文] 标签，arrow=旧版箭头。默认 label。")
     run.add_argument("--subtitle-preset", choices=["editing", "review", "compact", "debug"], default=None, help="字幕导出预设：editing=推荐剪辑双语，review=校对，compact=紧凑双语，debug=诊断。")
-    run.add_argument("--overlap-policy", choices=["allow", "shift", "compact"], default=None, help="字幕重叠策略：allow=保留真实重叠，shift=轻微错开，compact=尽量压紧避免重叠。")
+    run.add_argument("--overlap-policy", choices=["allow", "shift", "compact", "merge", "stack"], default=None, help="字幕重叠策略：allow=保留真实重叠，shift=轻微错开，compact=尽量压紧，stack=同屏最多2条，后来者替代最早者（推荐剪映）；merge=合并整组。")
     run.add_argument("--min-subtitle-duration", type=float, default=None, help="导出 SRT 的最短显示时间，默认随预设。")
     run.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否启用 global 通用术语 + 地图词典。当前地图词典试点 de_mirage/de_dust2/de_anubis，默认开启；可用 --no-glossary 关闭。")
 
@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg_set.add_argument("--voice-cluster-gap", type=float)
     cfg_set.add_argument("--bilingual-format", choices=["label", "arrow"])
     cfg_set.add_argument("--subtitle-preset", choices=["editing", "review", "compact", "debug"])
-    cfg_set.add_argument("--overlap-policy", choices=["allow", "shift", "compact"])
+    cfg_set.add_argument("--overlap-policy", choices=["allow", "shift", "compact", "merge", "stack"])
     cfg_set.add_argument("--min-subtitle-duration", type=float)
     cfg_set.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否默认启用 global 通用术语 + 地图词典。")
 
@@ -192,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument("--export-scope", choices=["pov_team", "pov_player", "all"], help="覆盖导出范围")
     export.add_argument("--bilingual-format", choices=["label", "arrow"], help="双语格式：label=[中文]，arrow=箭头")
     export.add_argument("--preset", choices=["editing", "review", "compact", "debug"], help="导出预设。editing=推荐剪辑双语；review=校对；compact=紧凑双语；debug=诊断。")
-    export.add_argument("--overlap-policy", choices=["allow", "shift", "compact"], help="覆盖重叠策略：allow/shift/compact")
+    export.add_argument("--overlap-policy", choices=["allow", "shift", "compact", "merge", "stack"], help="覆盖重叠策略：allow/shift/compact/merge/stack；stack 推荐剪映：同屏最多2条，后来者替代最早者；merge=合并整组重叠字幕")
     export.add_argument("--max-duration", type=float, help="覆盖最长显示时间，单位秒；0 表示不限制")
     export.add_argument("--min-duration", type=float, help="覆盖最短显示时间，单位秒")
 
@@ -440,7 +440,7 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
             glossary_enabled=bool(cfg.get("glossary_enabled", True)),
             subtitle_bilingual_format=cfg.get("subtitle_bilingual_format") or "label",
             subtitle_export_preset=cfg.get("subtitle_export_preset") or "editing",
-            subtitle_overlap_policy=cfg.get("subtitle_overlap_policy") or "shift",
+            subtitle_overlap_policy=cfg.get("subtitle_overlap_policy") or "stack",
             max_subtitle_segment_seconds=float(cfg.get("max_subtitle_segment_seconds", 10.0)),
             subtitle_min_duration_seconds=float(cfg.get("subtitle_min_duration_seconds", 0.7)),
         )
@@ -583,7 +583,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         voice_cluster_gap_seconds=float(defaults.get("voice_cluster_gap_seconds", 1.0)) if args.voice_cluster_gap is None else float(args.voice_cluster_gap),
         subtitle_bilingual_format=args.bilingual_format or defaults.get("subtitle_bilingual_format") or "label",
         subtitle_export_preset=args.subtitle_preset or defaults.get("subtitle_export_preset") or "editing",
-        subtitle_overlap_policy=args.overlap_policy or defaults.get("subtitle_overlap_policy") or "shift",
+        subtitle_overlap_policy=args.overlap_policy or defaults.get("subtitle_overlap_policy") or "stack",
         subtitle_min_duration_seconds=float(defaults.get("subtitle_min_duration_seconds", 0.7)) if args.min_subtitle_duration is None else float(args.min_subtitle_duration),
         glossary_enabled=bool(defaults.get("glossary_enabled", True)) if args.glossary is None else bool(args.glossary),
         player_aliases=_parse_player_alias_args(args.player_alias),
@@ -639,7 +639,7 @@ def run_doctor() -> int:
     print(f"最长字幕重贴阈值: {cfg.get('max_subtitle_segment_seconds', 10.0)}s")
     print(f"双语字幕格式:    {cfg.get('subtitle_bilingual_format') or 'label'}")
     print(f"字幕导出预设:    {cfg.get('subtitle_export_preset') or 'editing'}")
-    print(f"字幕重叠策略:    {cfg.get('subtitle_overlap_policy') or 'shift'}")
+    print(f"字幕重叠策略:    {cfg.get('subtitle_overlap_policy') or 'stack'}")
     print(f"最短显示时长:    {cfg.get('subtitle_min_duration_seconds', 0.7)}s")
     print(f"术语词典:        {'ON' if cfg.get('glossary_enabled', True) else 'OFF'}（global 通用术语 + 地图试点: {', '.join(SUPPORTED_MAPS)}）")
     print(f"LLM base_url: {cfg.get('llm_base_url') or '[未配置]'}")

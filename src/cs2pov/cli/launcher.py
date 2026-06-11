@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.8.6")
+    print("CS2 POV Translator v0.8.8")
     print("玩家识别与别名映射：K-D-A 辅助确认，字幕显示名可改为 donk 等职业 ID")
     print("=" * 72)
     print("新用户建议：先选 2 启动前检查，再选 1 新建字幕工程。")
@@ -138,11 +138,11 @@ def ask_job_path() -> Path:
 
 def run_export_menu() -> None:
     print("\n重新导出不会重新转录，也不会重新调用 LLM。")
-    print("v0.5.1 推荐先选预设：editing=剪辑双语优先，review=校对，debug=排查问题。")
+    print("v0.8.8 推荐先选 preset editing：剪辑双语优先，并默认同屏最多2条，第三条替代最早条，适配剪映。")
     print("输入 0 / q / back 可返回主菜单。")
     job = ask_job_path()
     print("请选择导出方式：")
-    print("1. preset editing  推荐：双语 + 紧凑双语 + 中文兜底，尽量减少重叠")
+    print("1. preset editing  推荐：双语 + 紧凑双语 + 中文兜底，默认合并重叠，适配剪映")
     print("2. preset review   校对：双语 + 原文 + debug，保留更多真实时间线")
     print("3. preset debug    排查：debug + voice activity + 原文")
     print("4. format all      全部格式")
@@ -161,10 +161,10 @@ def run_export_menu() -> None:
     print("双语格式：1=[中文] 标签，2=箭头。非双语格式可直接回车。")
     print("0. 返回主菜单")
     bfmt = {"1": "label", "2": "arrow"}.get(_read_choice("请选择 [1]\n> ", default="1"), "label")
-    print("重叠策略：1=使用预设，2=allow 保留真实重叠，3=shift 轻微错开，4=compact 尽量压紧。")
+    print("重叠策略：1=使用预设，2=allow 保留真实重叠，3=shift 轻微错开，4=compact 尽量压紧，5=stack 同屏最多2条，后来者替代最早者（推荐剪映），6=merge 合并整组（不推荐默认）")
     print("0. 返回主菜单")
     overlap_choice = _read_choice("请选择 [1]\n> ", default="1")
-    overlap = {"2": "allow", "3": "shift", "4": "compact"}.get(overlap_choice)
+    overlap = {"2": "allow", "3": "shift", "4": "compact", "5": "stack", "6": "merge"}.get(overlap_choice)
     outputs = export_job(job, fmt=fmt, bilingual_format=bfmt, preset=preset, overlap_policy=overlap)
     print("\n导出完成：")
     for k, v in outputs.items():
