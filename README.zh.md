@@ -1,4 +1,4 @@
-# CS2 POV Translator v0.7.1
+# CS2 POV Translator v0.8.5
 
 **CS2 POV Translator** 是一个本地优先的 CS2 POV 双语字幕工程工具。
 
@@ -13,12 +13,13 @@
 
 - 处理 CS2 / FACEIT demo：支持 `.dem` 和 `.dem.zst`。
 - 提取队伍语音：按玩家、队伍和回合组织语音片段。
-- 转录语音：通过 faster-whisper 支持 `tiny / base / small` 等本地模型。
+- 转录语音：通过 faster-whisper 支持 `tiny / base / small / medium` 等本地模型，并提供质量档位与模型管理。
 - 按回合翻译：比逐句翻译更适合 CS2 队内语音。
 - 导出双语字幕：默认推荐双语 SRT，纯中文/原文/debug 版本可选。
 - 管理字幕工程：支持 `inspect-job / export / retranslate / resume / feedback`。
 - 反馈包脱敏：不会打包原始 demo、WAV、大音频、API key 和本地绝对路径。
-- Mirage 词典试点：`de_mirage` 术语可注入翻译 prompt，并输出 glossary 报告。
+- 模型管理：查看 Hugging Face/Whisper 缓存目录、已下载模型、模型近似大小，并可把模型缓存放到 D 盘。
+- Mirage / Dust2 / Anubis + 通用词典试点：`de_mirage`、`de_dust2`、`de_anubis` 报点和 push/trade/AWP 等通用术语可注入翻译 prompt，并输出 glossary 报告。
 
 ---
 
@@ -126,10 +127,16 @@ cs2pov resume output --from-stage export_subtitles
 cs2pov feedback output
 ```
 
-查看 Mirage 词典：
+查看词典：
 
 ```powershell
-cs2pov glossary list --map de_mirage
+cs2pov models recommend
+cs2pov models list
+cs2pov models set-cache "D:\AIModels\huggingface"
+
+cs2pov glossary list --map de_mirage --scope all
+cs2pov glossary list --map de_dust2 --scope all
+cs2pov glossary list --map de_anubis --scope all
 cs2pov glossary check output
 ```
 
@@ -171,6 +178,7 @@ v0.4.x  发布准备 / 普通用户可用性 ✅
 v0.5.x  字幕格式与剪辑体验 ✅
 v0.6.x  Mirage 词典试点机制 ✅
 v0.7.x  GitHub 仓库落地 / 作品集发布整理 ✅
+v0.8.x  模型管理 / 通用术语 / Dust2/Anubis 词典试点 ✅
 ```
 
 下一阶段建议见 [ROADMAP.md](ROADMAP.md)。
@@ -179,14 +187,15 @@ v0.7.x  GitHub 仓库落地 / 作品集发布整理 ✅
 
 ## 文档入口
 
-完整索引见 [docs/INDEX.zh.md](docs/INDEX.zh.md)。
-
 - [安装教程](docs/INSTALL_WINDOWS.zh.md)
 - [输出文件说明](docs/OUTPUT_FILES.zh.md)
 - [架构说明](docs/ARCHITECTURE.zh.md)
 - [测试与反馈流程](docs/TESTING_GUIDE.zh.md)
 - [隐私与安全说明](docs/SECURITY_AND_PRIVACY.zh.md)
 - [Mirage 词典试点](docs/GLOSSARY_MIRAGE_PILOT.zh.md)
+- [Dust2 词典试点](docs/GLOSSARY_DUST2_PILOT.zh.md)
+- [Anubis 词典试点](docs/GLOSSARY_ANUBIS_PILOT.zh.md)
+- [推广样片制作流程](docs/SHOWCASE_SAMPLE_WORKFLOW.zh.md)
 - [发布检查清单](docs/RELEASE_CHECKLIST.zh.md)
 - [路线图](ROADMAP.md)
 - [更新日志](CHANGELOG.md)

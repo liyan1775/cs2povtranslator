@@ -38,6 +38,23 @@ v0.6.0 只做 `de_mirage` 一张地图的试点词典，不做全地图铺开。
 - 如果 ASR 把普通词误识别成 callout，LLM 可以忽略词典，不应硬套；
 - `glossary_warnings.json` 是人工复核线索，不代表翻译一定错误。
 
+
+## v0.8.5 中文社区叫法校准
+
+根据真实 POV 样片制作前的中文报点反馈，v0.8.5 对 Mirage 的几个容易直译错误的点位做了校准：
+
+```text
+ninja -> 忍者位
+bench -> 沙发
+ladder / ladder room -> 黑屋
+```
+
+说明：
+
+- `bench` 指 Mirage B 区包点附近位置，中文 POV 字幕优先写“沙发”，不再推荐“长椅”。
+- `ladder / ladder room` 优先写“黑屋”，不推荐直译“梯子房”。
+- `ninja` 优先写“忍者位”，避免平台机翻按普通名词处理。
+
 ## 下一步
 
 如果 Mirage 试点有效，后续再扩展：

@@ -109,7 +109,7 @@ class TranslationService:
             "map_name": map_name,
             "glossary_policy": {
                 "enabled": bool(glossary_payload),
-                "note": "glossary 只在上下文确认为 Mirage 报点时使用；若 ASR 把普通词误识别成报点，不要硬套。",
+                "note": "glossary 包含 global CS2 通用术语和地图报点；若 ASR 把普通词误识别成术语，不要硬套。",
             },
             "glossary": glossary_payload,
             "round_number": ctx.round_number,
@@ -118,7 +118,7 @@ class TranslationService:
                 for s in ctx.segments
             ],
         }
-        user_prompt = "请翻译这个回合内的队内语音，按 id 返回翻译。优先遵守 glossary，但不要为了术语牺牲自然字幕。\n" + json.dumps(payload, ensure_ascii=False)
+        user_prompt = "请翻译这个回合内的队内语音，按 id 返回翻译。优先遵守 glossary 的推荐译法和 avoid 禁忌误译，但不要为了术语牺牲自然字幕。\n" + json.dumps(payload, ensure_ascii=False)
         for _attempt in range(2):
             try:
                 data = llm.chat_json(SYSTEM_PROMPT, user_prompt)

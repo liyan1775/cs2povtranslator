@@ -7,7 +7,7 @@ cd /d "%~dp0"
 title CS2 POV Translator
 
 echo ===============================================================
-echo CS2 POV Translator v0.7.1
+echo CS2 POV Translator v0.8.5
 echo Release-ready local-first bilingual subtitle toolkit
 echo ===============================================================
 echo.

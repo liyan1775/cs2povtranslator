@@ -92,12 +92,13 @@ class PipelineEngine:
                 if self.store.raw_rounds_path.exists():
                     self.manifest.set_artifact("rounds_raw", self.store.raw_rounds_path)
             elif stage == StageName.TRANSCRIBE:
-                self.progress.emit(stage, f"使用 faster-whisper 模型 {self.config.whisper_model} 转录。语言：{self.config.asr_language}；模式：{self.config.transcription_mode}；VAD：{'ON' if self.config.whisper_vad_filter else 'OFF'}。")
+                self.progress.emit(stage, f"使用 faster-whisper 档位 {self.config.transcription_profile} / 模型 {self.config.whisper_model} 转录。设备：{self.config.whisper_device}；compute_type={self.config.whisper_compute_type}；语言：{self.config.asr_language}；模式：{self.config.transcription_mode}；VAD：{'ON' if self.config.whisper_vad_filter else 'OFF'}。")
                 segs = self.transcription_service.transcribe_all(
                     self.store,
                     model_name=self.config.whisper_model,
                     device=self.config.whisper_device,
                     compute_type=self.config.whisper_compute_type,
+                    cache_dir=self.config.whisper_cache_dir,
                     language=self.config.asr_language,
                     selected_team_number=self.config.selected_team_number,
                     vad_filter=self.config.whisper_vad_filter,

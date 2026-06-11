@@ -5,7 +5,7 @@ from pathlib import Path
 
 from cs2pov.cli.encoding import configure_utf8_stdio
 from cs2pov.cli.job_ops import export_job, inspect_job, print_job_inspection, retranslate_job, resume_job
-from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary
+from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary, run_models
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.domain.models import StageName
@@ -59,11 +59,13 @@ def main(argv: list[str] | None = None) -> int:
             elif choice == "10":
                 run_glossary_menu()
             elif choice == "11":
-                run_install_help_page()
+                run_models_menu()
             elif choice == "12":
+                run_install_help_page()
+            elif choice == "13":
                 run_help_page()
             else:
-                print("没有这个选项。请输入 0-12。")
+                print("没有这个选项。请输入 0-13。")
         except ReturnToMainMenu:
             print("已返回主菜单。")
             if args.once:
@@ -84,11 +86,11 @@ def main(argv: list[str] | None = None) -> int:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.7.1")
-    print("作品集发布整理版：README / 架构文档 / 路线图 / 发布检查清单已补齐")
+    print("CS2 POV Translator v0.8.5")
+    print("模型管理与词典试点：Whisper 缓存、质量档位、global + Mirage/Dust2/Anubis glossary pilot")
     print("=" * 72)
     print("新用户建议：先选 2 启动前检查，再选 1 新建字幕工程。")
-    print("已有 output 目录：可用 3/4/5/6/7 继续查看、解释、导出、重翻译和恢复；10 可查看 Mirage 词典。")
+    print("已有 output 目录：可用 3/4/5/6/7 继续查看、解释、导出、重翻译和恢复；10 可查看词典；11 管理 Whisper 模型。")
     print("在子菜单中输入 0、q、back 或 返回，可随时回到主菜单。")
 
 
@@ -105,9 +107,10 @@ def print_menu() -> None:
     print("7. 从某阶段恢复 resume（失败后从 translate/export_subtitles 等阶段继续）")
     print("8. 打包反馈包 feedback（排除大音频和原始 demo）")
     print("9. 技术环境诊断 doctor（更偏开发者的依赖检查）")
-    print("10. Mirage 词典试点 glossary（查看术语/检查已有 Job 术语报告）")
-    print("11. 查看安装/首次使用教程")
-    print("12. 查看命令帮助和常见场景")
+    print("10. 词典试点 glossary（查看 global 通用术语 + Mirage/Dust2/Anubis 报点 / 检查术语报告）")
+    print("11. Whisper 模型管理 models（缓存目录、已下载模型、质量档位、模型测试）")
+    print("12. 查看安装/首次使用教程")
+    print("13. 查看命令帮助和常见场景")
     print("0. 退出")
 
 
@@ -215,24 +218,71 @@ def run_resume_menu() -> None:
 
 
 def run_glossary_menu() -> None:
-    print("\nMirage 词典试点")
+    print("\n地图词典试点")
     print("=" * 72)
-    print("当前仅做 de_mirage 一张地图试点，不追求全量词条。")
+    print("当前做 de_mirage / de_dust2 / de_anubis 三张地图试点，不追求全量词条。")
     print("词典用途：注入 LLM 翻译 prompt，并生成 glossary_used / glossary_warnings 供人工复核。")
     print("注意：词典不会硬替换字幕文本，避免把 ASR 误识别强行改错。")
     print("输入 0 / q / back 可返回主菜单。")
     print("1. 查看 de_mirage 词典")
-    print("2. 检查已有 Job 的词典使用报告")
+    print("2. 查看 de_dust2 词典")
+    print("3. 查看 de_anubis 词典")
+    print("4. 检查已有 Job 的词典使用报告")
     choice = _read_choice("请选择 [1]\n> ", default="1")
     import argparse
     if choice == "1":
-        run_glossary(argparse.Namespace(glossary_cmd="list", map_name="de_mirage", json=False), argparse.ArgumentParser())
+        run_glossary(argparse.Namespace(glossary_cmd="list", map_name="de_mirage", scope="all", json=False), argparse.ArgumentParser())
         return
     if choice == "2":
+        run_glossary(argparse.Namespace(glossary_cmd="list", map_name="de_dust2", scope="all", json=False), argparse.ArgumentParser())
+        return
+    if choice == "3":
+        run_glossary(argparse.Namespace(glossary_cmd="list", map_name="de_anubis", scope="all", json=False), argparse.ArgumentParser())
+        return
+    if choice == "4":
         job = ask_job_path()
         run_glossary(argparse.Namespace(glossary_cmd="check", path=str(job), json=False), argparse.ArgumentParser())
         return
     print("没有这个选项。")
+
+
+def run_models_menu() -> None:
+    print("\nWhisper 模型管理")
+    print("=" * 72)
+    print("用途：查看模型放在哪里、C 盘是否被占用、已有模型多大，以及 tiny/base/small/medium 哪个值得下载。")
+    print("本工具采用项目级缓存配置，不会悄悄修改系统全局环境变量。")
+    print("输入 0 / q / back 可返回主菜单。")
+    print("1. 查看当前缓存目录和默认模型")
+    print("2. 列出已下载模型")
+    print("3. 查看模型大小与质量档位建议")
+    print("4. 设置模型缓存目录到 D 盘/自定义目录")
+    print("5. 测试当前/指定模型能否加载")
+    choice = _read_choice("请选择 [1]\n> ", default="1")
+    import argparse
+    if choice == "1":
+        run_models(argparse.Namespace(models_cmd="info", json=False), argparse.ArgumentParser())
+        return
+    if choice == "2":
+        run_models(argparse.Namespace(models_cmd="list", json=False), argparse.ArgumentParser())
+        return
+    if choice == "3":
+        run_models(argparse.Namespace(models_cmd="recommend", json=False), argparse.ArgumentParser())
+        return
+    if choice == "4":
+        print("请输入缓存根目录，例如 D:\\AIModels\\huggingface。")
+        print("建议不要放在 output/ 或项目目录里；模型较大，推荐单独目录。")
+        path = _read_choice("> ", default="D:\\AIModels\\huggingface")
+        run_models(argparse.Namespace(models_cmd="set-cache", path=path), argparse.ArgumentParser())
+        return
+    if choice == "5":
+        print("输入模型名，例如 small。直接回车使用当前默认模型。")
+        model = _read_choice("> ", default="") or None
+        print("是否只检查本地已有模型，不联网下载？1=是，2=否。")
+        local = _read_choice("请选择 [1]\n> ", default="1") != "2"
+        run_models(argparse.Namespace(models_cmd="test", model=model, profile=None, device=None, compute_type=None, cache_dir=None, local_only=local, json=False), argparse.ArgumentParser())
+        return
+    print("没有这个选项。")
+
 
 def run_install_help_page() -> None:
     print("\n安装 / 首次使用教程")
@@ -262,7 +312,7 @@ def run_help_page() -> None:
     print("6. LLM 某回合失败：选择主菜单 6，不会重新转录。")
     print("7. 程序中途失败：选择主菜单 7，从失败阶段继续。")
     print("8. 要发给开发者分析：选择主菜单 8。")
-    print("9. 想查看 Mirage 术语词典：选择主菜单 10。")
+    print("9. 想查看 Mirage/Dust2/Anubis 术语词典：选择主菜单 10。")
     print("10. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
     print("\n对应专家命令：")
     print("  cs2pov setup-check")

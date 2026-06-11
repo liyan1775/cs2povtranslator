@@ -21,6 +21,15 @@ from cs2pov.storage.config_store import load_config, save_config, mask_config_fo
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
 from cs2pov.services.dictionary_service import glossary_terms_as_dicts, build_glossary_used_report, SUPPORTED_MAPS
+from cs2pov.cli.model_manager import (
+    TRANSCRIPTION_PROFILES,
+    apply_profile_to_values,
+    print_models_info,
+    print_models_list,
+    print_models_recommend,
+    set_cache_dir,
+    test_model_load,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--pov-steamid")
     run.add_argument("--team", type=int, dest="team_number")
     run.add_argument("--export-scope", choices=["pov_team", "pov_player", "all"], default="pov_team")
+    run.add_argument("--transcription-profile", choices=list(TRANSCRIPTION_PROFILES), default=None, help="转录质量档位：fast/balanced/quality/medium_cpu/cuda_quality。会自动设置模型、设备和 compute_type。")
     run.add_argument("--whisper-model", default=None)
+    run.add_argument("--whisper-device", choices=["cpu", "cuda", "auto"], default=None, help="faster-whisper 设备：cpu/cuda/auto。普通用户建议用 profile。")
+    run.add_argument("--whisper-compute-type", default=None, help="faster-whisper compute_type，如 int8/float16/int8_float16。普通用户建议用 profile。")
+    run.add_argument("--whisper-cache-dir", default=None, help="项目级 Whisper/Hugging Face 模型缓存根目录，可放到 D 盘。")
     run.add_argument("--language", "--asr-language", dest="language", default="auto", help="ASR 语言：auto/en/ru/zh 等。默认 auto；遇到多语言混入时可用 --asr-language en 强制英文。")
     run.add_argument("--from-stage", choices=[s.value for s in StageName])
     run.add_argument("--to-stage", choices=[s.value for s in StageName])
@@ -56,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--subtitle-preset", choices=["editing", "review", "compact", "debug"], default=None, help="字幕导出预设：editing=推荐剪辑双语，review=校对，compact=紧凑双语，debug=诊断。")
     run.add_argument("--overlap-policy", choices=["allow", "shift", "compact"], default=None, help="字幕重叠策略：allow=保留真实重叠，shift=轻微错开，compact=尽量压紧避免重叠。")
     run.add_argument("--min-subtitle-duration", type=float, default=None, help="导出 SRT 的最短显示时间，默认随预设。")
-    run.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否启用地图术语词典。v0.6.0 仅试点 de_mirage，默认开启；可用 --no-glossary 关闭。")
+    run.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否启用 global 通用术语 + 地图词典。当前地图词典试点 de_mirage/de_dust2/de_anubis，默认开启；可用 --no-glossary 关闭。")
 
     sub.add_parser("doctor", help="检查本机运行环境和可选依赖")
     setup = sub.add_parser("setup-check", help="启动前检查：用普通用户语言说明是否可以开始处理 demo")
@@ -70,7 +83,11 @@ def main(argv: list[str] | None = None) -> int:
     cfg_set.add_argument("--base-url")
     cfg_set.add_argument("--api-key")
     cfg_set.add_argument("--model")
+    cfg_set.add_argument("--transcription-profile", choices=list(TRANSCRIPTION_PROFILES), help="保存转录质量档位，并同步更新模型/设备/compute_type。")
     cfg_set.add_argument("--whisper-model")
+    cfg_set.add_argument("--whisper-device", choices=["cpu", "cuda", "auto"])
+    cfg_set.add_argument("--whisper-compute-type")
+    cfg_set.add_argument("--whisper-cache-dir", help="项目级模型缓存根目录，例如 D:\\AIModels\\huggingface。")
     cfg_set.add_argument("--whisper-vad", action=argparse.BooleanOptionalAction, default=None)
     cfg_set.add_argument("--transcription-mode", choices=["round", "activity", "player"])
     cfg_set.add_argument("--filter-hallucinations", action=argparse.BooleanOptionalAction, default=None)
@@ -80,16 +97,48 @@ def main(argv: list[str] | None = None) -> int:
     cfg_set.add_argument("--subtitle-preset", choices=["editing", "review", "compact", "debug"])
     cfg_set.add_argument("--overlap-policy", choices=["allow", "shift", "compact"])
     cfg_set.add_argument("--min-subtitle-duration", type=float)
-    cfg_set.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否默认启用地图术语词典。")
+    cfg_set.add_argument("--glossary", action=argparse.BooleanOptionalAction, default=None, help="是否默认启用 global 通用术语 + 地图词典。")
 
-    glossary = sub.add_parser("glossary", help="查看/检查地图术语词典。v0.6.0 仅试点 Mirage。")
+    glossary = sub.add_parser("glossary", help="查看/检查 global 通用术语与 Mirage/Dust2/Anubis 地图词典。")
     glossary_sub = glossary.add_subparsers(dest="glossary_cmd")
     glossary_list = glossary_sub.add_parser("list", help="列出某张地图的术语词典")
-    glossary_list.add_argument("--map", dest="map_name", default="de_mirage", help="地图名，默认 de_mirage。v0.6.0 仅支持 de_mirage。")
+    glossary_list.add_argument("--map", dest="map_name", default="de_mirage", help="地图名，默认 de_mirage。当前地图词典试点 de_mirage/de_dust2/de_anubis；global 通用术语始终可用。")
+    glossary_list.add_argument("--scope", choices=["all", "global", "map"], default="all", help="词典范围：all=通用+地图，global=通用术语，map=当前地图报点。")
     glossary_list.add_argument("--json", action="store_true", help="输出 JSON")
     glossary_check = glossary_sub.add_parser("check", help="查看已有 Job 的 glossary_used / glossary_warnings")
     glossary_check.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
     glossary_check.add_argument("--json", action="store_true", help="输出 JSON")
+
+    models = sub.add_parser("models", help="Whisper 模型管理：缓存位置、已下载模型、质量档位、模型可用性测试")
+    models_sub = models.add_subparsers(dest="models_cmd")
+    models_info = models_sub.add_parser("info", help="查看当前模型缓存目录和转录默认值")
+    models_info.add_argument("--json", action="store_true")
+    models_list = models_sub.add_parser("list", help="扫描本机已下载的 faster-whisper/Whisper 模型")
+    models_list.add_argument("--json", action="store_true")
+    models_rec = models_sub.add_parser("recommend", help="查看 tiny/base/small/medium/CUDA 档位建议和近似大小")
+    models_rec.add_argument("--json", action="store_true")
+    models_cache = models_sub.add_parser("set-cache", help="设置项目级模型缓存根目录，推荐放到 D 盘")
+    models_cache.add_argument("path", help="例如 D:\\AIModels\\huggingface")
+    models_test = models_sub.add_parser("test", help="测试某个 Whisper 模型能否加载；可能触发下载")
+    models_test.add_argument("--model", default=None, help="默认使用当前配置模型")
+    models_test.add_argument("--profile", choices=list(TRANSCRIPTION_PROFILES), default=None, help="用质量档位自动选择模型/设备/compute_type")
+    models_test.add_argument("--device", choices=["cpu", "cuda", "auto"], default=None)
+    models_test.add_argument("--compute-type", default=None)
+    models_test.add_argument("--cache-dir", default=None)
+    models_test.add_argument("--local-only", action="store_true", help="只检查本地已有模型，不联网下载")
+    models_test.add_argument("--json", action="store_true")
+
+    bench = sub.add_parser("benchmark-asr", help="对同一 demo 的前 N 个回合跑多个 Whisper 模型，生成耗时/片段数对比")
+    bench.add_argument("demo")
+    bench.add_argument("--output", default="output_asr_benchmark")
+    bench.add_argument("--models", default="tiny,base,small", help="逗号分隔，例如 base,small,medium")
+    bench.add_argument("--team", type=int, dest="team_number")
+    bench.add_argument("--max-rounds", type=int, default=3)
+    bench.add_argument("--device", default=None, choices=["cpu", "cuda", "auto"])
+    bench.add_argument("--compute-type", default=None)
+    bench.add_argument("--language", "--asr-language", dest="language", default="auto")
+    bench.add_argument("--cache-dir", default=None)
+    bench.add_argument("--json", action="store_true")
 
     clean = sub.add_parser("clean", help="清理 job 中体积较大的中间产物，默认只预览不删除")
     clean.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
@@ -169,6 +218,12 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "glossary":
         return run_glossary(args, parser)
 
+    if args.cmd == "models":
+        return run_models(args, parser)
+
+    if args.cmd == "benchmark-asr":
+        return run_asr_benchmark(args)
+
     if args.cmd == "clean":
         return run_clean(Path(args.path), delete=args.yes, clean_voice=args.voice, clean_temp=args.temp)
 
@@ -224,6 +279,150 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 2
 
 
+
+
+def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.models_cmd == "info":
+        return print_models_info(json_mode=args.json)
+    if args.models_cmd == "list":
+        return print_models_list(json_mode=args.json)
+    if args.models_cmd == "recommend":
+        return print_models_recommend(json_mode=args.json)
+    if args.models_cmd == "set-cache":
+        root = set_cache_dir(Path(args.path))
+        print("模型缓存目录已保存为项目级配置：")
+        print(root)
+        print("\n说明：")
+        print("- 这不会修改系统全局环境变量。")
+        print("- 之后通过本工具加载/下载 Whisper 模型时，会优先使用这个目录。")
+        print("- 若想把已有 C 盘模型迁移到这里，请手动复制 Hugging Face 缓存后再运行 cs2pov models list 检查。")
+        return 0
+    if args.models_cmd == "test":
+        cfg = load_config()
+        profile_id = args.profile or cfg.get("transcription_profile")
+        if profile_id not in TRANSCRIPTION_PROFILES:
+            profile_id = None
+        profile_values = apply_profile_to_values(
+            profile_id,
+            whisper_model=args.model,
+            whisper_device=args.device,
+            whisper_compute_type=args.compute_type,
+        )
+        model = str(profile_values.get("whisper_model") or cfg.get("whisper_model") or "base")
+        device = str(profile_values.get("whisper_device") or cfg.get("whisper_device") or "cpu")
+        compute_type = str(profile_values.get("whisper_compute_type") or cfg.get("whisper_compute_type") or "int8")
+        result = test_model_load(model, device, compute_type, cache_dir=args.cache_dir or cfg.get("whisper_cache_dir"), local_only=args.local_only)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print("Whisper 模型加载测试")
+            print("=" * 72)
+            print(f"model={model} device={device} compute_type={compute_type}")
+            if result.get("cache_dir"):
+                print(f"cache_dir={result.get('cache_dir')}")
+            if result.get("ok"):
+                print("OK：模型可以加载。")
+            else:
+                print("FAILED：模型无法加载。")
+                print(f"{result.get('error_type')}: {result.get('error')}")
+                if args.local_only:
+                    print("提示：当前是 --local-only，只检查本地已有模型；去掉该参数可能会触发下载。")
+        return 0 if result.get("ok") else 1
+    parser.error("models 需要 info/list/recommend/set-cache/test")
+    return 2
+
+
+def run_asr_benchmark(args: argparse.Namespace) -> int:
+    import time
+    from datetime import datetime
+    from cs2pov.storage.jsonl import read_json, write_json
+
+    cfg = load_config()
+    models = [m.strip() for m in str(args.models).split(",") if m.strip()]
+    if not models:
+        raise ValueError("--models 至少需要一个模型名，例如 base,small")
+    output_root = Path(args.output)
+    output_root.mkdir(parents=True, exist_ok=True)
+    demo_display = str(args.demo).replace("\\", "/").rsplit("/", 1)[-1]
+    report: dict[str, Any] = {
+        "schema_version": 1,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "demo": demo_display,
+        "demo_display": demo_display,
+        "models": models,
+        "team_number": args.team_number,
+        "max_rounds": args.max_rounds,
+        "runs": [],
+        "note": "benchmark-asr 会重复运行小范围 pipeline，适合用前 3 回合比较 tiny/base/small/medium 在本机的耗时和字幕质量。",
+    }
+    print("ASR 模型对比实验")
+    print("=" * 72)
+    print(f"demo={args.demo}")
+    print(f"models={', '.join(models)} team={args.team_number or '[自动/全部]'} max_rounds={args.max_rounds}")
+    for model in models:
+        run_output = output_root / f"bench_{model.replace('/', '_').replace('\\\\', '_')}"
+        config = PipelineConfig(
+            output_root=str(run_output),
+            selected_team_number=args.team_number,
+            export_scope="pov_team",
+            asr_language=args.language,
+            transcription_profile="benchmark",
+            whisper_model=model,
+            whisper_device=args.device or cfg.get("whisper_device") or "cpu",
+            whisper_compute_type=args.compute_type or cfg.get("whisper_compute_type") or "int8",
+            whisper_cache_dir=args.cache_dir or cfg.get("whisper_cache_dir"),
+            whisper_vad_filter=bool(cfg.get("whisper_vad_filter", True)),
+            transcription_mode=cfg.get("transcription_mode") or "round",
+            dry_run_translation=True,
+            max_rounds=args.max_rounds,
+            glossary_enabled=bool(cfg.get("glossary_enabled", True)),
+            subtitle_bilingual_format=cfg.get("subtitle_bilingual_format") or "label",
+            subtitle_export_preset=cfg.get("subtitle_export_preset") or "editing",
+            subtitle_overlap_policy=cfg.get("subtitle_overlap_policy") or "shift",
+            max_subtitle_segment_seconds=float(cfg.get("max_subtitle_segment_seconds", 10.0)),
+            subtitle_min_duration_seconds=float(cfg.get("subtitle_min_duration_seconds", 0.7)),
+        )
+        print(f"\n--- benchmark: {model} ---")
+        started = time.perf_counter()
+        ok = True
+        error = None
+        job_dir = None
+        coverage = {}
+        try:
+            engine = PipelineEngine(config)
+            engine.run(Path(args.demo))
+            job_dir = str(engine.store.job_dir)
+            if engine.store.transcription_coverage_path.exists():
+                coverage = read_json(engine.store.transcription_coverage_path)
+        except Exception as exc:  # pragma: no cover - depends on real demo/env
+            ok = False
+            error = f"{type(exc).__name__}: {exc}"
+            print(f"FAILED: {error}")
+        elapsed = round(time.perf_counter() - started, 3)
+        item = {
+            "model": model,
+            "ok": ok,
+            "elapsed_seconds": elapsed,
+            "job_dir": job_dir,
+            "error": error,
+            "transcript_segments": coverage.get("postprocessed_transcript_segments") or coverage.get("transcript_segments"),
+            "longest_transcript_segment_seconds": coverage.get("longest_transcript_segment_seconds"),
+            "coverage_ratio_before_postprocess": coverage.get("coverage_ratio_before_postprocess"),
+            "coverage_ratio_after_postprocess": coverage.get("coverage_ratio_after_postprocess"),
+            "filtered_hallucination_segments": coverage.get("filtered_hallucination_segments"),
+        }
+        report["runs"].append(item)
+        print(f"result: ok={ok} elapsed={elapsed}s segments={item['transcript_segments']} longest={item['longest_transcript_segment_seconds']}")
+    report_path = output_root / "asr_benchmark.json"
+    write_json(report_path, report)
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print("\nBenchmark 报告已生成：")
+        print(report_path)
+        print("建议：不要只看耗时，也要打开各 run 的 final/*.srt 比较字幕质量。")
+    return 0 if all(run.get("ok") for run in report["runs"]) else 1
+
 def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.config_cmd == "show":
         cfg_data = load_config()
@@ -238,11 +437,16 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         return 0
     if args.config_cmd == "set":
         updates = {}
+        if getattr(args, "transcription_profile", None):
+            updates.update(apply_profile_to_values(args.transcription_profile))
         for attr, key in [
             ("base_url", "llm_base_url"),
             ("api_key", "llm_api_key"),
             ("model", "llm_model"),
             ("whisper_model", "whisper_model"),
+            ("whisper_device", "whisper_device"),
+            ("whisper_compute_type", "whisper_compute_type"),
+            ("whisper_cache_dir", "whisper_cache_dir"),
             ("transcription_mode", "transcription_mode"),
             ("max_subtitle_segment_seconds", "max_subtitle_segment_seconds"),
             ("voice_cluster_gap", "voice_cluster_gap_seconds"),
@@ -254,6 +458,8 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             value = getattr(args, attr, None)
             if value is not None:
                 updates[key] = value
+        if (not getattr(args, "transcription_profile", None)) and any(getattr(args, name, None) is not None for name in ["whisper_model", "whisper_device", "whisper_compute_type"]):
+            updates["transcription_profile"] = "custom"
         if args.whisper_vad is not None:
             updates["whisper_vad_filter"] = bool(args.whisper_vad)
         if args.filter_hallucinations is not None:
@@ -269,6 +475,22 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
 def run_pipeline(args: argparse.Namespace) -> int:
     defaults = load_config()
+    explicit_whisper_override = any([args.whisper_model, args.whisper_device, args.whisper_compute_type])
+    profile_id = args.transcription_profile or (None if explicit_whisper_override else defaults.get("transcription_profile"))
+    if profile_id in TRANSCRIPTION_PROFILES:
+        resolved_profile = apply_profile_to_values(
+            profile_id,
+            whisper_model=args.whisper_model,
+            whisper_device=args.whisper_device,
+            whisper_compute_type=args.whisper_compute_type,
+        )
+    else:
+        resolved_profile = apply_profile_to_values(
+            None,
+            whisper_model=args.whisper_model,
+            whisper_device=args.whisper_device,
+            whisper_compute_type=args.whisper_compute_type,
+        )
     config = PipelineConfig(
         output_root=args.output,
         map_name=args.map_name,
@@ -276,9 +498,11 @@ def run_pipeline(args: argparse.Namespace) -> int:
         selected_team_number=args.team_number,
         export_scope=args.export_scope,
         asr_language=args.language,
-        whisper_model=args.whisper_model or defaults.get("whisper_model") or "base",
-        whisper_device=defaults.get("whisper_device") or "cpu",
-        whisper_compute_type=defaults.get("whisper_compute_type") or "int8",
+        transcription_profile=str(resolved_profile.get("transcription_profile") or ("custom" if explicit_whisper_override else defaults.get("transcription_profile") or "balanced")),
+        whisper_model=str(resolved_profile.get("whisper_model") or defaults.get("whisper_model") or "base"),
+        whisper_device=str(resolved_profile.get("whisper_device") or defaults.get("whisper_device") or "cpu"),
+        whisper_compute_type=str(resolved_profile.get("whisper_compute_type") or defaults.get("whisper_compute_type") or "int8"),
+        whisper_cache_dir=args.whisper_cache_dir or defaults.get("whisper_cache_dir"),
         whisper_vad_filter=bool(defaults.get("whisper_vad_filter", True)) if args.whisper_vad is None else bool(args.whisper_vad),
         transcription_mode=args.transcription_mode or defaults.get("transcription_mode") or "round",
         activity_padding_seconds=args.activity_padding,
@@ -328,7 +552,10 @@ def run_doctor() -> int:
         ok = ok and exists
     cfg = load_config()
     print("-" * 60)
+    print(f"转录质量档位:    {cfg.get('transcription_profile') or 'balanced'}")
     print(f"Whisper 默认模型: {cfg.get('whisper_model')}")
+    print(f"Whisper 设备:    {cfg.get('whisper_device') or 'cpu'} / compute_type={cfg.get('whisper_compute_type') or 'int8'}")
+    print(f"模型缓存目录:    {cfg.get('whisper_cache_dir') or '[未设置，使用默认 Hugging Face 缓存]'}")
     print(f"Whisper VAD:      {'ON' if cfg.get('whisper_vad_filter') else 'OFF'}")
     print(f"转录切片模式:    {cfg.get('transcription_mode') or 'round'}")
     print(f"幻觉过滤:        {'ON' if cfg.get('filter_hallucinations') else 'OFF'}")
@@ -337,7 +564,7 @@ def run_doctor() -> int:
     print(f"字幕导出预设:    {cfg.get('subtitle_export_preset') or 'editing'}")
     print(f"字幕重叠策略:    {cfg.get('subtitle_overlap_policy') or 'shift'}")
     print(f"最短显示时长:    {cfg.get('subtitle_min_duration_seconds', 0.7)}s")
-    print(f"地图术语词典:    {'ON' if cfg.get('glossary_enabled', True) else 'OFF'}（v0.6.0 试点地图: {', '.join(SUPPORTED_MAPS)}）")
+    print(f"术语词典:        {'ON' if cfg.get('glossary_enabled', True) else 'OFF'}（global 通用术语 + 地图试点: {', '.join(SUPPORTED_MAPS)}）")
     print(f"LLM base_url: {cfg.get('llm_base_url') or '[未配置]'}")
     print(f"LLM model:    {cfg.get('llm_model') or '[未配置]'}")
     warning = llm_model_warning(cfg.get("llm_model"))
@@ -354,25 +581,26 @@ def run_doctor() -> int:
 
 def run_glossary(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.glossary_cmd == "list":
-        terms = glossary_terms_as_dicts(args.map_name)
+        terms = glossary_terms_as_dicts(args.map_name, scope=getattr(args, "scope", "all"))
         payload = {
             "map_name": args.map_name,
             "supported_maps": list(SUPPORTED_MAPS),
+            "scope": getattr(args, "scope", "all"),
             "term_count": len(terms),
             "terms": terms,
-            "note": "v0.6.0 仅试点 Mirage。词典用于 prompt 约束和 warning 报告，不会硬替换字幕文本。",
+            "note": "v0.8.5 包含 global 通用术语 + de_mirage/de_dust2/de_anubis 地图试点。词典用于 prompt 约束和 warning 报告，不会硬替换字幕文本。",
         }
         if args.json:
             print(json.dumps(payload, ensure_ascii=False, indent=2))
         else:
             print("CS2 POV Translator 术语词典")
             print("=" * 72)
-            print(f"地图: {args.map_name}")
+            print(f"地图: {args.map_name} | 范围: {getattr(args, 'scope', 'all')}")
             if not terms:
-                print("当前版本没有这张地图的词典。v0.6.0 仅试点 de_mirage。")
+                print("当前版本没有这张地图的地图词典；仍可使用 global 通用术语。试点地图：de_mirage / de_dust2 / de_anubis。")
                 return 0
-            print("说明：词典仅用于翻译提示和术语 warning，不做硬替换。")
-            print("来源：英文/中文/俄语社区资料交叉整理，完整说明见 docs/GLOSSARY_MIRAGE_PILOT.zh.md。")
+            print("说明：词典仅用于翻译提示和术语 warning，不做硬替换。v0.8.5 包含 global 通用术语 pilot + Mirage/Dust2/Anubis 地图试点。")
+            print("来源：英文/中文/俄语社区资料交叉整理，完整说明见 docs/GLOSSARY_MIRAGE_PILOT.zh.md、docs/GLOSSARY_DUST2_PILOT.zh.md 与 docs/GLOSSARY_ANUBIS_PILOT.zh.md。")
             for item in terms:
                 ru = ", ".join(item.get("ru") or []) or "-"
                 en = ", ".join(item.get("en") or [])
@@ -404,8 +632,8 @@ def run_glossary(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
             if not used:
                 print("未找到 artifacts/glossary_used.json。请先运行 translate/retranslate。")
                 return 0
-            print(f"地图: {used.get('map_name')} | enabled={used.get('enabled')} | supported={used.get('supported')}")
-            print(f"词条数: {used.get('term_count')} | 命中词条数: {used.get('matched_term_count')}")
+            print(f"地图: {used.get('map_name')} | enabled={used.get('enabled')} | global_supported={used.get('global_supported')} | map_supported={used.get('map_supported')}")
+            print(f"词条数: {used.get('term_count')}（global={used.get('global_term_count')} map={used.get('map_term_count')}） | 命中词条数: {used.get('matched_term_count')}（global={used.get('matched_global_term_count')} map={used.get('matched_map_term_count')}）")
             warn_count = (warnings or {}).get("warning_count", 0)
             print(f"术语 warning: {warn_count}")
             if warn_count:
