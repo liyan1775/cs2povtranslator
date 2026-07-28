@@ -18,7 +18,7 @@ from cs2pov.storage.config_store import (
 )
 from cs2pov.storage.jsonl import read_json
 
-TOTAL_STEPS = 8
+TOTAL_STEPS = 9
 
 
 class WizardAbort(Exception):
@@ -122,8 +122,20 @@ def run_wizard(args: argparse.Namespace) -> int:
     engine.manifest.config = config
     engine.run(demo_path, from_stage=StageName.PARSE_ROUNDS)
 
-    step(8, "完成", "字幕已经导出。最常用的成片字幕在 final/ 目录。")
-    print_success_summary(engine.store.job_dir)
+    step(8, "生成 Comms Feed 校对文件", "v0.9.8 起，通讯流是默认主输出。这里会自动生成按回合可人工校对的 YAML/HTML/Markdown；视频 overlay 仍建议先人工检查 YAML 后再渲染。")
+    from cs2pov.cli.job_ops import _update_manifest_config_and_artifacts
+    from cs2pov.services.comms_service import CommsService
+
+    comms_outputs = CommsService().build_review(
+        engine.store,
+        selected_team_number=config.selected_team_number,
+        selected_pov_steamid=config.selected_pov_steamid,
+        export_scope=config.export_scope,
+    )
+    _update_manifest_config_and_artifacts(engine.store, config, comms_outputs)
+
+    step(9, "完成", "默认主产物已生成：Comms Feed 校对文件 + 可选 SRT 字幕。下一步请先校对 YAML，再渲染剪映 overlay。")
+    print_success_summary(engine.store.job_dir, comms_outputs)
     return 0
 
 
@@ -150,19 +162,20 @@ def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
 
 def print_banner() -> None:
     print("=" * 72)
-    print("CS2 POV Translator v0.8.8")
-    print("强引导 CLI：新增玩家识别、K-D-A 辅助确认和字幕显示名映射")
+    print("CS2 POV Translator v0.9.8")
+    print("强引导 CLI：Comms Overlay 通讯流主工作流 + 可选 SRT 字幕")
     print("=" * 72)
-    print("这个向导会带你完成 8 步：")
+    print("这个向导会带你完成 9 步：")
     print("1. 选择 demo 文件")
     print("2. 确认地图")
-    print("3. 选择 POV 主角")
+    print("3. 选择 POV 主角/队伍（默认只处理 POV 所在队伍 5 人）")
     print("4. 选择 Whisper 转录配置")
     print("5. 选择快速测试或完整处理")
     print("6. 配置翻译")
     print("7. 确认并运行")
-    print("8. 查看输出和反馈包指引")
-    print("\n提示：第一次建议先跑前 3 个回合。de_mirage / de_dust2 / de_anubis 会启用地图试点词典；其他地图仅使用 global 通用术语。生成后可回到 .bat 主菜单，用 inspect/export/retranslate/resume/glossary 继续处理。")
+    print("8. 自动生成 Comms Feed 校对文件")
+    print("9. 查看下一步：校对 YAML 并渲染剪映 overlay")
+    print("\n提示：第一次建议先跑前 3 个回合。de_mirage / de_dust2 / de_anubis 会启用地图试点词典；其他地图仅使用 global 通用术语。生成后默认会得到 review/comms_rounds/round_XX.yaml；先人工校对，再回到 .bat 主菜单选择 2 渲染 Comms Overlay 渲染素材。")
 
 
 def step(index: int, title: str, body: str) -> None:
@@ -411,22 +424,34 @@ def print_run_summary(config: PipelineConfig, demo_path: Path, job_dir: Path) ->
     else:
         translation = f"真实翻译：{config.llm_model}"
     print(f"translation:{translation}")
-    print("\n输出说明：")
-    print(f"- final/*.bilingual.srt：最常用，导入剪辑软件（双语格式：{config.subtitle_bilingual_format}）")
-    print("- review/*.original.srt：只含原文，方便检查 Whisper")
-    print("- review/*.zh.srt：只含中文翻译")
-    print("- debug/*.voice_activity.srt：语音活动时间轴")
+    print("\n默认输出说明：")
+    print("- review/comms_rounds/round_XX.yaml：v0.9.8 主产物，人工校对通讯流后渲染剪映 overlay")
+    print("- final/comms_feed/comms_feed.html/md/json：按回合查看双语通讯流")
+    print(f"- final/*.bilingual.srt：可选字幕资产，导入剪辑软件（双语格式：{config.subtitle_bilingual_format}）")
+    print("- debug/*.voice_activity.srt：语音活动时间轴，排查用")
 
 
-def print_success_summary(job_dir: Path) -> None:
+def print_success_summary(job_dir: Path, comms_outputs: dict[str, str] | None = None) -> None:
     final_dir = job_dir / "final"
     review_dir = job_dir / "review"
     print(f"Job 目录：{job_dir}")
-    print(f"成片字幕：{final_dir}")
+    print("\n默认主产物：Comms Feed / 通讯流")
+    if comms_outputs:
+        for key in ["comms_review_dir", "comms_feed_html", "comms_feed_md", "comms_feed_json"]:
+            value = comms_outputs.get(key)
+            if value:
+                print(f"  - {key}: {value}")
+    else:
+        print(f"  - 校对目录：{review_dir / 'comms_rounds'}")
+        print(f"  - 静态报告：{final_dir / 'comms_feed'}")
+    print("\n下一步建议：")
+    print(f"  1. 打开 {review_dir / 'comms_rounds'}，人工校对 round_XX.yaml")
+    print(f"  2. 回到 .bat 主菜单选择 2 渲染 Comms Overlay，或运行：")
+    print(f"     cs2pov comms render \"{job_dir}\" --rounds 1-3 --formats preview,green")
+    print("\n可选 SRT 字幕资产：")
     if final_dir.exists():
         for path in sorted(final_dir.glob("*.srt")):
             print(f"  - {path}")
-    print(f"校对文件：{review_dir}")
     print("\n如果需要反馈给开发者，可运行：")
     print(f"  cs2pov feedback \"{job_dir}\"")
     print("\n如果磁盘空间变大，可预览清理：")

@@ -47,6 +47,15 @@ def inspect_job(path: Path) -> dict[str, Any]:
     subtitle_files = sorted(
         [p for folder in [store.final_dir, store.review_dir, store.debug_dir] if folder.exists() for p in folder.glob("*.srt")]
     )
+    comms_files = sorted(
+        [
+            p
+            for folder in [store.final_dir / "comms_feed", store.review_dir / "comms_rounds", store.final_dir / "comms_overlay"]
+            if folder.exists()
+            for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in {".json", ".md", ".html", ".yaml", ".yml", ".png", ".mp4", ".mov"}
+        ]
+    )
     stages = manifest.get("stages", {}) if isinstance(manifest, dict) else {}
     failed_stages = [name for name, status in stages.items() if status == StageStatus.FAILED.value]
     pending_stages = [name for name, status in stages.items() if status == StageStatus.PENDING.value]
@@ -76,8 +85,9 @@ def inspect_job(path: Path) -> dict[str, Any]:
         "glossary_used": glossary_used if isinstance(glossary_used, dict) else {},
         "glossary_warnings": glossary_warnings if isinstance(glossary_warnings, dict) else {},
         "subtitle_files": [p.relative_to(job_dir).as_posix() for p in subtitle_files],
+        "comms_files": [p.relative_to(job_dir).as_posix() for p in comms_files],
         "has_secret_leak": has_secret_leak,
-        "recommended_next_commands": _recommended_next_commands(job_dir, failed_stages, pending_stages, len(translations), len(transcripts)),
+        "recommended_next_commands": _recommended_next_commands(job_dir, failed_stages, pending_stages, len(translations), len(transcripts), [p.relative_to(job_dir).as_posix() for p in comms_files]),
     }
 
 
@@ -134,6 +144,15 @@ def print_job_inspection(summary: dict[str, Any]) -> None:
             print(f"  - {f}")
     else:
         print("  [尚未导出 SRT]")
+    comms_files = summary.get("comms_files") or []
+    print("\nComms Overlay / 通讯流文件：")
+    if comms_files:
+        for f in comms_files[:16]:
+            print(f"  - {f}")
+        if len(comms_files) > 16:
+            print(f"  ... 还有 {len(comms_files) - 16} 个文件")
+    else:
+        print("  [尚未生成 Comms Feed；可运行 cs2pov comms build-review]")
     print("\n建议下一步：")
     for cmd in summary.get("recommended_next_commands", []):
         print(f"  {cmd}")
@@ -341,7 +360,7 @@ def _contains_secret(value: Any) -> bool:
     return "sk-" in text or "api_key\": \"" in text and REDACTED_SECRET not in text
 
 
-def _recommended_next_commands(job_dir: Path, failed: list[str], pending: list[str], translations: int, transcripts: int) -> list[str]:
+def _recommended_next_commands(job_dir: Path, failed: list[str], pending: list[str], translations: int, transcripts: int, comms_files: list[str] | None = None) -> list[str]:
     q = f'"{job_dir}"'
     if failed:
         return [f"cs2pov resume {q} --from-stage {failed[0]}", f"cs2pov feedback {q}"]
@@ -349,4 +368,11 @@ def _recommended_next_commands(job_dir: Path, failed: list[str], pending: list[s
         return [f"cs2pov retranslate {q}", f"cs2pov export {q} --format all"]
     if pending:
         return [f"cs2pov resume {q} --from-stage {pending[0]}"]
-    return [f"cs2pov export {q} --format all", f"cs2pov feedback {q}"]
+    comms_files = comms_files or []
+    has_comms_review = any(path.startswith("review/comms_rounds/") and path.endswith((".yaml", ".yml")) for path in comms_files)
+    has_comms_overlay = any(path.startswith("final/comms_overlay/") and path.endswith((".mp4", ".mov", ".png")) for path in comms_files)
+    if translations > 0 and not has_comms_review:
+        return [f"cs2pov comms build-review {q} --rounds 1-3", f"cs2pov feedback {q}"]
+    if has_comms_review and not has_comms_overlay:
+        return [f"cs2pov comms render {q} --rounds 1-3 --formats preview,green", f"cs2pov feedback {q}"]
+    return [f"cs2pov comms render {q} --rounds 1-3 --formats preview,green", f"cs2pov export {q} --format all", f"cs2pov feedback {q}"]

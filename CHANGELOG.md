@@ -1,5 +1,66 @@
 # Changelog
 
+## v0.9.8 - Comms Overlay 默认无时间显示
+
+- 回撤 v0.9.7 的固定 `freeze_seconds=5` 默认方案：不同平台、不同回合的准备期不稳定，默认展示倒计时会降低可信度。
+- Comms Overlay 默认只显示 `Round + 选手 + 中文 + 原文`，不再显示 `1:55` / `准备 0:03`。
+- `show_at_seconds` 继续作为内部播放时序保留，人工校对后仍可精确控制消息出现顺序。
+- 新增 `time_display` 选项：`none` 默认、`elapsed` 显示 `+0:07`、`round_clock` 作为实验倒计时。
+- `round_XX.yaml` 新增 `time_display: none`，README/测试计划说明为何正式成片不建议显示不可靠倒计时。
+
+## v0.9.5 - Windows .bat 编码修复版
+
+- 修复中文 Windows 双击 `.bat` 时，UTF-8 中文 `echo` / 注释被 CMD 按 GBK 解析导致乱码命令的问题。
+- `Start_CS2_POV_Translator.bat`、`Install_CS2_POV_Translator.bat`、`START_HERE_DOUBLE_CLICK.bat` 改为 ASCII-only；中文提示统一由 Python launcher / 文档输出。
+- 新增 `README_FIRST_READ_ME_FIRST.txt`，避免中文文件名在部分 zip/终端环境下显示异常。
+- 新增 release-entry 测试：强制校验 `.bat` 文件可用 ASCII 解码且无 UTF-8 BOM。
+- 不改变 Comms Overlay 主链路、渲染参数、demo/ASR/翻译流程。
+
+## v0.9.4 - Windows release-entry pytest 编码修复版
+
+- 修复 v0.9.3 在 Windows/GBK 环境下 release-entry pytest 捕获中文启动自检输出时可能失败的问题。
+- 统一启动入口、launcher、wizard、README、版本自检到 0.9.4。
+- 不改变 Comms Overlay 主链路与渲染参数。
+
+## v0.9.3 - 发布入口可信版与 clean-room 测试要求
+
+- 发布包顶层目录改为 `cs2pov_arch_project_v0_9_3`，避免用户把新版解压进旧 `cs2pov_arch_project` 后继续双击外层旧 `.bat`。
+- 新增 `README_FIRST_先看我.txt` 与 `START_HERE_DOUBLE_CLICK.bat`，让用户一眼看到正确入口。
+- `Start_CS2_POV_Translator.bat` 启动时显示当前运行目录，并在进入菜单前运行 `scripts/launch_sanity_check.py`。
+- 启动自检会核查 `cs2pov.__version__ == 0.9.3`，并确认 Python 加载的是当前文件夹 `src/` 下的源码；若被旧 `.venv` / 旧安装污染，会直接阻止继续运行。
+- 启动器和安装器会检测 `cs2pov_arch_project/cs2pov_arch_project` 这类嵌套目录风险，并提示用户改用 clean-room 解压。
+- `Install_CS2_POV_Translator.bat` 增加安装目录提示、clean-room 提醒、安装后启动自检。
+- 测试计划升级：要求本地 agent 先清洁测试目录，记录真实 `.bat` 绝对路径、启动菜单前 60 行、目录 tree，不能只用 Job 反馈包证明用户入口通过。
+
+## v0.9.2 - 极简 .bat 主菜单与当前源码强制加载
+
+- 重构 `.bat` 主入口体验：启动页只保留 Comms Overlay 核心流程，不再显示旧字幕工具时代的长说明。
+- 重构 launcher 主菜单：从 15 个并列入口收敛为 6 个核心入口：新建工程、渲染 Overlay、查看工程、打包反馈、启动前检查、设置与高级工具。
+- 将 SRT 导出、重翻译、恢复、词典、玩家别名、模型管理、doctor 等功能收进「设置与高级工具」，避免新用户一打开就被专家命令淹没。
+- `Start_CS2_POV_Translator.bat` 与安装脚本现在会显式设置 `PYTHONPATH=%CD%\src;%PYTHONPATH%`，优先加载当前文件夹源码，降低旧 `.venv` / 旧 editable install 导致显示 v0.8.x 过时菜单的概率。
+- README、向导提示和测试更新为 v0.9.2 的「核心菜单」工作流。
+
+## v0.9.1 - Comms Overlay 观感与 .bat 工作流修复
+
+- Comms Overlay 正式成为默认主功能：`.bat` 与向导文案改为「新建 POV 通讯流工程」，新建工程结束后自动生成 `review/comms_rounds/round_XX.yaml` 与 `final/comms_feed/`。
+- 默认 overlay 改为右侧贴边的浮动消息卡片：面板更窄、字体略小、同屏默认最多 6 条，不再绘制 v0.9.0 的大黑色外层面板。
+- 修复最底部语句卡片可能溢出外层通讯框的问题：渲染前先测量卡片高度，空间不足时优先保留最新消息并丢弃更旧消息。
+- 新增轻量淡入过渡：新消息不再完全硬切出现。
+- `cs2pov comms render` 新增 `--fade-seconds` 与 `--classic-panel`；需要回到 v0.9.0 大面板时可显式开启 classic panel。
+- `.bat` 菜单新增 Comms Overlay 入口：普通用户可在菜单中生成 YAML、选择目标队伍 2/3、渲染 preview/green/alpha，不再必须手敲专家命令。
+- `comms build-review` 完成后显示实际导出范围，帮助确认是否只导出了 POV 所需的一队 5 人。
+
+## v0.9.0 - Comms Overlay MVP
+
+- 新增 `cs2pov comms build-review`：从已有 Job 的 `translated_segments.jsonl` 生成按回合组织的 `final/comms_feed/comms_feed.json`、`comms_feed.md`、`comms_feed.html`。
+- 新增 `review/comms_rounds/round_XX.yaml`：每回合一个可人工校对中间产物，可修改 `show_at`、`speaker`、`zh`、`source`、`enabled`，再只重渲染该回合。
+- 新增 `cs2pov comms render`：从校对后的 YAML 渲染右侧中部浮动通讯流素材，支持 `preview`、`green`、`alpha`、`png` 格式。
+- 展示形态为 POV 全屏不缩小，通讯流作为右侧中部半透明双语信息层；中文为主视觉，英文作为弱化辅助核对。
+- 支持 `--rounds 1-3` / `1,3,5-7`，符合原有只跑部分回合、只测试部分回合的工作流。
+- 反馈包会收集 Comms Feed 的 JSON/HTML/Markdown/YAML 文本产物，但不会打包较大的 overlay 视频。
+- 输出解释与 inspect-job 现在会展示 Comms Feed / Comms Overlay 产物。
+- 顺手修正 v0.8.8 发布卫生问题：版本号更新、launcher 中 editing 预设不再误写“默认合并重叠”。
+
 ## v0.8.8 - 剪映观感优先的 max-2 字幕栈策略
 
 - 新增字幕重叠策略 `stack`：同一时刻最多显示 2 条字幕；当第 3 条字幕开始时，后来者直接替代最早显示的字幕，不把新字幕延后。

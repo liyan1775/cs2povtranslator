@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cs2-pov-translator"
-version = "0.8.8"
-description = "Local-first guided CLI toolkit for CS2 POV bilingual subtitles, job artifacts, model management, transcription profiles, global/Dust2/Anubis glossary pilots, player alias mapping, K-D-A identity hints, and bilingual subtitle export."
+version = "0.9.8"
+description = "Local-first guided CLI toolkit for CS2 POV bilingual subtitles and Comms Overlay assets: job artifacts, model management, glossary pilots, player alias mapping, K-D-A identity hints, SRT export, editable per-round comms review files, and CapCut/Jianying overlay rendering."
 readme = "README.zh.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -15,8 +15,9 @@ dependencies = []
 [project.optional-dependencies]
 cs2 = ["demoparser2>=0.41", "zstandard>=0.23", "pyogg>=0.6.1a1"]
 asr = ["faster-whisper>=1.1"]
+comms = ["Pillow>=10.0", "PyYAML>=6.0"]
 dev = ["pytest>=8.0"]
-all = ["demoparser2>=0.41", "zstandard>=0.23", "pyogg>=0.6.1a1", "faster-whisper>=1.1", "pytest>=8.0"]
+all = ["demoparser2>=0.41", "zstandard>=0.23", "pyogg>=0.6.1a1", "faster-whisper>=1.1", "Pillow>=10.0", "PyYAML>=6.0", "pytest>=8.0"]
 
 [project.scripts]
 cs2pov = "cs2pov.cli.commands:main"

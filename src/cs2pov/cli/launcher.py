@@ -20,7 +20,7 @@ _CANCEL_TOKENS = {"0", "q", "quit", "exit", "back", "b", "返回"}
 
 def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
-    parser = argparse.ArgumentParser(description="CS2 POV Translator 菜单式启动器")
+    parser = argparse.ArgumentParser(description="CS2 POV Translator 极简菜单式启动器")
     parser.add_argument("--once", action="store_true", help="显示一次菜单后退出，主要用于测试")
     args = parser.parse_args(argv)
     print_banner()
@@ -38,36 +38,18 @@ def main(argv: list[str] | None = None) -> int:
                 from cs2pov.cli.wizard import main as wizard_main
                 wizard_main([])
             elif choice == "2":
-                print_setup_report(build_setup_report(Path.cwd()))
+                run_comms_overlay_menu()
             elif choice == "3":
-                job = ask_job_path()
-                print_job_inspection(inspect_job(job))
+                run_project_menu()
             elif choice == "4":
                 job = ask_job_path()
-                print_output_explanation(build_output_explanation(job))
-            elif choice == "5":
-                run_export_menu()
-            elif choice == "6":
-                run_retranslate_menu()
-            elif choice == "7":
-                run_resume_menu()
-            elif choice == "8":
-                job = ask_job_path()
                 run_feedback(job)
-            elif choice == "9":
-                run_doctor()
-            elif choice == "10":
-                run_glossary_menu()
-            elif choice == "11":
-                run_players_menu()
-            elif choice == "12":
-                run_models_menu()
-            elif choice == "13":
-                run_install_help_page()
-            elif choice == "14":
-                run_help_page()
+            elif choice == "5":
+                print_setup_report(build_setup_report(Path.cwd()))
+            elif choice == "6":
+                run_tools_menu()
             else:
-                print("没有这个选项。请输入 0-14。")
+                print("没有这个选项。请输入 0-6。")
         except ReturnToMainMenu:
             print("已返回主菜单。")
             if args.once:
@@ -80,40 +62,32 @@ def main(argv: list[str] | None = None) -> int:
             continue
         except Exception as exc:
             print(f"\n操作失败：{type(exc).__name__}: {exc}")
-            print("建议：先选择 3 查看 Job 状态，或选择 8 打包反馈包发给开发者。")
+            print("建议：先选择 3 查看工程状态，或选择 4 打包反馈包发给开发者。")
         if args.once:
             return 0
         input("\n按回车返回主菜单...")
 
 
 def print_banner() -> None:
-    print("=" * 72)
-    print("CS2 POV Translator v0.8.8")
-    print("玩家识别与别名映射：K-D-A 辅助确认，字幕显示名可改为 donk 等职业 ID")
-    print("=" * 72)
-    print("新用户建议：先选 2 启动前检查，再选 1 新建字幕工程。")
-    print("已有 output 目录：可用 3/4/5/6/7 继续查看、解释、导出、重翻译和恢复；10 可查看词典；11 设置玩家字幕显示名；12 管理 Whisper 模型。")
-    print("在子菜单中输入 0、q、back 或 返回，可随时回到主菜单。")
+    print("=" * 64)
+    print("CS2 POV Translator v0.9.8")
+    print("主功能：POV 通讯流 Overlay（按回合校对，再放进剪映）")
+    print("=" * 64)
+    print("推荐流程：1 新建工程 → 校对 YAML → 2 渲染 overlay → 剪映叠加。")
+    print("v0.9.8 默认不显示不可靠倒计时，只显示 Round + 选手 + 双语通讯流。")
+    print("遇到问题：先选 3 看状态；要发给开发者就选 4 打包反馈包。")
 
 
 def print_menu() -> None:
-    print("\n" + "-" * 72)
-    print("主菜单")
-    print("-" * 72)
-    print("1. 新建字幕工程（完整向导，适合第一次处理 demo）")
-    print("2. 启动前检查 setup-check（普通用户版：告诉你现在能不能开始）")
-    print("3. 查看已有工程状态 inspect-job（看阶段、产物、推荐下一步）")
-    print("4. 解释输出文件 explain-output（告诉你 final/review/debug/artifacts 分别干什么）")
-    print("5. 重新导出字幕 export（剪辑/校对/调试预设，不重新转录/翻译）")
-    print("6. 重新翻译 retranslate（不重新转录，只重跑 LLM 和导出）")
-    print("7. 从某阶段恢复 resume（失败后从 translate/export_subtitles 等阶段继续）")
-    print("8. 打包反馈包 feedback（排除大音频和原始 demo）")
-    print("9. 技术环境诊断 doctor（更偏开发者的依赖检查）")
-    print("10. 词典试点 glossary（查看 global 通用术语 + Mirage/Dust2/Anubis 报点 / 检查术语报告）")
-    print("11. 玩家识别 players（查看 K-D-A/语音时长，设置 Ebule -> donk 这类别名）")
-    print("12. Whisper 模型管理 models（缓存目录、已下载模型、质量档位、模型测试）")
-    print("13. 查看安装/首次使用教程")
-    print("14. 查看命令帮助和常见场景")
+    print("\n" + "-" * 64)
+    print("核心菜单")
+    print("-" * 64)
+    print("1. 新建 POV 通讯流工程（demo → 可校对 YAML + Comms Feed）")
+    print("2. 渲染 Comms Overlay（YAML → 每回合剪映素材）")
+    print("3. 查看工程 / 输出说明")
+    print("4. 打包反馈包（发给开发者排查）")
+    print("5. 启动前检查")
+    print("6. 设置与高级工具（模型、玩家别名、词典、SRT、恢复等）")
     print("0. 退出")
 
 
@@ -136,13 +110,67 @@ def ask_job_path() -> Path:
     return Path(value or "output")
 
 
+
+def run_project_menu() -> None:
+    print("\n查看工程 / 输出说明")
+    print("=" * 64)
+    print("1. 查看工程状态 inspect-job")
+    print("2. 解释输出文件 explain-output")
+    print("0. 返回主菜单")
+    choice = _read_choice("请选择 [1]\n> ", default="1")
+    job = ask_job_path()
+    if choice == "1":
+        print_job_inspection(inspect_job(job))
+        return
+    if choice == "2":
+        print_output_explanation(build_output_explanation(job))
+        return
+    print("没有这个选项。")
+
+
+def run_tools_menu() -> None:
+    print("\n设置与高级工具")
+    print("=" * 64)
+    print("常用工具被收进这里，避免主菜单吓到新用户。")
+    print("1. Whisper 模型管理")
+    print("2. 玩家识别 / 设置显示名")
+    print("3. 地图词典试点")
+    print("4. 重新导出 SRT 字幕（可选资产）")
+    print("5. 重新翻译")
+    print("6. 从失败阶段恢复")
+    print("7. 技术环境诊断 doctor")
+    print("8. 安装 / 首次使用教程")
+    print("9. 命令帮助和常见场景")
+    print("0. 返回主菜单")
+    choice = _read_choice("请选择 [1]\n> ", default="1")
+    if choice == "1":
+        run_models_menu()
+    elif choice == "2":
+        run_players_menu()
+    elif choice == "3":
+        run_glossary_menu()
+    elif choice == "4":
+        run_export_menu()
+    elif choice == "5":
+        run_retranslate_menu()
+    elif choice == "6":
+        run_resume_menu()
+    elif choice == "7":
+        run_doctor()
+    elif choice == "8":
+        run_install_help_page()
+    elif choice == "9":
+        run_help_page()
+    else:
+        print("没有这个选项。")
+
 def run_export_menu() -> None:
     print("\n重新导出不会重新转录，也不会重新调用 LLM。")
-    print("v0.8.8 推荐先选 preset editing：剪辑双语优先，并默认同屏最多2条，第三条替代最早条，适配剪映。")
+    print("v0.9.8 推荐先选 preset editing：剪辑双语优先，并默认 stack（同屏最多2条，第三条替代最早条），适配剪映。")
     print("输入 0 / q / back 可返回主菜单。")
     job = ask_job_path()
     print("请选择导出方式：")
-    print("1. preset editing  推荐：双语 + 紧凑双语 + 中文兜底，默认合并重叠，适配剪映")
+    print("1. preset editing  推荐：双语 + 紧凑双语 + 中文兜底，默认 stack 同屏最多2条，适配剪映")
     print("2. preset review   校对：双语 + 原文 + debug，保留更多真实时间线")
     print("3. preset debug    排查：debug + voice activity + 原文")
     print("4. format all      全部格式")
@@ -324,6 +352,108 @@ def run_models_menu() -> None:
     print("没有这个选项。")
 
 
+def run_comms_overlay_menu() -> None:
+    print("\nComms Overlay 通讯流素材")
+    print("=" * 72)
+    print("用途：把已有翻译结果做成每回合一个 overlay 素材，叠到 lim/POV 视频上。")
+    print("推荐流程：先生成 YAML → 人工改翻译/禁用废话 → 再渲染 preview/green。")
+    print("重要：POV 通常只需要某一队 5 个人。若本地 agent 没按 .bat 向导选择队伍，请在这里手动输入 team 2 或 3。")
+    print("输入 0 / q / back 可返回主菜单。")
+    job = ask_job_path()
+    print("请选择操作：")
+    print("1. 生成可人工校对的 YAML/HTML/Markdown（build-review）")
+    print("2. 从已校对 YAML 渲染 overlay 视频（render）")
+    print("3. 先 build-review 再 render（适合快速试 1-3 回合）")
+    choice = _read_choice("请选择 [1]\n> ", default="1")
+    print("只处理哪些回合？例如 1、1-3、1,3,5-7。直接回车 = 全部已有回合。")
+    rounds_raw = _read_choice("> ", default="").strip()
+    rounds = _parse_rounds_for_launcher(rounds_raw)
+
+    do_build = choice in {"1", "3"}
+    do_render = choice in {"2", "3"}
+    if do_build:
+        _launcher_build_comms_review(job, rounds)
+    if do_render:
+        _launcher_render_comms(job, rounds)
+
+
+def _parse_rounds_for_launcher(value: str) -> set[int] | None:
+    if not value:
+        return None
+    out: set[int] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            start, end = int(a), int(b)
+            if end < start:
+                start, end = end, start
+            out.update(range(start, end + 1))
+        else:
+            out.add(int(part))
+    return out or None
+
+
+def _launcher_build_comms_review(job: Path, rounds: set[int] | None) -> None:
+    from cs2pov.cli.job_ops import _load_job_config_with_runtime_secrets, _require_job, _update_manifest_config_and_artifacts
+    from cs2pov.services.comms_service import CommsService
+    from cs2pov.storage.artifact_store import ArtifactStore
+
+    job_dir = _require_job(job)
+    store = ArtifactStore(job_dir)
+    cfg = _load_job_config_with_runtime_secrets(job_dir)
+    print("\n当前 Job 保存的选择：")
+    print(f"  export_scope={cfg.export_scope}")
+    print(f"  selected_team_number={cfg.selected_team_number}")
+    print(f"  selected_pov_steamid={cfg.selected_pov_steamid}")
+    print("POV 只需要某一队时，建议 export_scope=pov_team 且 selected_team_number 为 2 或 3。")
+    print("要覆盖队伍编号吗？输入 2/3；直接回车 = 使用当前 Job 配置。")
+    team_raw = _read_choice("> ", default="").strip()
+    if team_raw:
+        cfg.selected_team_number = int(team_raw)
+        cfg.export_scope = "pov_team"
+    print("导出范围：1=当前队伍 pov_team（推荐），2=仅 POV 玩家 pov_player，3=全部 all。")
+    scope_choice = _read_choice("请选择 [1]\n> ", default="1")
+    cfg.export_scope = {"1": "pov_team", "2": "pov_player", "3": "all"}.get(scope_choice, cfg.export_scope or "pov_team")
+    outputs = CommsService().build_review(
+        store,
+        selected_team_number=cfg.selected_team_number,
+        selected_pov_steamid=cfg.selected_pov_steamid,
+        export_scope=cfg.export_scope,
+        rounds=rounds,
+    )
+    _update_manifest_config_and_artifacts(store, cfg, outputs)
+    print("\nComms Feed 校对产物已生成：")
+    print(f"  导出范围: export_scope={cfg.export_scope}, selected_team_number={cfg.selected_team_number}, selected_pov_steamid={cfg.selected_pov_steamid}")
+    for k, v in outputs.items():
+        print(f"  {k}: {v}")
+    print("下一步：打开 review/comms_rounds/round_XX.yaml，人工改 zh/source/speaker/enabled，然后回到本菜单选择 render。")
+
+
+def _launcher_render_comms(job: Path, rounds: set[int] | None) -> None:
+    from cs2pov.cli.job_ops import _load_job_config_with_runtime_secrets, _require_job, _update_manifest_config_and_artifacts
+    from cs2pov.services.comms_service import CommsRenderOptions, CommsService
+    from cs2pov.storage.artifact_store import ArtifactStore
+
+    job_dir = _require_job(job)
+    store = ArtifactStore(job_dir)
+    cfg = _load_job_config_with_runtime_secrets(job_dir)
+    print("\n输出格式：")
+    print("1. preview,green（推荐先测：预览 + 剪映绿幕兜底）")
+    print("2. png（只出单帧，最快检查排版）")
+    print("3. preview,green,alpha（额外尝试透明 mov，文件较大）")
+    fmt_choice = _read_choice("请选择 [1]\n> ", default="1")
+    formats = {"1": "preview,green", "2": "png", "3": "preview,green,alpha"}.get(fmt_choice, "preview,green")
+    outputs = CommsService().render(store, rounds=rounds, formats=formats.split(","), options=CommsRenderOptions())
+    _update_manifest_config_and_artifacts(store, cfg, outputs)
+    print("\nComms Overlay 已渲染：")
+    for k, v in outputs.items():
+        print(f"  {k}: {v}")
+    print("剪映建议：v0.9.8 默认右侧贴边、无大面板、无倒计时；preview 检查排版，green 用色度抠图，alpha.mov 只做兼容性测试。")
+
+
 def run_install_help_page() -> None:
     print("\n安装 / 首次使用教程")
     print("=" * 72)
@@ -339,27 +469,25 @@ def run_install_help_page() -> None:
     print('  pip install -e ".[all]"')
     print("  cs2pov setup-check")
     print("\n说明：首次 Whisper 模型下载可能需要时间，tiny/base/small 越大越慢。")
-    print("处理 demo 前，建议先在主菜单选择 2 启动前检查。")
+    print("处理 demo 前，建议先在主菜单选择 5 启动前检查。")
 
 
 def run_help_page() -> None:
     print("\n常见场景：")
-    print("1. 第一次处理 demo：选择主菜单 1，跟着 8 步向导走。")
-    print("2. 不确定环境是否准备好：选择主菜单 2。")
-    print("3. 不知道工程跑到哪：选择主菜单 3。")
-    print("4. 不知道哪个文件该导入剪辑软件：选择主菜单 4。")
-    print("5. 只想换剪辑/校对/调试字幕：选择主菜单 5，不会重新转录。")
-    print("6. LLM 某回合失败：选择主菜单 6，不会重新转录。")
-    print("7. 程序中途失败：选择主菜单 7，从失败阶段继续。")
-    print("8. 要发给开发者分析：选择主菜单 8。")
-    print("9. 想查看 Mirage/Dust2/Anubis 术语词典：选择主菜单 10。")
-    print("10. 想把 Ebule 这类 demo 昵称显示成 donk：选择主菜单 11。")
-    print("11. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
+    print("1. 第一次处理 demo：主菜单 1，新建 POV 通讯流工程。")
+    print("2. 工程跑完后想生成剪映素材：主菜单 2，渲染 Comms Overlay。")
+    print("3. 不知道工程跑到哪、哪个文件该看：主菜单 3。")
+    print("4. 要发给开发者分析：主菜单 4，打包反馈包。")
+    print("5. 不确定环境是否准备好：主菜单 5，启动前检查。")
+    print("6. 模型、玩家别名、词典、SRT、重翻译、恢复：主菜单 6，设置与高级工具。")
+    print("7. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
     print("\n对应专家命令：")
     print("  cs2pov setup-check")
     print("  cs2pov inspect-job output")
     print("  cs2pov explain-output output")
-    print("  cs2pov export output --preset editing   # 推荐：剪辑双语优先")
+    print("  cs2pov comms build-review output --rounds 1-3  # 主功能：生成通讯流校对文件")
+    print("  cs2pov comms render output --rounds 1-3 --formats preview,green")
+    print("  cs2pov export output --preset editing   # 可选：重新导出 SRT 字幕")
     print("  cs2pov retranslate output")
     print("  cs2pov resume output --from-stage translate")
     print("  cs2pov feedback output")

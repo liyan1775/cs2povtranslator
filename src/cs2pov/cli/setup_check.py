@@ -107,10 +107,10 @@ def print_setup_report(report: dict[str, Any]) -> int:
     print("\n结论：")
     if report["ready_for_translation"]:
         print("  OK：可以直接处理真实 demo，并进行真实中文翻译。")
-        print("  推荐入口：双击 Start_CS2_POV_Translator.bat，选择 1 新建字幕工程。")
+        print("  推荐入口：双击 Start_CS2_POV_Translator.bat，选择 1 新建 POV 通讯流工程。")
         return 0
     if report["ready_for_dry_run"]:
-        print("  PARTIAL：基础依赖齐全，可以先 dry-run 生成演示字幕。")
+        print("  PARTIAL：基础依赖齐全，可以先 dry-run 生成演示通讯流与字幕。")
         print("  若要真实翻译，请运行：")
         print("    cs2pov config set --base-url https://api.deepseek.com --model deepseek-v4-flash --api-key sk-你的key")
         return 0

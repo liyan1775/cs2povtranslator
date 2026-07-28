@@ -210,6 +210,39 @@ def main(argv: list[str] | None = None) -> int:
     resume.add_argument("--to-stage", choices=[s.value for s in StageName], help="可选：跑到哪个阶段停止")
     resume.add_argument("--demo", help="如果 Job input/ 里没有 demo，可手动指定原始 .dem/.dem.zst")
 
+    comms = sub.add_parser("comms", help="v0.9.8：按回合生成可人工校对的双语通讯流和剪映 overlay 素材；默认画面不显示不可靠倒计时")
+    comms_sub = comms.add_subparsers(dest="comms_cmd")
+    comms_build = comms_sub.add_parser("build-review", help="从已有翻译结果生成 final/comms_feed 与 review/comms_rounds/round_XX.yaml")
+    comms_build.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    comms_build.add_argument("--team", type=int, dest="team_number", help="覆盖 Job 中保存的队伍编号")
+    comms_build.add_argument("--pov-steamid", help="覆盖 Job 中保存的 POV 玩家 SteamID")
+    comms_build.add_argument("--export-scope", choices=["pov_team", "pov_player", "all"], help="覆盖导出范围")
+    comms_build.add_argument("--rounds", help="只生成指定回合，例如 1、1-3、1,3,5-7")
+    comms_build.add_argument("--time-display", choices=["none", "elapsed", "round-clock"], default="none", help="overlay 是否显示时间：none 默认不显示；elapsed 显示 +00:07；round-clock 为实验倒计时")
+    comms_build.add_argument("--round-clock-start", default="1:55", help="仅 --time-display round-clock 实验使用：每回合默认起始回合时间，默认 1:55")
+    comms_build.add_argument("--round-clock-end", default="0:00", help="仅 --time-display round-clock 实验使用：每回合默认结束回合时间，默认 0:00")
+    comms_build.add_argument("--freeze-seconds", type=float, default=0.0, help="仅 --time-display round-clock 实验使用：准备/冻结时间，默认 0；不同平台/回合不稳定，不建议默认展示")
+    comms_build.add_argument("--json", action="store_true", help="输出 JSON，便于本地 agent 读取")
+
+    comms_render = comms_sub.add_parser("render", help="从 review/comms_rounds/round_XX.yaml 渲染每回合半透明/绿幕/预览 overlay")
+    comms_render.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    comms_render.add_argument("--rounds", help="只渲染指定回合，例如 1、1-3、1,3,5-7")
+    comms_render.add_argument("--formats", default="preview,green", help="输出格式：preview,green,alpha,png，可逗号分隔。默认 preview,green")
+    comms_render.add_argument("--width", type=int, default=1920)
+    comms_render.add_argument("--height", type=int, default=1080)
+    comms_render.add_argument("--panel-width", type=int, default=460)
+    comms_render.add_argument("--panel-height", type=int, default=720)
+    comms_render.add_argument("--right-margin", type=int, default=16)
+    comms_render.add_argument("--y", type=int, default=None, help="面板顶部 y 坐标；不填则右侧中部略偏上")
+    comms_render.add_argument("--max-messages", type=int, default=6, help="同屏最多显示最近几条通讯，默认 6")
+    comms_render.add_argument("--fps", type=int, default=15)
+    comms_render.add_argument("--fade-seconds", type=float, default=0.35, help="新消息淡入时间，默认 0.35 秒；设为 0 可关闭")
+    comms_render.add_argument("--time-display", choices=["none", "elapsed", "round-clock"], default="none", help="overlay 是否显示时间：none 默认不显示；elapsed 显示 +00:07；round-clock 为实验倒计时")
+    comms_render.add_argument("--freeze-seconds", type=float, default=0.0, help="仅 --time-display round-clock 且旧 YAML 缺少 freeze_seconds 时使用，默认 0")
+    comms_render.add_argument("--classic-panel", action="store_true", help="使用 v0.9.0 的大面板背景；默认 v0.9.8 为无大面板浮动卡片")
+    comms_render.add_argument("--font", dest="font_path", help=r"可选：指定字体文件，中文显示异常时可指定 C:\Windows\Fonts\msyh.ttc")
+    comms_render.add_argument("--json", action="store_true", help="输出 JSON，便于本地 agent 读取")
+
     args = parser.parse_args(argv)
     if args.cmd is None:
         from cs2pov.cli.launcher import main as launcher_main
@@ -301,6 +334,9 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         print("你可以运行 cs2pov inspect-job 查看最新状态，或 cs2pov export 重新导出字幕。")
         return 0
 
+    if args.cmd == "comms":
+        return run_comms(args, parser)
+
     if args.cmd == "run":
         return run_pipeline(args)
 
@@ -308,6 +344,97 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 2
 
 
+
+def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from cs2pov.cli.job_ops import _load_job_config_with_runtime_secrets, _require_job, _update_manifest_config_and_artifacts
+    from cs2pov.services.comms_service import CommsRenderOptions, CommsService
+    from cs2pov.storage.artifact_store import ArtifactStore
+
+    if args.comms_cmd is None:
+        parser.error("comms 需要 build-review 或 render")
+        return 2
+    job_dir = _require_job(Path(args.path))
+    store = ArtifactStore(job_dir)
+    cfg = _load_job_config_with_runtime_secrets(job_dir)
+    rounds = _parse_rounds_arg(getattr(args, "rounds", None))
+
+    if args.comms_cmd == "build-review":
+        if args.team_number is not None:
+            cfg.selected_team_number = args.team_number
+        if args.pov_steamid is not None:
+            cfg.selected_pov_steamid = args.pov_steamid
+        if args.export_scope is not None:
+            cfg.export_scope = args.export_scope
+        outputs = CommsService().build_review(
+            store,
+            selected_team_number=cfg.selected_team_number,
+            selected_pov_steamid=cfg.selected_pov_steamid,
+            export_scope=cfg.export_scope,
+            rounds=rounds,
+            round_clock_start=args.round_clock_start,
+            round_clock_end=args.round_clock_end,
+            freeze_seconds=args.freeze_seconds,
+            time_display=args.time_display.replace("-", "_"),
+        )
+        _update_manifest_config_and_artifacts(store, cfg, outputs)
+        if args.json:
+            print(json.dumps(outputs, ensure_ascii=False, indent=2))
+        else:
+            print("Comms Feed 校对产物已生成：")
+            print(f"  导出范围: export_scope={cfg.export_scope}, selected_team_number={cfg.selected_team_number}, selected_pov_steamid={cfg.selected_pov_steamid}")
+            for key, value in outputs.items():
+                print(f"  {key}: {value}")
+            print("\n下一步：先人工检查 review/comms_rounds/round_XX.yaml；改完后运行 cs2pov comms render。")
+        return 0
+
+    if args.comms_cmd == "render":
+        options = CommsRenderOptions(
+            width=args.width,
+            height=args.height,
+            panel_width=args.panel_width,
+            panel_height=args.panel_height,
+            right_margin=args.right_margin,
+            y=args.y,
+            max_messages=args.max_messages,
+            fps=args.fps,
+            fade_seconds=args.fade_seconds,
+            show_outer_panel=args.classic_panel,
+            font_path=args.font_path,
+            freeze_seconds=args.freeze_seconds,
+            time_display=args.time_display.replace("-", "_"),
+        )
+        outputs = CommsService().render(store, rounds=rounds, formats=args.formats.split(","), options=options)
+        _update_manifest_config_and_artifacts(store, cfg, outputs)
+        if args.json:
+            print(json.dumps(outputs, ensure_ascii=False, indent=2))
+        else:
+            print("Comms Overlay 已渲染：")
+            for key, value in outputs.items():
+                print(f"  {key}: {value}")
+            print("\n剪映建议：v0.9.8 默认不显示不可靠倒计时，只显示 Round + 选手 + 双语通讯流；优先测试 alpha.mov；如果透明通道不兼容，用 green.mp4 加色度抠图。")
+        return 0
+
+    parser.error("comms 需要 build-review 或 render")
+    return 2
+
+
+def _parse_rounds_arg(value: str | None) -> set[int] | None:
+    if not value:
+        return None
+    out: set[int] = set()
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start, end = int(start_s), int(end_s)
+            if end < start:
+                start, end = end, start
+            out.update(range(start, end + 1))
+        else:
+            out.add(int(part))
+    return out or None
 
 
 def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -814,7 +941,7 @@ def _feedback_files(job_dir: Path) -> list[Path]:
     for folder in ["final", "review", "debug"]:
         base = job_dir / folder
         if base.exists():
-            files.extend(sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in {".srt", ".txt", ".json", ".jsonl", ".log"}))
+            files.extend(sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in {".srt", ".txt", ".json", ".jsonl", ".log", ".yaml", ".yml", ".md", ".html"}))
     seen: set[Path] = set()
     unique: list[Path] = []
     for f in files:
