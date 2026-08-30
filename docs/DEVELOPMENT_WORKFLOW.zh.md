@@ -33,6 +33,9 @@
 - `.github/workflows/ci.yml`：在 Linux/Python 3.11–3.13 和 Windows/Python 3.12 上运行仓库安全扫描、测试、编译和启动自检。
 - `.github/workflows/release.yml`：只在推送 `v*.*.*` 标签时运行；核对标签与包版本、构建 wheel/sdist、生成 SHA-256 并同步 GitHub Release。
 - `scripts/check_repository_hygiene.py`：本地提交前和 CI 中共同使用的敏感文件/大型资产守卫。
+- `scripts/check_golden_baseline.py --replay`：校验金标准哈希并重放选定的 v0.9.8 行为测试。
+
+金标准清单位于 `tests/golden/manifest.json`。CI 只重放可入库的确定性合成夹具；真实 Demo 和旧媒体文件保持在本地，只登记匿名 ID、SHA-256、大小和聚合预期，禁止记录绝对路径、SteamID 或秘密。
 
 Playwright 浏览器 E2E 会在稳定本地 Web 主流程出现后加入同一 CI；阶段 0 不放置只会启动空页面的伪 E2E。
 

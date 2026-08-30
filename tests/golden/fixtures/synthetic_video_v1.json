@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "format": "yuv4mpeg2",
+  "width": 320,
+  "height": 180,
+  "fps_numerator": 10,
+  "fps_denominator": 1,
+  "duration_frames": 20,
+  "frames": [
+    {
+      "start_frame": 0,
+      "end_frame": 9,
+      "rgb": [0, 177, 64]
+    },
+    {
+      "start_frame": 10,
+      "end_frame": 19,
+      "rgb": [0, 96, 0]
+    }
+  ],
+  "subtitle_safe_area": {
+    "left": 24,
+    "right": 296,
+    "top": 112,
+    "bottom": 168
+  }
+}

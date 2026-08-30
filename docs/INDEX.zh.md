@@ -13,6 +13,7 @@
 
 - `ARCHITECTURE.zh.md`：架构说明
 - `baseline/BASELINE_AUDIT.zh.md`：v0.9.8 可信源码、哈希、验证和安全边界审计
+- `../tests/golden/README.zh.md`：v0.9.8 金标准夹具、真实 Demo 隔离和重放方法
 - `plans/2026-08-30-understanding-translation-architecture-design.zh.md`：理解翻译与模块化重构的已确认架构设计
 - `plans/2026-08-30-understanding-translation-implementation-plan.zh.md`：分阶段实施、测试和回滚计划
 - `DEVELOPMENT_WORKFLOW.zh.md`：开发工作流

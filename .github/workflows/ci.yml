@@ -53,6 +53,9 @@ jobs:
       - name: Reject secrets and generated assets
         run: python scripts/check_repository_hygiene.py --root .
 
+      - name: Replay v0.9.8 golden baseline
+        run: python scripts/check_golden_baseline.py --replay
+
       - name: Run test suite
         run: python -m pytest -q -p no:cacheprovider
 
