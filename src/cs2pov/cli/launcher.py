@@ -82,10 +82,8 @@ def print_banner() -> None:
         from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
         view = WorkspaceApplicationService(JsonWorkspaceSelectionStore(default_state_file())).show_current()
         status = "已选择" if view.diagnostic.ok else "需要修复"
-    except WorkspaceUseCaseError as exc:
+    except (WorkspaceUseCaseError, WorkspaceSelectionPortError) as exc:
         status = "未选择" if exc.code == "selection_missing" else "需要修复"
-    except (WorkspaceUseCaseError, WorkspaceSelectionPortError):
-        status = "需要修复"
     print(f"工作区状态：{status}")
 
 

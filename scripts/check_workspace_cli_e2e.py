@@ -8,6 +8,31 @@ import tempfile
 from pathlib import Path
 
 
+WORKSPACE_CONFIG_KEYS = {"schema_version", "layout_version", "workspace_id", "created_at"}
+WORKSPACE_DIRECTORIES = (
+    "models", "library/demos", "jobs", "knowledge", "knowledge/inbox",
+    "knowledge/exports", "cache", "cache/decompressed_demos", "cache/audio",
+    "cache/render", "cache/huggingface", "cache/huggingface/hub",
+    "cache/whisper", "cache/tmp", "render_bundles",
+)
+ASSET_DIRECTORY_NAMES = {
+    "models", "library", "jobs", "knowledge", "cache", "render_bundles",
+    "renders", "output", "outputs",
+}
+
+
+def assert_workspace_layout(root: Path) -> None:
+    config_text = (root / "workspace.json").read_text(encoding="utf-8")
+    config = json.loads(config_text)
+    assert set(config) == WORKSPACE_CONFIG_KEYS
+    assert str(root.resolve()) not in {str(value) for value in config.values()}
+    assert all((root / relative).is_dir() for relative in WORKSPACE_DIRECTORIES)
+
+
+def assert_no_asset_directories(path: Path) -> None:
+    assert not {child.name for child in path.iterdir()}.intersection(ASSET_DIRECTORY_NAMES)
+
+
 def run_cli(root: Path, state: Path, cwd: Path, *args: str) -> tuple[int, dict]:
     env = dict(os.environ)
     env.update({"PYTHONUTF8": "1", "PYTHONPATH": str(root / "src"), "CS2POV_STATE_FILE": str(state),
@@ -32,12 +57,13 @@ def main() -> int:
         cwd.mkdir(parents=True)
         for name in ("HOME", "LOCALAPPDATA", "XDG"):
             (base / name).mkdir()
-        monitored = [source_root, cwd, base / "HOME", base / "LOCALAPPDATA"]
+        monitored = [source_root, cwd, base / "HOME", base / "LOCALAPPDATA", base / "XDG"]
         before = {(path, tuple(sorted(p.name for p in path.iterdir()))) for path in monitored}
         state = base / "状态" / "state.json"
         a, b = base / "工作区 A", base / "工作区 B"
         code, init_a = run_cli(source_root, state, cwd, "workspace", "init", str(a), "--json")
         assert code == 0 and init_a["ok"]
+        assert_workspace_layout(a)
         config_a = (a / "workspace.json").read_bytes()
         marker_a = a / "marker.txt"; marker_a.write_bytes(b"A")
         code, show = run_cli(source_root, state, cwd, "workspace", "show", "--json")
@@ -46,6 +72,7 @@ def main() -> int:
         assert code == 0 and doctor["diagnostic"]["ok"]
         code, init_b = run_cli(source_root, state, cwd, "workspace", "init", str(b), "--json")
         assert code == 0 and init_b["ok"]
+        assert_workspace_layout(b)
         config_b = (b / "workspace.json").read_bytes()
         marker_b = b / "marker.txt"; marker_b.write_bytes(b"B")
         code, _ = run_cli(source_root, state, cwd, "workspace", "use", str(a), "--json")
@@ -74,6 +101,7 @@ def main() -> int:
         for path, names in before:
             after = tuple(sorted(p.name for p in path.iterdir()))
             assert after == names
+            assert_no_asset_directories(path)
         state_assets = {p.name for p in state.parent.iterdir()}
         assert not state_assets.intersection({"models", "library", "jobs", "knowledge", "cache", "render_bundles"})
         assert state_assets <= {"state.json"}
