@@ -477,14 +477,18 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
 
 def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
+    from cs2pov.application.workspace import WorkspaceSelectionPortError
     from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
     runtime = None
     try:
         if args.models_cmd in {"info", "list", "test"}:
             runtime = WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write() if args.models_cmd == "test" else WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_selected()
-    except WorkspaceRuntimeError as exc:
-        payload = {"ok": False, "command": f"models.{args.models_cmd}", "error": {"code": exc.code, "message_zh": exc.message_zh, "suggestion_zh": exc.suggestion_zh}}
-        if exc.diagnostic:
+    except (WorkspaceRuntimeError, WorkspaceSelectionPortError) as exc:
+        code = getattr(exc, "code", "workspace_selection_required")
+        message = getattr(exc, "message_zh", str(exc))
+        suggestion = getattr(exc, "suggestion_zh", "请先选择工作区后重试。")
+        payload = {"ok": False, "command": f"models.{args.models_cmd}", "error": {"code": code, "message_zh": message, "suggestion_zh": suggestion}}
+        if getattr(exc, "diagnostic", None):
             payload["diagnostic"] = exc.diagnostic.to_dict()
         if getattr(args, "json", False):
             print(json.dumps(payload, ensure_ascii=False))
@@ -517,9 +521,11 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         device = str(profile_values.get("whisper_device") or cfg.get("whisper_device") or "cpu")
         compute_type = str(profile_values.get("whisper_compute_type") or cfg.get("whisper_compute_type") or "int8")
         if args.cache_dir:
-            result = {"ok": False, "code": "legacy_model_cache_override_rejected", "error": "--cache-dir 已弃用，请使用当前工作区缓存。"}
+            result = {"ok": False, "command": "models.test", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "--cache-dir 已弃用，请使用当前工作区缓存。", "suggestion_zh": "请移除该参数并使用当前工作区缓存。"}}
         else:
             result = test_model_load(model, device, compute_type, cache_dir=str(runtime.paths.whisper_cache_dir), local_only=args.local_only)
+        if not result.get("ok") and not isinstance(result.get("error"), dict):
+            result = {"ok": False, "command": "models.test", "error": {"code": result.get("code", "model_load_failed"), "message_zh": str(result.get("error", "模型加载失败。")), "suggestion_zh": "请检查当前工作区缓存并重试。"}}
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

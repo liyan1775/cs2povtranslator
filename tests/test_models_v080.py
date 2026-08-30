@@ -1,4 +1,6 @@
 from pathlib import Path
+import tempfile
+import shutil
 
 from cs2pov.cli.model_manager import (
     TRANSCRIPTION_PROFILES,
@@ -21,17 +23,22 @@ def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
         model = root / "models--Systran--faster-whisper-small"
         model.mkdir(parents=True)
         (model / "x").write_bytes(b"x")
-    external = tmp_path / "external"
+    external = Path(tempfile.mkdtemp(prefix="legacy-cache-"))
     monkeypatch.setenv("HF_HUB_CACHE", str(external))
     from cs2pov.cli import model_manager
     current = model_manager.scan_current_models(runtime)
     assert {row["name"] for row in current} == {"small"}
     assert all(row["managed"] is True for row in current)
     assert all("source" in row for row in current)
+    (external / "models--Systran--faster-whisper-base").mkdir(parents=True)
     legacy = model_manager.scan_legacy_candidates(
-        configured_cache=external, hf_home=external / "home", hf_hub_cache=external
+        configured_cache=external, hf_home=external / "home", hf_hub_cache=external,
+        runtime=runtime,
     )
-    assert all(Path(row["path"]).resolve() not in {whisper.resolve(), hub.resolve()} for row in legacy)
+    assert any(row["source"] == "configured" for row in legacy)
+    assert any(row["managed"] is False for row in legacy)
+    assert any(row["name"] == "base" for row in model_manager.scan_legacy_models(legacy))
+    shutil.rmtree(external)
 
 
 def test_model_load_requires_explicit_cache_and_passes_download_root(monkeypatch, tmp_path):
@@ -44,6 +51,13 @@ def test_model_load_requires_explicit_cache_and_passes_download_root(monkeypatch
     assert result["ok"] is False and result["code"] == "model_cache_required"
     result = model_manager.test_model_load("small", "cpu", "int8", cache_dir=str(tmp_path))
     assert result["ok"] is True and captured["download_root"] == str(tmp_path)
+
+
+def test_invalid_state_path_is_structured_json(monkeypatch, capsys):
+    from cs2pov.cli.commands import main
+    monkeypatch.setenv("CS2POV_STATE_FILE", "relative-state.json")
+    assert main(["models", "info", "--json"]) == 1
+    assert '"code": "selection_state_location_unavailable"' in capsys.readouterr().out
 
 
 def test_quality_profile_maps_to_small_cpu_int8():

@@ -182,18 +182,36 @@ def scan_current_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
     return list(unique.values())
 
 
-def scan_legacy_candidates(*, configured_cache=None, hf_home=None, hf_hub_cache=None, runtime=None):
+def scan_legacy_candidates(*, configured_cache=None, hf_home=None, hf_hub_cache=None, default_hf=None, runtime=None):
     managed = {p.resolve() for p in cache_candidates(runtime)} if runtime else set()
     rows, seen = [], set()
-    for value in (configured_cache, hf_home, hf_hub_cache):
+    sources = [("configured", configured_cache), ("HF_HOME", hf_home), ("HF_HUB_CACHE", hf_hub_cache), ("platform_default", default_hf)]
+    for source, value in sources:
         if value is None:
             continue
-        path = _hub_dir_from_cache_root(Path(value).expanduser())
-        key = path.resolve()
-        if key in seen or key in managed or not path.is_dir():
-            continue
-        seen.add(key)
-        rows.append({"path": str(key), "source": "legacy", "managed": False})
+        roots = [Path(value).expanduser()]
+        if source == "configured":
+            roots.append(roots[0] / "hub")
+        elif source == "HF_HOME":
+            roots = [roots[0] / "hub"]
+        for path in roots:
+            key = path.resolve()
+            if key in seen or key in managed or (runtime and runtime.root in key.parents) or not path.is_dir():
+                continue
+            seen.add(key)
+            rows.append({"path": str(key), "source": source, "managed": False})
+    return rows
+
+
+def scan_legacy_models(candidates):
+    rows = []
+    for candidate in candidates:
+        root = Path(candidate["path"])
+        for item in sorted(root.glob("models--*--*")):
+            if item.is_dir():
+                name = _display_model_name_from_cache_dir(item.name)
+                if _looks_like_whisper_model(name, item.name):
+                    rows.append({"name": name, "path": str(item), "cache_dir": str(root), "managed": False, "source": candidate["source"], "size_bytes": directory_size(item), "size_human": format_bytes(directory_size(item))})
     return rows
 
 
@@ -222,7 +240,7 @@ def build_models_info(runtime: WorkspaceRuntime) -> dict[str, Any]:
     return {
         "workspace_cache": {"whisper": str(runtime.paths.whisper_cache_dir), "huggingface_hub": str(runtime.paths.huggingface_hub_cache_dir)},
         "deprecated_config": {"present": bool(cfg.get("whisper_cache_dir")), "deprecated": bool(cfg.get("whisper_cache_dir"))},
-        "legacy_candidates": scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, runtime=runtime),
+    "legacy_candidates": scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, default_hf=Path.home() / ".cache" / "huggingface" / "hub", runtime=runtime),
         "current_defaults": {
             "transcription_profile": cfg.get("transcription_profile") or "balanced",
             "whisper_model": cfg.get("whisper_model"),
@@ -255,7 +273,9 @@ def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False) -> int
 
 def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
     models = scan_current_models(runtime)
-    payload = {"model_count": len(models), "models": models, "legacy_candidates": scan_legacy_candidates(runtime=runtime)}
+    cfg = load_config()
+    candidates = scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, default_hf=Path.home() / ".cache" / "huggingface" / "hub", runtime=runtime)
+    payload = {"model_count": len(models), "models": models, "legacy_candidates": candidates, "legacy_models": scan_legacy_models(candidates)}
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
