@@ -538,7 +538,12 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
                 print("OK：模型可以加载。")
             else:
                 print("FAILED：模型无法加载。")
-                print(f"{result.get('error_type')}: {result.get('error')}")
+                error = result.get("error")
+                if isinstance(error, dict):
+                    print(error.get("message_zh", "模型加载失败。"))
+                    print(f"建议：{error.get('suggestion_zh', '请检查当前工作区缓存并重试。')}")
+                else:
+                    print(f"{result.get('error_type', '错误')}: {error}")
                 if args.local_only:
                     print("提示：当前是 --local-only，只检查本地已有模型；去掉该参数可能会触发下载。")
         return 0 if result.get("ok") else 1

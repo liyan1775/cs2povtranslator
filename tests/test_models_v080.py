@@ -1,6 +1,4 @@
 from pathlib import Path
-import tempfile
-import shutil
 
 from cs2pov.cli.model_manager import (
     TRANSCRIPTION_PROFILES,
@@ -16,14 +14,14 @@ def _runtime(tmp_path):
 
 
 def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
-    runtime = _runtime(tmp_path)
+    runtime = _runtime(tmp_path / "workspace")
     whisper = runtime.paths.whisper_cache_dir
     hub = runtime.paths.huggingface_hub_cache_dir
     for root in (whisper, hub):
         model = root / "models--Systran--faster-whisper-small"
         model.mkdir(parents=True)
         (model / "x").write_bytes(b"x")
-    external = Path(tempfile.mkdtemp(prefix="legacy-cache-"))
+    external = tmp_path / "external"
     monkeypatch.setenv("HF_HUB_CACHE", str(external))
     from cs2pov.cli import model_manager
     current = model_manager.scan_current_models(runtime)
@@ -38,7 +36,6 @@ def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
     assert any(row["source"] == "configured" for row in legacy)
     assert any(row["managed"] is False for row in legacy)
     assert any(row["name"] == "base" for row in model_manager.scan_legacy_models(legacy))
-    shutil.rmtree(external)
 
 
 def test_model_load_requires_explicit_cache_and_passes_download_root(monkeypatch, tmp_path):
@@ -58,6 +55,20 @@ def test_invalid_state_path_is_structured_json(monkeypatch, capsys):
     monkeypatch.setenv("CS2POV_STATE_FILE", "relative-state.json")
     assert main(["models", "info", "--json"]) == 1
     assert '"code": "selection_state_location_unavailable"' in capsys.readouterr().out
+
+
+def test_model_override_non_json_is_user_readable(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+    from cs2pov.cli import commands
+    runtime = _runtime(tmp_path)
+    monkeypatch.setattr(commands, "load_config", lambda: {"whisper_model": "base", "whisper_device": "cpu", "whisper_compute_type": "int8"})
+    import cs2pov.application.workspace_runtime as runtime_module
+    monkeypatch.setattr(runtime_module, "WorkspaceRuntimeResolver", lambda *a, **k: type("R", (), {"resolve_for_write": lambda s: runtime})())
+    args = Namespace(models_cmd="test", cache_dir=str(tmp_path / "out"), model=None, profile=None, device=None, compute_type=None, local_only=False, json=False)
+    assert commands.run_models(args, __import__("argparse").ArgumentParser()) == 1
+    output = capsys.readouterr().out
+    assert "None:" not in output and "{" not in output
+    assert "已弃用" in output
 
 
 def test_quality_profile_maps_to_small_cpu_int8():

@@ -13,3 +13,18 @@ def test_faster_whisper_adapter_never_mutates_environment(monkeypatch, tmp_path)
     FasterWhisperAdapter(cache_dir=str(tmp_path))
     assert dict(os.environ) == before
     assert captured["download_root"] == str(tmp_path)
+
+
+def test_adapter_without_cache_keeps_kwargs_and_reports_import_error(monkeypatch):
+    import builtins
+    real = builtins.__import__
+    def fail(name, *args, **kwargs):
+        if name == "faster_whisper":
+            raise ImportError("missing")
+        return real(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", fail)
+    from cs2pov.adapters.whisper_adapter import FasterWhisperAdapter, WhisperAdapterError
+    try:
+        FasterWhisperAdapter(cache_dir=None)
+    except WhisperAdapterError as exc:
+        assert "faster-whisper" in str(exc)

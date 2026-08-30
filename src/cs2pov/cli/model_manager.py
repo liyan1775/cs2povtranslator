@@ -117,9 +117,7 @@ def default_hf_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def cache_candidates(runtime: WorkspaceRuntime | None = None) -> list[Path]:
-    if runtime is None:
-        return []
+def cache_candidates(runtime: WorkspaceRuntime) -> list[Path]:
     return [runtime.paths.whisper_cache_dir, runtime.paths.huggingface_hub_cache_dir]
 
 
@@ -174,7 +172,7 @@ def scan_current_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
                 "size_human": format_bytes(size),
                 "status": "可用" if size > 0 else "目录存在但大小为 0，请检查下载是否完整",
                 "managed": True,
-                "source": "workspace",
+                "source": "workspace_whisper" if cache == runtime.paths.whisper_cache_dir else "workspace_huggingface_hub",
             })
     unique: dict[str, dict[str, Any]] = {}
     for row in models:
@@ -196,7 +194,7 @@ def scan_legacy_candidates(*, configured_cache=None, hf_home=None, hf_hub_cache=
             roots = [roots[0] / "hub"]
         for path in roots:
             key = path.resolve()
-            if key in seen or key in managed or (runtime and runtime.root in key.parents) or not path.is_dir():
+            if key in seen or key in managed or (runtime and (key == runtime.root or runtime.root in key.parents)) or not path.is_dir():
                 continue
             seen.add(key)
             rows.append({"path": str(key), "source": source, "managed": False})
@@ -215,8 +213,8 @@ def scan_legacy_models(candidates):
     return rows
 
 
-def scan_downloaded_models(runtime: WorkspaceRuntime | None = None) -> list[dict[str, Any]]:
-    return scan_current_models(runtime) if runtime else []
+def scan_downloaded_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
+    return scan_current_models(runtime)
 
 
 def _display_model_name_from_cache_dir(dirname: str) -> str:
@@ -288,6 +286,10 @@ def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int
     for item in models:
         print(f"- {item['name']:<16} {item['size_human']:<10} {item['status']}")
         print(f"  path: {item['path']}")
+    legacy_models = payload["legacy_models"]
+    print("\n旧缓存模型（仅只读迁移候选）：")
+    for item in legacy_models:
+        print(f"- {item['name']:<16} {item['path']}")
     return 0
 
 
