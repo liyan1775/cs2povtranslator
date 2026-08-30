@@ -13,6 +13,11 @@ from cs2pov.application.workspace import (
 from cs2pov.workspace.models import WorkspaceDiagnostic
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.service import WorkspaceService
+from cs2pov.workspace.errors import (WorkspaceConfigError, WorkspaceInitializationError,
+                                     WorkspaceInsufficientSpaceError, WorkspaceLayoutError,
+                                     WorkspaceNotWritableError)
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore
+from cs2pov.application.workspace import WorkspaceSelectionPortError
 
 
 class FakePort:
@@ -121,3 +126,103 @@ def test_show_and_diagnose_return_unhealthy_view_when_selected_workspace_missing
     assert view.diagnostic.ok is False
     assert view.diagnostic.issues[0].code == "workspace_missing"
     assert port.value == state
+
+
+def test_select_existing_real_service_never_repairs_missing_bad_or_incomplete_workspace(tmp_path):
+    old = WorkspaceSelection(1, str(tmp_path / "old"))
+    for kind in ("missing", "bad", "incomplete"):
+        root = tmp_path / kind
+        if kind == "bad":
+            root.mkdir()
+            (root / "workspace.json").write_text("{}", encoding="utf-8")
+        elif kind == "incomplete":
+            WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).initialize()
+            (root / "models").rmdir()
+        port = FakePort(old)
+        app = WorkspaceApplicationService(port)
+        with pytest.raises(WorkspaceUseCaseError):
+            app.select_existing(root)
+        assert port.value == old
+        assert not (root / "models").exists() if kind == "missing" else True
+
+
+def test_initialize_save_failure_preserves_real_workspace_and_can_recover(tmp_path):
+    root = tmp_path / "new"
+    old = WorkspaceSelection(1, str(tmp_path / "old"))
+    class FailingPort(FakePort):
+        def save(self, selection):
+            raise WorkspaceSelectionPortError("selection_state_write_failed", "写入失败", "重试")
+    app = WorkspaceApplicationService(FailingPort(old))
+    with pytest.raises(WorkspaceUseCaseError):
+        app.initialize_and_select(root)
+    assert (root / "workspace.json").exists()
+    assert all(path.is_dir() for path in WorkspacePaths(root).all_directories())
+    store = JsonWorkspaceSelectionStore(tmp_path / "state" / "state.json")
+    recovered = WorkspaceApplicationService(store).select_existing(root)
+    assert recovered.selected_workspace == str(root.resolve())
+
+
+def test_explicit_diagnose_does_not_change_selection_even_when_unhealthy(tmp_path):
+    selected = tmp_path / "selected"
+    target = tmp_path / "target"
+    WorkspaceService(WorkspacePaths(selected), minimum_free_bytes=0).initialize()
+    old = WorkspaceSelection(1, str(selected))
+    port = FakePort(old)
+    view = WorkspaceApplicationService(port).diagnose(target)
+    assert view.diagnostic.ok is False
+    assert port.value == old
+
+
+def test_show_low_space_returns_unhealthy_view_and_keeps_selection(tmp_path):
+    root = tmp_path / "selected"
+    WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).initialize()
+    old = WorkspaceSelection(1, str(root))
+    port = FakePort(old)
+    app = WorkspaceApplicationService(port, workspace_service_factory=lambda paths: WorkspaceService(paths, minimum_free_bytes=100, disk_usage=lambda _: (0, 0, 1)))
+    view = app.show_current()
+    assert view.diagnostic.ok is False
+    assert view.diagnostic.issues[-1].code == "workspace_space_low"
+    assert port.value == old
+
+
+def test_forget_real_store_does_not_touch_workspace_or_marker(tmp_path):
+    root = tmp_path / "workspace"
+    WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).initialize()
+    marker = root / "marker.txt"
+    marker.write_bytes(b"keep")
+    state = tmp_path / "state" / "state.json"
+    store = JsonWorkspaceSelectionStore(state)
+    store.save(WorkspaceSelection(1, str(root)))
+    result = WorkspaceApplicationService(store).forget_current()
+    assert result.to_dict() == {"forgotten": True}
+    assert not state.exists()
+    assert (root / "workspace.json").exists()
+    assert marker.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("failure, expected", [
+    (WorkspaceInsufficientSpaceError("low"), "workspace_space_low"),
+    (WorkspaceNotWritableError("no"), "workspace_not_writable"),
+    (WorkspaceConfigError("bad"), "workspace_config_invalid"),
+    (WorkspaceLayoutError("layout"), "workspace_layout_invalid"),
+    (WorkspaceInitializationError("other"), "workspace_initialization_failed"),
+])
+def test_workspace_errors_map_to_stable_application_codes(tmp_path, failure, expected):
+    class FailingWorkspace(FakeWorkspace):
+        def initialize(self):
+            raise failure
+    app = WorkspaceApplicationService(FakePort(), workspace_service_factory=lambda paths: FailingWorkspace(paths.root))
+    with pytest.raises(WorkspaceUseCaseError) as caught:
+        app.initialize_and_select(tmp_path / "root")
+    assert caught.value.code == expected
+    assert caught.value.message_zh == str(failure)
+    assert caught.value.suggestion_zh
+    assert caught.value.diagnostic is None
+
+
+def test_unexpected_port_runtime_error_is_not_disguised(tmp_path):
+    class BadPort(FakePort):
+        def load(self):
+            raise RuntimeError("programming bug")
+    with pytest.raises(RuntimeError, match="programming bug"):
+        WorkspaceApplicationService(BadPort()).show_current()

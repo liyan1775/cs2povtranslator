@@ -7,6 +7,7 @@ import pytest
 from cs2pov.application.workspace import WorkspaceSelection
 from cs2pov.storage.workspace_selection_store import (
     JsonWorkspaceSelectionStore,
+    WorkspaceSelectionStoreError,
     default_state_file,
 )
 
@@ -90,6 +91,97 @@ def test_default_state_file_requires_explicit_absolute_environment(monkeypatch, 
 def test_selection_rejects_path_object_directly(tmp_path):
     with pytest.raises(Exception):
         WorkspaceSelection(1, tmp_path)
+
+
+def test_load_symlink_rejected_without_touching_target(tmp_path):
+    state, target = tmp_path / "state.json", tmp_path / "target.json"
+    target.write_bytes(b"original")
+    try:
+        state.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links unavailable")
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        JsonWorkspaceSelectionStore(state).load()
+    assert caught.value.code == "selection_state_invalid"
+    assert target.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("payload", [
+    {"schema_version": 1, "selected_workspace": "x", "extra": 1},
+    {"schema_version": True, "selected_workspace": "C:/x"},
+    {"schema_version": 1, "selected_workspace": []},
+    {"schema_version": 1, "selected_workspace": "relative"},
+])
+def test_load_invalid_schema_is_typed_error(tmp_path, payload):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps(payload, default=str), encoding="utf-8")
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        JsonWorkspaceSelectionStore(state).load()
+    assert caught.value.code == "selection_state_invalid"
+
+
+def test_load_oserror_is_read_failed(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    state.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("denied")))
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        JsonWorkspaceSelectionStore(state).load()
+    assert caught.value.code == "selection_state_read_failed"
+
+
+def test_save_fsync_and_replace_fail_preserve_old_state_and_cleanup(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
+    store = JsonWorkspaceSelectionStore(state)
+    store.save(selection(tmp_path / "old"))
+    original = state.read_bytes()
+    monkeypatch.setattr("cs2pov.storage.workspace_selection_store.os.fsync", lambda _: (_ for _ in ()).throw(OSError("fsync")))
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        store.save(selection(tmp_path / "new"))
+    assert caught.value.code == "selection_state_write_failed"
+    assert state.read_bytes() == original
+    assert not list(state.parent.glob(".state-*"))
+    monkeypatch.undo()
+    monkeypatch.setattr("cs2pov.storage.workspace_selection_store.os.replace", lambda *_: (_ for _ in ()).throw(OSError("replace")))
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        store.save(selection(tmp_path / "new"))
+    assert caught.value.code == "selection_state_write_failed"
+    assert state.read_bytes() == original
+    assert not list(state.parent.glob(".state-*"))
+
+
+def test_forget_symlink_and_unlink_failure(tmp_path, monkeypatch):
+    state, target = tmp_path / "state.json", tmp_path / "target.json"
+    target.write_bytes(b"target")
+    try:
+        state.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links unavailable")
+    assert JsonWorkspaceSelectionStore(state).forget() is True
+    assert target.read_bytes() == b"target"
+    state.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no")))
+    with pytest.raises(WorkspaceSelectionStoreError) as caught:
+        JsonWorkspaceSelectionStore(state).forget()
+    assert caught.value.code == "selection_state_forget_failed"
+    assert state.exists()
+
+
+def test_default_state_file_all_platform_branches_are_absolute_and_isolated(tmp_path):
+    explicit = tmp_path / "explicit" / "state.json"
+    assert default_state_file(environ={"CS2POV_STATE_FILE": str(explicit)}, platform="linux") == explicit
+    local = tmp_path / "local"
+    assert default_state_file(environ={"LOCALAPPDATA": str(local)}, platform="win32") == local / "CS2POV" / "state.json"
+    xdg = tmp_path / "xdg"
+    assert default_state_file(environ={"XDG_STATE_HOME": str(xdg)}, platform="linux") == xdg / "cs2pov" / "state.json"
+    home = tmp_path / "home"
+    assert default_state_file(environ={}, home=home, platform="linux") == home / ".local" / "state" / "cs2pov" / "state.json"
+    for environ, platform, supplied_home in [
+        ({"CS2POV_STATE_FILE": ""}, "linux", home), ({"CS2POV_STATE_FILE": "relative"}, "linux", home),
+        ({"LOCALAPPDATA": "relative"}, "win32", home), ({"LOCALAPPDATA": ""}, "win32", home),
+        ({"XDG_STATE_HOME": "relative"}, "linux", home), ({}, "linux", "relative")]:
+        with pytest.raises(WorkspaceSelectionStoreError) as caught:
+            default_state_file(environ=environ, home=supplied_home, platform=platform)
+        assert caught.value.code == "selection_state_location_unavailable"
 
 
 def test_save_replaces_state_symlink_without_writing_target(tmp_path):
