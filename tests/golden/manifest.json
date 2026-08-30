@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "suite_id": "cs2pov-v0.9.8-baseline",
+  "baseline": {
+    "version": "0.9.8",
+    "commit": "7f26212dc46b4a0a710ffef2fd69902f5e80bb5d"
+  },
+  "fixtures": [
+    {
+      "id": "authorized-demo-anubis-local-v1",
+      "kind": "authorized_demo",
+      "storage": "local-only",
+      "sha256": "08f5c4f84a8d7401316d58da46cbe46c0e673b1df62ff009085382e23476639d",
+      "byte_size": 570384969,
+      "expected": {
+        "map_name": "de_anubis",
+        "tick_rate": 64.0,
+        "player_count": 10
+      }
+    },
+    {
+      "id": "representative-demo-mirage-local-v1",
+      "kind": "representative_local_demo",
+      "storage": "local-only",
+      "sha256": "eb19ec6b7447ed50887f62a5b955ce3e34f645d4fc6399b5c076635b45a3e6c5",
+      "byte_size": 431978578,
+      "expected": {
+        "map_name": "de_mirage",
+        "tick_rate": 64.0,
+        "round_count": 30,
+        "observed_transcript_player_count": 3,
+        "transcript_segment_count": 6,
+        "key_speech_start": 71.141,
+        "key_speech_end": 112.557
+      }
+    },
+    {
+      "id": "synthetic-audio-v1",
+      "kind": "synthetic_audio",
+      "storage": "checked-in",
+      "path": "tests/golden/fixtures/synthetic_audio_v1.json",
+      "sha256": "360a6b105a18bc3aeb60d3b9ee1196861321f97b521efd5b27e759448725d67d"
+    },
+    {
+      "id": "synthetic-video-v1",
+      "kind": "synthetic_video",
+      "storage": "checked-in",
+      "path": "tests/golden/fixtures/synthetic_video_v1.json",
+      "sha256": "1d73b0e52c1cea667d021ba986fc959eb0f73e2957249a66ea07fc001f88d02c"
+    },
+    {
+      "id": "structured-timeline-v1",
+      "kind": "structured_timeline",
+      "storage": "checked-in",
+      "path": "tests/golden/fixtures/structured_timeline_v1.json",
+      "sha256": "953f4d5424967e1d625912311cdb4d05d8de98b2f65f97cb315e8bf0400e8ef4"
+    }
+  ],
+  "understanding_translation_cases": [
+    {
+      "id": "letter-b-callout-v1",
+      "asr_text": "be be be",
+      "interpreted_text": "B, B, B",
+      "translated_text": "B点，B点，B点",
+      "evidence": [
+        "The raw ASR token sequence is pragmatically empty as ordinary prose.",
+        "Repeated letter-name callouts are meaningful in CS2 team communication."
+      ],
+      "status": "golden-candidate"
+    }
+  ],
+  "legacy_outputs": [
+    {
+      "id": "synthetic-v0.9.8-bilingual-srt",
+      "path": "tests/golden/expected/v0.9.8_bilingual.srt",
+      "sha256": "3234d87c397facf7fc636eeb52f1aafd5f6424f8f5161e0bda6e3a060b89c95f"
+    },
+    {
+      "id": "local-mirage-v0.3.0-bilingual-srt",
+      "storage": "local-only",
+      "sha256": "e585ef9ebbdb4e4c11adb2afa0a43b488202e674225aea41e5db46b7a8e64caa",
+      "byte_size": 689
+    }
+  ],
+  "known_defects": [
+    {
+      "id": "legacy-no-interpretation-layer",
+      "description": "v0.9.8 preserves ASR text and translation but has no separate interpreted-text/evidence/confidence contract.",
+      "expected_resolution_phase": 5
+    },
+    {
+      "id": "legacy-real-assets-not-portable",
+      "description": "Real Demo and media assets remain local-only and are matched by hash; CI replays deterministic synthetic fixtures.",
+      "expected_resolution_phase": 1
+    }
+  ],
+  "baseline_test_nodes": [
+    "tests/test_round_context.py",
+    "tests/test_subtitle.py",
+    "tests/test_transcription_postprocess.py"
+  ]
+}

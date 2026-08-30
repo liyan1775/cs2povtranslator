@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "timebase": "demo-seconds",
+  "rounds": [
+    {
+      "round_number": 1,
+      "start_time": 10.0,
+      "end_time": 20.0
+    }
+  ],
+  "players": [
+    {
+      "id": "fixture-player-a",
+      "display_name": "Alpha",
+      "team_number": 2
+    },
+    {
+      "id": "fixture-player-b",
+      "display_name": "Bravo",
+      "team_number": 2
+    }
+  ],
+  "speech_segments": [
+    {
+      "id": "speech-a",
+      "round_number": 1,
+      "player_id": "fixture-player-a",
+      "start_time": 10.5,
+      "end_time": 11.7,
+      "asr_text": "one jungle"
+    },
+    {
+      "id": "speech-b",
+      "round_number": 1,
+      "player_id": "fixture-player-b",
+      "start_time": 12.0,
+      "end_time": 13.2,
+      "asr_text": "be be be"
+    }
+  ],
+  "translation_segments": [
+    {
+      "id": "speech-a",
+      "player_id": "fixture-player-a",
+      "player_name": "Alpha",
+      "team_number": 2,
+      "start_time": 10.5,
+      "end_time": 11.7,
+      "original_text": "one jungle",
+      "translated_text": "警家一个",
+      "round_number": 1
+    },
+    {
+      "id": "speech-b",
+      "player_id": "fixture-player-b",
+      "player_name": "Bravo",
+      "team_number": 2,
+      "start_time": 12.0,
+      "end_time": 13.2,
+      "original_text": "be be be",
+      "translated_text": "B点，B点，B点",
+      "round_number": 1
+    }
+  ]
+}
