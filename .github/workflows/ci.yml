@@ -59,6 +59,9 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q -p no:cacheprovider
 
+      - name: Exercise workspace CLI end to end
+        run: python scripts/check_workspace_cli_e2e.py
+
       - name: Compile Python sources
         run: python -m compileall -q src tests scripts
 

@@ -42,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(prog="cs2pov", description="CS2 POV bilingual subtitle pipeline")
     sub = parser.add_subparsers(dest="cmd")
+    from cs2pov.cli.workspace_commands import add_workspace_parser
+    add_workspace_parser(sub)
 
     run = sub.add_parser("run", help="专家模式：直接运行 pipeline")
     run.add_argument("demo")
@@ -261,6 +263,9 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if args.cmd == "workspace":
+        from cs2pov.cli.workspace_commands import run_workspace
+        return run_workspace(args)
     if args.cmd == "doctor":
         return run_doctor()
 

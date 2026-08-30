@@ -76,6 +76,15 @@ def print_banner() -> None:
     print("推荐流程：1 新建工程 → 校对 YAML → 2 渲染 overlay → 剪映叠加。")
     print("v0.9.8 默认不显示不可靠倒计时，只显示 Round + 选手 + 双语通讯流。")
     print("遇到问题：先选 3 看状态；要发给开发者就选 4 打包反馈包。")
+    try:
+        from cs2pov.application.workspace import WorkspaceApplicationService, WorkspaceUseCaseError
+        from cs2pov.application.workspace import WorkspaceSelectionPortError
+        from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
+        view = WorkspaceApplicationService(JsonWorkspaceSelectionStore(default_state_file())).show_current()
+        status = "已选择" if view.diagnostic.ok else "需要修复"
+    except (WorkspaceUseCaseError, WorkspaceSelectionPortError) as exc:
+        status = "未选择" if exc.code == "selection_missing" else "需要修复"
+    print(f"工作区状态：{status}")
 
 
 def print_menu() -> None:
@@ -141,6 +150,7 @@ def run_tools_menu() -> None:
     print("7. 技术环境诊断 doctor")
     print("8. 安装 / 首次使用教程")
     print("9. 命令帮助和常见场景")
+    print("10. 工作区管理")
     print("0. 返回主菜单")
     choice = _read_choice("请选择 [1]\n> ", default="1")
     if choice == "1":
@@ -161,8 +171,34 @@ def run_tools_menu() -> None:
         run_install_help_page()
     elif choice == "9":
         run_help_page()
+    elif choice == "10":
+        run_workspace_menu()
     else:
         print("没有这个选项。")
+
+
+def run_workspace_menu() -> None:
+    from cs2pov.cli.workspace_commands import run_workspace
+    import argparse
+    print("\n工作区管理")
+    print("当前步骤只设置新版本数据目录；模型和任务接入将在下一阶段完成。")
+    print("1. 初始化并设为当前工作区")
+    print("2. 使用已有工作区")
+    print("3. 查看当前工作区")
+    print("4. 诊断工作区")
+    print("5. 忘记当前选择")
+    choice = _read_choice("请选择 [3]\n> ", default="3")
+    if choice in {"1", "2"}:
+        path = _read_choice("请输入工作区绝对路径\n> ").strip().strip('"')
+        run_workspace(argparse.Namespace(workspace_cmd="init" if choice == "1" else "use", path=path, json=False))
+    elif choice == "3":
+        run_workspace(argparse.Namespace(workspace_cmd="show", path=None, json=False))
+    elif choice == "4":
+        path = _read_choice("指定路径，直接回车诊断当前选择\n> ", default=None)
+        run_workspace(argparse.Namespace(workspace_cmd="doctor", path=path, json=False))
+    elif choice == "5":
+        print("忘记选择只删除路径指针，不会删除工作区文件。")
+        run_workspace(argparse.Namespace(workspace_cmd="forget", path=None, json=False))
 
 def run_export_menu() -> None:
     print("\n重新导出不会重新转录，也不会重新调用 LLM。")
