@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from cs2pov.storage.config_store import load_config, save_config
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,20 +117,10 @@ def default_hf_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
-def cache_candidates() -> list[Path]:
-    candidates: list[Path] = []
-    cfg_dir = configured_cache_dir()
-    if cfg_dir:
-        candidates.append(_hub_dir_from_cache_root(cfg_dir))
-    candidates.append(default_hf_cache_dir())
-    seen: set[str] = set()
-    unique: list[Path] = []
-    for path in candidates:
-        key = str(path.resolve()) if path.exists() else str(path)
-        if key not in seen:
-            seen.add(key)
-            unique.append(path)
-    return unique
+def cache_candidates(runtime: WorkspaceRuntime | None = None) -> list[Path]:
+    if runtime is None:
+        return []
+    return [runtime.paths.whisper_cache_dir, runtime.paths.huggingface_hub_cache_dir]
 
 
 def _hub_dir_from_cache_root(path: Path) -> Path:
@@ -163,9 +154,9 @@ def directory_size(path: Path) -> int:
     return total
 
 
-def scan_downloaded_models() -> list[dict[str, Any]]:
+def scan_current_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
     models: list[dict[str, Any]] = []
-    for cache in cache_candidates():
+    for cache in cache_candidates(runtime):
         if not cache.exists():
             continue
         for item in sorted(cache.glob("models--*--*")):
@@ -182,8 +173,32 @@ def scan_downloaded_models() -> list[dict[str, Any]]:
                 "size_bytes": size,
                 "size_human": format_bytes(size),
                 "status": "可用" if size > 0 else "目录存在但大小为 0，请检查下载是否完整",
+                "managed": True,
+                "source": "workspace",
             })
-    return models
+    unique: dict[str, dict[str, Any]] = {}
+    for row in models:
+        unique.setdefault(row["name"], row)
+    return list(unique.values())
+
+
+def scan_legacy_candidates(*, configured_cache=None, hf_home=None, hf_hub_cache=None, runtime=None):
+    managed = {p.resolve() for p in cache_candidates(runtime)} if runtime else set()
+    rows, seen = [], set()
+    for value in (configured_cache, hf_home, hf_hub_cache):
+        if value is None:
+            continue
+        path = _hub_dir_from_cache_root(Path(value).expanduser())
+        key = path.resolve()
+        if key in seen or key in managed or not path.is_dir():
+            continue
+        seen.add(key)
+        rows.append({"path": str(key), "source": "legacy", "managed": False})
+    return rows
+
+
+def scan_downloaded_models(runtime: WorkspaceRuntime | None = None) -> list[dict[str, Any]]:
+    return scan_current_models(runtime) if runtime else []
 
 
 def _display_model_name_from_cache_dir(dirname: str) -> str:
@@ -202,15 +217,12 @@ def _looks_like_whisper_model(display_name: str, dirname: str) -> bool:
     return "whisper" in text or display_name in {item.name for item in MODEL_CATALOG}
 
 
-def build_models_info() -> dict[str, Any]:
+def build_models_info(runtime: WorkspaceRuntime) -> dict[str, Any]:
     cfg = load_config()
     return {
-        "configured_cache_root": cfg.get("whisper_cache_dir"),
-        "effective_cache_candidates": [str(p) for p in cache_candidates()],
-        "env": {
-            "HF_HOME": os.environ.get("HF_HOME"),
-            "HF_HUB_CACHE": os.environ.get("HF_HUB_CACHE"),
-        },
+        "workspace_cache": {"whisper": str(runtime.paths.whisper_cache_dir), "huggingface_hub": str(runtime.paths.huggingface_hub_cache_dir)},
+        "deprecated_config": {"present": bool(cfg.get("whisper_cache_dir")), "deprecated": bool(cfg.get("whisper_cache_dir"))},
+        "legacy_candidates": scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, runtime=runtime),
         "current_defaults": {
             "transcription_profile": cfg.get("transcription_profile") or "balanced",
             "whisper_model": cfg.get("whisper_model"),
@@ -220,30 +232,30 @@ def build_models_info() -> dict[str, Any]:
     }
 
 
-def print_models_info(json_mode: bool = False) -> int:
-    payload = build_models_info()
+def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
+    payload = build_models_info(runtime)
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     print("Whisper 模型缓存信息")
     print("=" * 72)
-    print(f"项目级缓存根目录: {payload['configured_cache_root'] or '[未设置]'}")
-    print("环境变量：")
-    for key, value in payload["env"].items():
-        print(f"  {key}: {value or '[未设置]'}")
-    print("候选缓存目录：")
-    for path in payload["effective_cache_candidates"]:
+    print(f"工作区缓存根目录: {payload['workspace_cache']['whisper']}")
+    print("受管缓存目录：")
+    for path in payload["workspace_cache"].values():
         print(f"  - {path}")
+    print(f"旧配置缓存路径：{'存在（已弃用）' if payload['deprecated_config']['present'] else '未设置'}")
+    for row in payload["legacy_candidates"]:
+        print(f"  旧缓存候选：{row['path']}")
     d = payload["current_defaults"]
     print("当前转录默认值：")
     print(f"  profile={d['transcription_profile']} model={d['whisper_model']} device={d['whisper_device']} compute_type={d['whisper_compute_type']}")
-    print("\n提示：如果 C 盘空间不足，可用 cs2pov models set-cache \"D:\\AIModels\\huggingface\" 设置项目级缓存目录。")
+    print("\n提示：模型缓存跟随当前工作区；旧缓存仅提供只读迁移提示，不会自动移动。")
     return 0
 
 
-def print_models_list(json_mode: bool = False) -> int:
-    models = scan_downloaded_models()
-    payload = {"model_count": len(models), "models": models, "cache_candidates": [str(p) for p in cache_candidates()]}
+def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
+    models = scan_current_models(runtime)
+    payload = {"model_count": len(models), "models": models, "legacy_candidates": scan_legacy_candidates(runtime=runtime)}
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -285,30 +297,26 @@ def print_models_recommend(json_mode: bool = False) -> int:
 
 
 def set_cache_dir(path: Path) -> Path:
-    root = path.expanduser()
-    root.mkdir(parents=True, exist_ok=True)
-    save_config({"whisper_cache_dir": str(root)})
-    return root
+    raise RuntimeError("模型缓存目录设置入口已弃用；缓存跟随当前工作区。")
 
 
 def test_model_load(model: str, device: str, compute_type: str, cache_dir: str | None = None, local_only: bool = False) -> dict[str, Any]:
+    if not cache_dir:
+        return {"ok": False, "code": "model_cache_required", "error": "必须显式提供工作区模型缓存路径。"}
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dependency
         return {"ok": False, "error_type": type(exc).__name__, "error": "缺少 faster-whisper。请运行 pip install -e .[all]"}
     kwargs: dict[str, Any] = {"device": device, "compute_type": compute_type}
-    effective_cache = cache_dir or load_config().get("whisper_cache_dir")
-    if effective_cache:
-        root = Path(str(effective_cache)).expanduser()
-        root.mkdir(parents=True, exist_ok=True)
-        kwargs["download_root"] = str(root)
+    effective_cache = str(Path(cache_dir).expanduser())
+    kwargs["download_root"] = effective_cache
     if local_only:
         kwargs["local_files_only"] = True
     try:
         WhisperModel(model, **kwargs)
         return {"ok": True, "model": model, "device": device, "compute_type": compute_type, "cache_dir": effective_cache}
     except Exception as exc:  # pragma: no cover - external model/env dependent
-        return {"ok": False, "model": model, "device": device, "compute_type": compute_type, "cache_dir": effective_cache, "error_type": type(exc).__name__, "error": str(exc)}
+        return {"ok": False, "code": "model_load_failed", "model": model, "device": device, "compute_type": compute_type, "cache_dir": effective_cache, "error_type": type(exc).__name__, "error": str(exc)}
 
 
 def remove_cache_dir(path: Path) -> int:

@@ -476,21 +476,32 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
 
 
 def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
+    from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
+    runtime = None
+    try:
+        if args.models_cmd in {"info", "list", "test"}:
+            runtime = WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write() if args.models_cmd == "test" else WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_selected()
+    except WorkspaceRuntimeError as exc:
+        payload = {"ok": False, "command": f"models.{args.models_cmd}", "error": {"code": exc.code, "message_zh": exc.message_zh, "suggestion_zh": exc.suggestion_zh}}
+        if exc.diagnostic:
+            payload["diagnostic"] = exc.diagnostic.to_dict()
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(f"无法执行 models {args.models_cmd}：{exc.message_zh}\n建议：{exc.suggestion_zh}")
+        return 1
     if args.models_cmd == "info":
-        return print_models_info(json_mode=args.json)
+        return print_models_info(runtime, json_mode=args.json)
     if args.models_cmd == "list":
-        return print_models_list(json_mode=args.json)
+        return print_models_list(runtime, json_mode=args.json)
     if args.models_cmd == "recommend":
         return print_models_recommend(json_mode=args.json)
     if args.models_cmd == "set-cache":
-        root = set_cache_dir(Path(args.path))
-        print("模型缓存目录已保存为项目级配置：")
-        print(root)
-        print("\n说明：")
-        print("- 这不会修改系统全局环境变量。")
-        print("- 之后通过本工具加载/下载 Whisper 模型时，会优先使用这个目录。")
-        print("- 若想把已有 C 盘模型迁移到这里，请手动复制 Hugging Face 缓存后再运行 cs2pov models list 检查。")
-        return 0
+        payload = {"ok": False, "command": "models.set-cache", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "该入口已弃用，模型缓存跟随当前工作区。", "suggestion_zh": "请先运行 workspace init/use；如需迁移请查看 models info。"}}
+        if getattr(args, "json", False): print(json.dumps(payload, ensure_ascii=False))
+        else: print(payload["error"]["message_zh"] + "\n" + payload["error"]["suggestion_zh"])
+        return 1
     if args.models_cmd == "test":
         cfg = load_config()
         profile_id = args.profile or cfg.get("transcription_profile")
@@ -505,7 +516,10 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         model = str(profile_values.get("whisper_model") or cfg.get("whisper_model") or "base")
         device = str(profile_values.get("whisper_device") or cfg.get("whisper_device") or "cpu")
         compute_type = str(profile_values.get("whisper_compute_type") or cfg.get("whisper_compute_type") or "int8")
-        result = test_model_load(model, device, compute_type, cache_dir=args.cache_dir or cfg.get("whisper_cache_dir"), local_only=args.local_only)
+        if args.cache_dir:
+            result = {"ok": False, "code": "legacy_model_cache_override_rejected", "error": "--cache-dir 已弃用，请使用当前工作区缓存。"}
+        else:
+            result = test_model_load(model, device, compute_type, cache_dir=str(runtime.paths.whisper_cache_dir), local_only=args.local_only)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
@@ -631,6 +645,10 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print("\n提示：API key 已隐藏。确需查看可用 cs2pov config show --show-secrets。")
         return 0
     if args.config_cmd == "set":
+        if getattr(args, "whisper_cache_dir", None):
+            payload = {"ok": False, "command": "config.set", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "whisper-cache-dir 已弃用，配置未修改。", "suggestion_zh": "模型缓存跟随当前工作区，请使用 workspace init/use。"}}
+            print(json.dumps(payload, ensure_ascii=False) if getattr(args, "json", False) else payload["error"]["message_zh"] + "\n" + payload["error"]["suggestion_zh"])
+            return 1
         updates = {}
         if getattr(args, "transcription_profile", None):
             updates.update(apply_profile_to_values(args.transcription_profile))

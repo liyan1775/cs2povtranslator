@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +28,6 @@ class FasterWhisperAdapter:
         kwargs = {"device": device, "compute_type": compute_type}
         if cache_dir:
             cache_root = Path(cache_dir).expanduser()
-            cache_root.mkdir(parents=True, exist_ok=True)
-            # Project-level cache: keep models off C: without changing the user's
-            # global environment.  Setting HF_HOME helps downstream Hugging Face
-            # calls, while download_root directs faster-whisper itself.
-            os.environ.setdefault("HF_HOME", str(cache_root))
             kwargs["download_root"] = str(cache_root)
         self.model = WhisperModel(model_name, **kwargs)
 

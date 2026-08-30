@@ -6,6 +6,44 @@ from cs2pov.cli.model_manager import (
     profile_to_config,
     scan_downloaded_models,
 )
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
+
+
+def _runtime(tmp_path):
+    return WorkspaceRuntime(tmp_path, "id", 1, 1)
+
+
+def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path)
+    whisper = runtime.paths.whisper_cache_dir
+    hub = runtime.paths.huggingface_hub_cache_dir
+    for root in (whisper, hub):
+        model = root / "models--Systran--faster-whisper-small"
+        model.mkdir(parents=True)
+        (model / "x").write_bytes(b"x")
+    external = tmp_path / "external"
+    monkeypatch.setenv("HF_HUB_CACHE", str(external))
+    from cs2pov.cli import model_manager
+    current = model_manager.scan_current_models(runtime)
+    assert {row["name"] for row in current} == {"small"}
+    assert all(row["managed"] is True for row in current)
+    assert all("source" in row for row in current)
+    legacy = model_manager.scan_legacy_candidates(
+        configured_cache=external, hf_home=external / "home", hf_hub_cache=external
+    )
+    assert all(Path(row["path"]).resolve() not in {whisper.resolve(), hub.resolve()} for row in legacy)
+
+
+def test_model_load_requires_explicit_cache_and_passes_download_root(monkeypatch, tmp_path):
+    from cs2pov.cli import model_manager
+    captured = {}
+    class Fake:
+        def __init__(self, model, **kwargs): captured.update(kwargs)
+    monkeypatch.setitem(__import__("sys").modules, "faster_whisper", type("M", (), {"WhisperModel": Fake}))
+    result = model_manager.test_model_load("small", "cpu", "int8")
+    assert result["ok"] is False and result["code"] == "model_cache_required"
+    result = model_manager.test_model_load("small", "cpu", "int8", cache_dir=str(tmp_path))
+    assert result["ok"] is True and captured["download_root"] == str(tmp_path)
 
 
 def test_quality_profile_maps_to_small_cpu_int8():
@@ -21,12 +59,12 @@ def test_format_bytes_human_readable():
 
 
 def test_scan_downloaded_models_detects_hf_cache(monkeypatch, tmp_path):
-    hub = tmp_path / "hub"
+    runtime = _runtime(tmp_path)
+    hub = runtime.paths.huggingface_hub_cache_dir
     model = hub / "models--Systran--faster-whisper-small"
     model.mkdir(parents=True)
     (model / "dummy.bin").write_bytes(b"12345")
-    monkeypatch.setenv("HF_HUB_CACHE", str(hub))
-    rows = scan_downloaded_models()
+    rows = scan_downloaded_models(runtime)
     assert any(row["name"] == "small" and row["size_bytes"] == 5 for row in rows)
 
 
