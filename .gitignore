@@ -18,20 +18,54 @@ venv/
 # Local outputs and feedback
 output/
 output_*/
+outputs/
+acceptance_output/
 cs2pov_feedback_*.zip
 feedback_*.zip
+
+# Durable/local workspace data (never source-controlled)
+/workspace/
+/workspaces/
+/models/
+/model_cache/
+/cache/
+/jobs/
+/renders/
+/render-bundles/
 
 # Demo/audio artifacts
 *.dem
 *.dem.zst
 *.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.mp4
+*.mkv
+*.mov
+*.avi
+*.zip
+*.7z
+*.rar
+*.safetensors
+*.gguf
+*.onnx
+*.pt
+*.pth
+*.ckpt
 artifacts/voice/
 artifacts/temp_audio/
 
 # Secrets and local config
 .env
+.env.*
+!.env.example
+apikey.txt
+api_key.txt
 *.local
 *.key
+*.secret
 
 # IDE / OS
 .idea/
