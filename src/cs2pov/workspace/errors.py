@@ -12,3 +12,23 @@ class WorkspaceResourcePathError(WorkspaceError):
 
 class WorkspacePathOutsideRootError(WorkspaceError):
     """Raised when a path would escape the workspace root."""
+
+
+class WorkspaceInitializationError(WorkspaceError):
+    """Raised when explicit workspace initialization cannot complete."""
+
+
+class WorkspaceConfigError(WorkspaceInitializationError):
+    pass
+
+
+class WorkspaceNotWritableError(WorkspaceInitializationError):
+    pass
+
+
+class WorkspaceInsufficientSpaceError(WorkspaceInitializationError):
+    pass
+
+
+class WorkspaceLayoutError(WorkspaceInitializationError):
+    pass
