@@ -4,13 +4,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-from cs2pov.application.workspace import WorkspaceSelection
+from cs2pov.application.workspace import WorkspaceSelection, WorkspaceSelectionPortError
 
 
-class WorkspaceSelectionStoreError(Exception):
-    def __init__(self, code, message):
-        self.code, self.message_zh, self.suggestion_zh = code, message, "请检查状态文件后重试。"
-        super().__init__(message)
+class WorkspaceSelectionStoreError(WorkspaceSelectionPortError):
+    pass
 
 
 def default_state_file(*, environ=None, home=None, platform=None):
@@ -33,6 +31,8 @@ def default_state_file(*, environ=None, home=None, platform=None):
         return (Path(base) / "cs2pov" / "state.json").absolute()
     if home is None:
         home = Path.home()
+    if not Path(home).is_absolute():
+        raise WorkspaceSelectionStoreError("selection_state_location_unavailable", "默认 home 状态目录必须是绝对路径。")
     return (Path(home) / ".local" / "state" / "cs2pov" / "state.json").absolute()
 
 
@@ -50,6 +50,8 @@ class JsonWorkspaceSelectionStore:
             raise WorkspaceSelectionStoreError("selection_state_invalid", "状态文件必须是普通文件。")
         try:
             raw = path.read_text(encoding="utf-8")
+        except UnicodeError as exc:
+            raise WorkspaceSelectionStoreError("selection_state_invalid", "状态文件编码无效，请重新选择工作区。") from exc
         except OSError as exc:
             raise WorkspaceSelectionStoreError("selection_state_read_failed", "无法读取工作区选择状态。") from exc
         try:

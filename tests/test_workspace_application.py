@@ -7,9 +7,12 @@ from cs2pov.application.workspace import (
     ForgetWorkspaceResult,
     WorkspaceApplicationService,
     WorkspaceSelection,
+    WorkspaceSelectionPortError,
     WorkspaceUseCaseError,
 )
 from cs2pov.workspace.models import WorkspaceDiagnostic
+from cs2pov.workspace.paths import WorkspacePaths
+from cs2pov.workspace.service import WorkspaceService
 
 
 class FakePort:
@@ -59,7 +62,11 @@ def test_initialize_then_diagnose_then_save(tmp_path):
     view = service.initialize_and_select(tmp_path / "ws")
     assert fake.initialized == 1
     assert port.saved[0].selected_workspace == str((tmp_path / "ws").resolve())
-    json.dumps(view.to_dict())
+    assert view.to_dict() == {
+        "selected_workspace": str((tmp_path / "ws").resolve()),
+        "diagnostic": {"ok": True, "initialized": True, "writable": True,
+                        "free_bytes": 10, "required_free_bytes": 0, "issues": []},
+    }
 
 
 def test_unhealthy_initialize_does_not_save_old_selection(tmp_path):
@@ -90,18 +97,27 @@ def test_show_without_selection_and_forget_are_stable(tmp_path):
     assert error.value.code == "selection_missing"
     result = service.forget_current()
     assert result == ForgetWorkspaceResult(False)
+    assert result.to_dict() == {"forgotten": False}
     assert port.forgotten == 1
 
 
 def test_application_preserves_selection_store_error_code(tmp_path):
     class FailingPort(FakePort):
         def load(self):
-            error = RuntimeError("x")
-            error.code = "selection_state_read_failed"
-            error.message_zh = "读取失败"
-            error.suggestion_zh = "请重试"
-            raise error
+            raise WorkspaceSelectionPortError("selection_state_read_failed", "读取失败", "请重试")
     service = WorkspaceApplicationService(FailingPort(), workspace_service_factory=factory(FakeWorkspace(tmp_path)))
     with pytest.raises(WorkspaceUseCaseError) as caught:
         service.show_current()
     assert caught.value.code == "selection_state_read_failed"
+
+
+def test_show_and_diagnose_return_unhealthy_view_when_selected_workspace_missing(tmp_path):
+    root = tmp_path / "gone"
+    state = WorkspaceSelection(1, str(root))
+    port = FakePort(state)
+    service = WorkspaceApplicationService(port, workspace_service_factory=lambda paths: WorkspaceService(paths, minimum_free_bytes=0))
+    view = service.show_current()
+    assert view.selected_workspace == str(root.resolve())
+    assert view.diagnostic.ok is False
+    assert view.diagnostic.issues[0].code == "workspace_missing"
+    assert port.value == state

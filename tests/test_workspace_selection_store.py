@@ -53,6 +53,14 @@ def test_invalid_json_directory_and_symlink_are_rejected(tmp_path):
         JsonWorkspaceSelectionStore(state).load()
 
 
+def test_invalid_utf8_is_selection_state_invalid(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_bytes(b"\xff\xfe")
+    with pytest.raises(Exception) as caught:
+        JsonWorkspaceSelectionStore(state).load()
+    assert caught.value.code == "selection_state_invalid"
+
+
 def test_forget_only_removes_state_and_is_idempotent(tmp_path):
     state = tmp_path / "state" / "state.json"
     other = state.parent / "other.txt"
@@ -73,6 +81,15 @@ def test_default_state_file_requires_explicit_absolute_environment(monkeypatch, 
     monkeypatch.setenv("CS2POV_STATE_FILE", "relative.json")
     with pytest.raises(Exception):
         default_state_file()
+    monkeypatch.delenv("CS2POV_STATE_FILE")
+    with pytest.raises(Exception) as caught:
+        default_state_file(environ={}, home="relative-home", platform="linux")
+    assert caught.value.code == "selection_state_location_unavailable"
+
+
+def test_selection_rejects_path_object_directly(tmp_path):
+    with pytest.raises(Exception):
+        WorkspaceSelection(1, tmp_path)
 
 
 def test_save_replaces_state_symlink_without_writing_target(tmp_path):

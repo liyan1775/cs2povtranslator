@@ -1,6 +1,6 @@
 from .workspace import (ForgetWorkspaceResult, WorkspaceApplicationService,
                         WorkspaceSelection, WorkspaceSelectionPort,
-                        WorkspaceUseCaseError, WorkspaceView)
+                        WorkspaceSelectionPortError, WorkspaceUseCaseError, WorkspaceView)
 
 __all__ = ["ForgetWorkspaceResult", "WorkspaceApplicationService", "WorkspaceSelection",
-           "WorkspaceSelectionPort", "WorkspaceUseCaseError", "WorkspaceView"]
+           "WorkspaceSelectionPort", "WorkspaceSelectionPortError", "WorkspaceUseCaseError", "WorkspaceView"]

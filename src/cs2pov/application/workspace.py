@@ -21,6 +21,12 @@ class WorkspaceUseCaseError(WorkspaceError):
         super().__init__(message_zh)
 
 
+class WorkspaceSelectionPortError(WorkspaceError):
+    def __init__(self, code, message_zh, suggestion_zh="请检查状态文件后重试。"):
+        self.code, self.message_zh, self.suggestion_zh = code, message_zh, suggestion_zh
+        super().__init__(message_zh)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceSelection:
     schema_version: int
@@ -29,6 +35,8 @@ class WorkspaceSelection:
     def __post_init__(self):
         if type(self.schema_version) is not int or self.schema_version != SELECTION_SCHEMA_VERSION:
             raise ValueError("工作区选择状态版本无效。")
+        if not isinstance(self.selected_workspace, str):
+            raise ValueError("工作区选择路径必须是字符串。")
         self_path = WorkspacePaths(self.selected_workspace)
         object.__setattr__(self, "selected_workspace", str(self_path.root))
 
@@ -102,7 +110,7 @@ class WorkspaceApplicationService:
         selection = WorkspaceSelection(SELECTION_SCHEMA_VERSION, str(paths.root))
         try:
             self.selection_port.save(selection)
-        except Exception as exc:
+        except WorkspaceSelectionPortError as exc:
             raise WorkspaceUseCaseError("selection_state_write_failed", "无法保存当前工作区选择。", "请重试 use 操作。", diagnostic) from exc
         return WorkspaceView(selection.selected_workspace, diagnostic)
 
@@ -119,14 +127,14 @@ class WorkspaceApplicationService:
         selection = WorkspaceSelection(SELECTION_SCHEMA_VERSION, str(paths.root))
         try:
             self.selection_port.save(selection)
-        except Exception as exc:
+        except WorkspaceSelectionPortError as exc:
             raise WorkspaceUseCaseError("selection_state_write_failed", "无法保存当前工作区选择。", "请重试 use 操作。", diagnostic) from exc
         return WorkspaceView(selection.selected_workspace, diagnostic)
 
     def show_current(self):
         try:
             selection = self.selection_port.load()
-        except Exception as exc:
+        except WorkspaceSelectionPortError as exc:
             raise self._error(exc) from exc
         if selection is None:
             raise WorkspaceUseCaseError("selection_missing", "尚未选择工作区。", "请先初始化或使用一个工作区。")
@@ -136,7 +144,7 @@ class WorkspaceApplicationService:
         if root is None:
             try:
                 selection = self.selection_port.load()
-            except Exception as exc:
+            except WorkspaceSelectionPortError as exc:
                 raise self._error(exc) from exc
             if selection is None:
                 raise WorkspaceUseCaseError("selection_missing", "尚未选择工作区。", "请先选择工作区。")
@@ -144,12 +152,10 @@ class WorkspaceApplicationService:
         paths = self._paths(root)
         service = self.workspace_service_factory(paths)
         diagnostic = service.diagnose()
-        if not diagnostic.ok:
-            raise self._error(WorkspaceError(), diagnostic)
         return WorkspaceView(str(paths.root), diagnostic)
 
     def forget_current(self):
         try:
             return ForgetWorkspaceResult(self.selection_port.forget())
-        except Exception as exc:
+        except WorkspaceSelectionPortError as exc:
             raise WorkspaceUseCaseError("selection_state_forget_failed", "无法忘记当前工作区选择。", "请重试 forget 操作。") from exc
