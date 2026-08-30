@@ -65,6 +65,32 @@ def test_checked_in_golden_inputs_match_declared_hashes():
         assert hashlib.sha256(payload).hexdigest() == fixture["sha256"]
 
 
+def test_golden_files_are_checked_out_with_lf_on_every_platform():
+    manifest = _manifest()
+    paths = [
+        fixture["path"]
+        for fixture in manifest["fixtures"]
+        if fixture["storage"] == "checked-in"
+    ] + [
+        output["path"]
+        for output in manifest["legacy_outputs"]
+        if output.get("storage") != "local-only"
+    ]
+
+    result = subprocess.run(
+        ["git", "check-attr", "eol", "--", *paths],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count(": eol: lf") == len(paths), result.stdout
+
+
 def test_timeline_records_round_players_speech_and_understanding_case():
     manifest = _manifest()
     fixture = next(
