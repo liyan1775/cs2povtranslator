@@ -158,6 +158,7 @@ class WorkspaceService:
                 if free < self.minimum_free_bytes:
                     issues.append(WorkspaceIssue("workspace_space_low", "error", "工作区磁盘空间不足。", "释放磁盘空间后重试。"))
             except Exception:
+                free = None
                 issues.append(WorkspaceIssue("workspace_inspection_failed", "error", "无法检查工作区位置。", "请检查磁盘和路径权限后重试。"))
             issues.insert(0, WorkspaceIssue("workspace_missing", "error", "工作区目录尚未创建。", "请先选择目录并执行初始化。"))
             return WorkspaceDiagnostic(False, False, None, free, self.minimum_free_bytes, tuple(issues))
@@ -198,6 +199,7 @@ class WorkspaceService:
             if free < self.minimum_free_bytes:
                 issues.append(WorkspaceIssue("workspace_space_low", "error", "工作区磁盘空间不足。", "释放磁盘空间后重试。"))
         except Exception:
+            free = None
             issues.append(WorkspaceIssue("workspace_inspection_failed", "error", "无法检查工作区磁盘空间。", "请检查磁盘状态后重试。"))
         initialized = not any(i.code in {"workspace_config_missing", "workspace_config_invalid"} for i in issues)
         return WorkspaceDiagnostic(not issues and writable is True, initialized, writable, free, self.minimum_free_bytes, tuple(issues))

@@ -119,7 +119,9 @@ def test_external_managed_symlink_never_receives_directories(tmp_path):
         pytest.skip("symbolic links unavailable")
     with pytest.raises(WorkspaceLayoutError):
         WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).initialize()
-    assert not (outside / "library").exists()
+    assert list(outside.iterdir()) == []
+    assert not (root / "workspace.json").exists()
+    assert not (root / "library").exists()
 
 
 def test_diagnose_is_read_only_and_reports_missing_config_layout_and_space(tmp_path, monkeypatch):
@@ -206,7 +208,7 @@ def test_probe_write_failure_leaves_no_probe_files(tmp_path, monkeypatch):
     with pytest.raises(WorkspaceNotWritableError):
         WorkspaceService(paths, minimum_free_bytes=0).initialize()
     assert calls["probe"] == 1
-    assert not list(paths.root.glob(".workspace-probe-*") )
+    assert not list(paths.root.glob(".workspace-probe-*"))
 
 
 def test_replace_failure_cleans_config_temporary_file(tmp_path, monkeypatch):
@@ -214,7 +216,7 @@ def test_replace_failure_cleans_config_temporary_file(tmp_path, monkeypatch):
     monkeypatch.setattr("cs2pov.workspace.service.os.replace", lambda *_: (_ for _ in ()).throw(OSError("no")))
     with pytest.raises(WorkspaceInitializationError):
         WorkspaceService(paths, minimum_free_bytes=0).initialize()
-    assert not list(paths.root.glob(".workspace-config-*") )
+    assert not list(paths.root.glob(".workspace-config-*"))
 
 
 def test_initialize_mkdir_permission_error_is_stable(tmp_path, monkeypatch):
@@ -239,3 +241,22 @@ def test_diagnose_reports_corrupt_config_missing_layout_readonly_and_low_space_i
     assert [issue.code for issue in diagnostic.issues] == [
         "workspace_config_invalid", "workspace_layout_missing", "workspace_not_writable", "workspace_space_low"
     ]
+
+
+def test_diagnose_missing_root_invalid_free_is_none_and_json_safe(tmp_path):
+    paths = WorkspacePaths(tmp_path / "missing")
+    diagnostic = WorkspaceService(paths, minimum_free_bytes=0,
+                                   disk_usage=lambda _: (0, 0, object())).diagnose()
+    assert [issue.code for issue in diagnostic.issues] == ["workspace_missing", "workspace_inspection_failed"]
+    assert diagnostic.free_bytes is None
+    json.dumps(diagnostic.to_dict())
+
+
+def test_diagnose_existing_root_invalid_free_is_none_and_json_safe(tmp_path):
+    paths = WorkspacePaths(tmp_path / "ws")
+    paths.root.mkdir()
+    diagnostic = WorkspaceService(paths, minimum_free_bytes=0,
+                                   disk_usage=lambda _: (0, 0, object())).diagnose()
+    assert "workspace_inspection_failed" in [issue.code for issue in diagnostic.issues]
+    assert diagnostic.free_bytes is None
+    json.dumps(diagnostic.to_dict())
