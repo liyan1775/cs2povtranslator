@@ -5,8 +5,10 @@
 ## 代码检查
 
 ```powershell
-pytest -q
-python -m compileall -q src scripts
+python scripts/check_repository_hygiene.py --root .
+python -m pytest -q -p no:cacheprovider
+python -m compileall -q src tests scripts
+python scripts/launch_sanity_check.py
 cs2pov --help
 cs2pov setup-check
 cs2pov doctor
@@ -23,6 +25,14 @@ cs2pov doctor
 - `Install_CS2_POV_Translator.bat`
 - `cs2pov-wizard` banner
 - `.bat` launcher banner
+
+创建标签前运行：
+
+```powershell
+python scripts/check_release_version.py "vX.Y.Z" --root .
+```
+
+标签必须指向已验收提交，禁止移动或覆盖已发布标签。
 
 ## 文档检查
 
@@ -64,3 +74,12 @@ cs2pov run "D:\demos\match.dem.zst" `
 - `*.wav`
 - `cs2pov_feedback_*.zip`
 - 真实 API key
+
+## GitHub 检查
+
+- 批次分支已推送并通过 `.github/workflows/ci.yml` 的全部 Linux/Windows 任务。
+- Pull Request 的 diff 只含本批次源码、测试、配置和文档。
+- 不使用 force push 覆盖远程历史。
+- 推送 `vX.Y.Z` 标签后，Release workflow 必须通过。
+- GitHub Release 中 wheel、sdist 和 `SHA256SUMS.txt` 与该标签唯一对应。
+- 原始 Demo、大型视频和硬件 E2E 原始素材默认不作为 Release 资产上传。

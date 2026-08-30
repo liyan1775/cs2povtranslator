@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build and test dependencies
+        run: python -m pip install build -e ".[dev,comms]"
+
+      - name: Verify tag and version markers
+        run: python scripts/check_release_version.py "${GITHUB_REF_NAME}" --root .
+
+      - name: Reject secrets and generated assets
+        run: python scripts/check_repository_hygiene.py --root .
+
+      - name: Run release tests
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Build wheel and source distribution
+        run: python -m build
+
+      - name: Verify built wheel in a clean directory
+        shell: bash
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          cd "${RUNNER_TEMP}"
+          python -c "import cs2pov; print(cs2pov.__version__)"
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS.txt
+
+      - name: Create GitHub Release and upload packages
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          notes_file="RELEASE_NOTES_${tag//./_}.zh.md"
+          if ! gh release view "${tag}" >/dev/null 2>&1; then
+            if [[ -f "${notes_file}" ]]; then
+              gh release create "${tag}" --verify-tag --title "${tag}" --notes-file "${notes_file}"
+            else
+              gh release create "${tag}" --verify-tag --title "${tag}" --generate-notes
+            fi
+          fi
+          gh release upload "${tag}" dist/*.whl dist/*.tar.gz dist/SHA256SUMS.txt --clobber

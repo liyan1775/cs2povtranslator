@@ -12,6 +12,9 @@
 ## 开发与架构
 
 - `ARCHITECTURE.zh.md`：架构说明
+- `baseline/BASELINE_AUDIT.zh.md`：v0.9.8 可信源码、哈希、验证和安全边界审计
+- `plans/2026-08-30-understanding-translation-architecture-design.zh.md`：理解翻译与模块化重构的已确认架构设计
+- `plans/2026-08-30-understanding-translation-implementation-plan.zh.md`：分阶段实施、测试和回滚计划
 - `DEVELOPMENT_WORKFLOW.zh.md`：开发工作流
 - `TESTING_GUIDE.zh.md`：测试指南
 - `SECURITY_AND_PRIVACY.zh.md`：安全与隐私
