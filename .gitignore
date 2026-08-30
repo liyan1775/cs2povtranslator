@@ -12,6 +12,9 @@ dist/
 .venv/
 venv/
 
+# Local Git worktrees
+.worktrees/
+
 # Local outputs and feedback
 output/
 output_*/
