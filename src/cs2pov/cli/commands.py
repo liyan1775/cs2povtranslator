@@ -549,7 +549,8 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
     print(f"demo={args.demo}")
     print(f"models={', '.join(models)} team={args.team_number or '[自动/全部]'} max_rounds={args.max_rounds}")
     for model in models:
-        run_output = output_root / f"bench_{model.replace('/', '_').replace('\\\\', '_')}"
+        safe_model_name = model.replace("/", "_").replace("\\\\", "_")
+        run_output = output_root / f"bench_{safe_model_name}"
         config = PipelineConfig(
             output_root=str(run_output),
             selected_team_number=args.team_number,

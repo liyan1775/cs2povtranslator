@@ -9,6 +9,8 @@
 → 本地真实环境测试
 → 打反馈包
 → 独立核查真实产物
+→ 推送批次分支并等待 GitHub CI
+→ 代码审查和用户验收
 → 小修或冻结
 → 进入下一阶段
 ```
@@ -20,6 +22,19 @@
 3. 每个版本都有明确主题。
 4. 如果当前阶段目标已经达成，就冻结并进入下一阶段。
 5. 真实 demo 验收优先于 mock 测试自嗨。
+6. 日常改动从独立分支/worktree 开始，不直接在 `master` 上开发。
+7. 不 force push，不把 Demo、音视频、模型、工作区、输出或密钥提交到 Git。
+8. 每个已验收批次必须推送 GitHub；合入 `master` 前 CI 必须通过。
+
+## 分支与自动化
+
+- `master`：已验收、可定位、可回滚的主线。
+- `feature/*`、`fix/*`、`chore/*`：单一目的的实施批次。
+- `.github/workflows/ci.yml`：在 Linux/Python 3.11–3.13 和 Windows/Python 3.12 上运行仓库安全扫描、测试、编译和启动自检。
+- `.github/workflows/release.yml`：只在推送 `v*.*.*` 标签时运行；核对标签与包版本、构建 wheel/sdist、生成 SHA-256 并同步 GitHub Release。
+- `scripts/check_repository_hygiene.py`：本地提交前和 CI 中共同使用的敏感文件/大型资产守卫。
+
+Playwright 浏览器 E2E 会在稳定本地 Web 主流程出现后加入同一 CI；阶段 0 不放置只会启动空页面的伪 E2E。
 
 ## 版本阶段示例
 
