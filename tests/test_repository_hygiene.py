@@ -147,3 +147,19 @@ def test_hygiene_rejects_force_added_local_workspace_paths(tmp_path: Path, relat
 
     assert result.returncode == 1, result.stderr
     assert relative in result.stdout
+
+
+def test_hygiene_fails_closed_when_tracked_path_cannot_be_read(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _run_git(repo, "init", "--quiet")
+    blocked = repo / "blocked.txt"
+    blocked.write_text("tracked\n", encoding="utf-8")
+    _run_git(repo, "add", "--", blocked.name)
+    blocked.unlink()
+    blocked.mkdir()
+
+    result = _run_hygiene(repo)
+
+    assert result.returncode == 1, result.stderr
+    assert blocked.name in result.stdout

@@ -68,7 +68,8 @@ def scan_repository(root: Path) -> list[str]:
                 findings.append(f"file exceeds 10 MiB: {relative_path.as_posix()}")
                 continue
             content = path.read_bytes()
-        except OSError:
+        except OSError as exc:
+            findings.append(f"could not inspect file ({type(exc).__name__}): {relative_path.as_posix()}")
             continue
         if any(pattern.search(content) for pattern in PROBABLE_SECRET_PATTERNS):
             findings.append(f"probable secret content: {relative_path.as_posix()}")

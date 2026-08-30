@@ -82,4 +82,5 @@ cs2pov run "D:\demos\match.dem.zst" `
 - 不使用 force push 覆盖远程历史。
 - 推送 `vX.Y.Z` 标签后，Release workflow 必须通过。
 - GitHub Release 中 wheel、sdist 和 `SHA256SUMS.txt` 与该标签唯一对应。
+- Release workflow 发现同标签 Release 已存在时必须失败，禁止自动覆盖既有资产。
 - 原始 Demo、大型视频和硬件 E2E 原始素材默认不作为 Release 资产上传。
