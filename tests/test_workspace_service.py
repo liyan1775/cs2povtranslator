@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -11,16 +12,35 @@ from cs2pov.workspace.errors import (
     WorkspaceInitializationError,
     WorkspaceInsufficientSpaceError,
     WorkspaceLayoutError,
+    WorkspaceNotWritableError,
 )
 from cs2pov.workspace.models import WorkspaceConfig
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.service import WorkspaceService
 
 
+class _FailingProbe:
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def write(self, _value):
+        raise OSError("probe write failed")
+
+    def close(self):
+        return self._wrapped.close()
+
+    @property
+    def name(self):
+        return self._wrapped.name
+
+
 def test_config_round_trip_and_fixed_schema():
     value = WorkspaceConfig(1, 1, "12345678-1234-5678-1234-567812345678", "2026-08-30T12:34:56.123456Z")
     assert list(value.to_dict()) == ["schema_version", "layout_version", "workspace_id", "created_at"]
     assert WorkspaceConfig.from_dict(value.to_dict()) == value
+    shuffled = {"created_at": value.created_at, "workspace_id": value.workspace_id,
+                "layout_version": value.layout_version, "schema_version": value.schema_version}
+    assert WorkspaceConfig.from_dict(shuffled) == value
     for bad in [
         {**value.to_dict(), "extra": 1},
         {**value.to_dict(), "schema_version": 2},
@@ -140,3 +160,82 @@ def test_invalid_minimum_and_disk_usage_are_programming_errors(tmp_path):
     service = WorkspaceService(WorkspacePaths(tmp_path / "ws"), minimum_free_bytes=0, disk_usage=lambda _: object())
     with pytest.raises(WorkspaceInitializationError):
         service.initialize()
+
+
+def test_schema_versions_are_exact_int_not_bool_and_direct_config_is_validated():
+    base = {"schema_version": 1, "layout_version": 1,
+            "workspace_id": "12345678-1234-5678-1234-567812345678",
+            "created_at": "2026-08-30T12:34:56.123456Z"}
+    for key in ("schema_version", "layout_version"):
+        with pytest.raises(WorkspaceConfigError):
+            WorkspaceConfig.from_dict({**base, key: True})
+        with pytest.raises(WorkspaceConfigError):
+            WorkspaceConfig(1 if key == "schema_version" else True,
+                            1 if key == "layout_version" else True,
+                            base["workspace_id"], base["created_at"])
+
+
+def test_invalid_id_clock_and_usage_never_write_config(tmp_path):
+    paths = WorkspacePaths(tmp_path / "ws")
+    with pytest.raises(WorkspaceConfigError):
+        WorkspaceService(paths, minimum_free_bytes=0, id_factory=lambda: "bad").initialize()
+    assert not paths.config_file.exists()
+    with pytest.raises(WorkspaceConfigError):
+        WorkspaceService(paths, minimum_free_bytes=0, clock=lambda: datetime(2026, 1, 1)).initialize()
+    assert not paths.config_file.exists()
+
+
+def test_missing_root_diagnose_validates_space_and_orders_low_space(tmp_path):
+    paths = WorkspacePaths(tmp_path / "missing")
+    low = WorkspaceService(paths, minimum_free_bytes=100, disk_usage=lambda _: (0, 0, 99)).diagnose()
+    assert [issue.code for issue in low.issues] == ["workspace_missing", "workspace_space_low"]
+    invalid = WorkspaceService(paths, minimum_free_bytes=0, disk_usage=lambda _: object()).diagnose()
+    assert [issue.code for issue in invalid.issues] == ["workspace_missing", "workspace_inspection_failed"]
+
+
+def test_probe_write_failure_leaves_no_probe_files(tmp_path, monkeypatch):
+    paths = WorkspacePaths(tmp_path / "ws")
+    real_open = tempfile.NamedTemporaryFile
+    calls = {"probe": 0}
+    def failing_probe(*args, **kwargs):
+        if kwargs.get("prefix") == ".workspace-probe-":
+            calls["probe"] += 1
+            return _FailingProbe(real_open(*args, **kwargs))
+        return real_open(*args, **kwargs)
+    monkeypatch.setattr("cs2pov.workspace.service.tempfile.NamedTemporaryFile", failing_probe)
+    with pytest.raises(WorkspaceNotWritableError):
+        WorkspaceService(paths, minimum_free_bytes=0).initialize()
+    assert calls["probe"] == 1
+    assert not list(paths.root.glob(".workspace-probe-*") )
+
+
+def test_replace_failure_cleans_config_temporary_file(tmp_path, monkeypatch):
+    paths = WorkspacePaths(tmp_path / "ws")
+    monkeypatch.setattr("cs2pov.workspace.service.os.replace", lambda *_: (_ for _ in ()).throw(OSError("no")))
+    with pytest.raises(WorkspaceInitializationError):
+        WorkspaceService(paths, minimum_free_bytes=0).initialize()
+    assert not list(paths.root.glob(".workspace-config-*") )
+
+
+def test_initialize_mkdir_permission_error_is_stable(tmp_path, monkeypatch):
+    paths = WorkspacePaths(tmp_path / "ws")
+    real_mkdir = Path.mkdir
+    def deny_models(self, *args, **kwargs):
+        if self == paths.models_dir:
+            raise PermissionError("denied")
+        return real_mkdir(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", deny_models)
+    with pytest.raises(WorkspaceLayoutError):
+        WorkspaceService(paths, minimum_free_bytes=0).initialize()
+
+
+def test_diagnose_reports_corrupt_config_missing_layout_readonly_and_low_space_in_order(tmp_path, monkeypatch):
+    paths = WorkspacePaths(tmp_path / "ws")
+    WorkspaceService(paths, minimum_free_bytes=0).initialize()
+    paths.config_file.write_text("{}", encoding="utf-8")
+    paths.audio_cache_dir.rmdir()
+    monkeypatch.setattr("cs2pov.workspace.service.os.access", lambda *_: False)
+    diagnostic = WorkspaceService(paths, minimum_free_bytes=100, disk_usage=lambda _: (0, 0, 99)).diagnose()
+    assert [issue.code for issue in diagnostic.issues] == [
+        "workspace_config_invalid", "workspace_layout_missing", "workspace_not_writable", "workspace_space_low"
+    ]

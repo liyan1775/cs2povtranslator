@@ -72,14 +72,20 @@ class WorkspaceService:
 
     def _probe(self) -> None:
         probe_name = None
+        handle = None
         try:
             handle = tempfile.NamedTemporaryFile(dir=self.paths.root, prefix=".workspace-probe-", delete=False)
             probe_name = handle.name
             handle.write(b"ok")
-            handle.close()
+            handle.flush()
         except Exception as exc:
             raise WorkspaceNotWritableError("工作区不可写，请选择可写目录或修复权限。") from exc
         finally:
+            if handle is not None:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
             if probe_name:
                 try:
                     Path(probe_name).unlink(missing_ok=True)
@@ -105,8 +111,11 @@ class WorkspaceService:
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise WorkspaceConfigError("创建时间必须带时区，请提供 UTC 时间。")
         now_utc = now.astimezone(timezone.utc)
+        workspace_id = self.id_factory()
+        if not isinstance(workspace_id, UUID):
+            raise WorkspaceConfigError("工作区 ID 工厂返回值无效，请重试或修复配置。")
         config = WorkspaceConfig(WORKSPACE_SCHEMA_VERSION, WORKSPACE_LAYOUT_VERSION,
-                                 str(self.id_factory()), now_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+                                 str(workspace_id), now_utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
         temporary = None
         try:
             with tempfile.NamedTemporaryFile(dir=self.paths.root, prefix=".workspace-config-", suffix=".tmp",
@@ -144,6 +153,10 @@ class WorkspaceService:
                     parent = parent.parent
                 usage = self.disk_usage(parent)
                 free = usage.free if hasattr(usage, "free") else usage[2]
+                if not isinstance(free, int) or free < 0:
+                    raise ValueError
+                if free < self.minimum_free_bytes:
+                    issues.append(WorkspaceIssue("workspace_space_low", "error", "工作区磁盘空间不足。", "释放磁盘空间后重试。"))
             except Exception:
                 issues.append(WorkspaceIssue("workspace_inspection_failed", "error", "无法检查工作区位置。", "请检查磁盘和路径权限后重试。"))
             issues.insert(0, WorkspaceIssue("workspace_missing", "error", "工作区目录尚未创建。", "请先选择目录并执行初始化。"))
