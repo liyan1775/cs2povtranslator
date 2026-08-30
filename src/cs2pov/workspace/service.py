@@ -25,7 +25,7 @@ class WorkspaceService:
     def __init__(self, paths: WorkspacePaths, *, minimum_free_bytes: int = DEFAULT_MINIMUM_FREE_BYTES,
                  id_factory: Callable[[], UUID] = uuid4, clock: Callable[[], datetime] = utc_now,
                  disk_usage: Callable[[Path], object] = shutil.disk_usage) -> None:
-        if not isinstance(minimum_free_bytes, int) or minimum_free_bytes < 0:
+        if type(minimum_free_bytes) is not int or minimum_free_bytes < 0:
             raise ValueError("minimum_free_bytes 必须是非负整数。")
         self.paths, self.minimum_free_bytes = paths, minimum_free_bytes
         self.id_factory, self.clock, self.disk_usage = id_factory, clock, disk_usage
@@ -37,7 +37,7 @@ class WorkspaceService:
         try:
             usage = self.disk_usage(parent)
             free = usage.free if hasattr(usage, "free") else usage[2]
-            if not isinstance(free, int) or free < 0:
+            if type(free) is not int or free < 0:
                 raise ValueError
             return free
         except Exception as exc:
@@ -153,7 +153,7 @@ class WorkspaceService:
                     parent = parent.parent
                 usage = self.disk_usage(parent)
                 free = usage.free if hasattr(usage, "free") else usage[2]
-                if not isinstance(free, int) or free < 0:
+                if type(free) is not int or free < 0:
                     raise ValueError
                 if free < self.minimum_free_bytes:
                     issues.append(WorkspaceIssue("workspace_space_low", "error", "工作区磁盘空间不足。", "释放磁盘空间后重试。"))
@@ -176,7 +176,8 @@ class WorkspaceService:
             self.load_config()
         except WorkspaceConfigError:
             config_bad = True
-            config_code = "workspace_config_missing" if not self.paths.config_file.exists() else "workspace_config_invalid"
+            config_present = self.paths.config_file.exists() or self.paths.config_file.is_symlink()
+            config_code = "workspace_config_invalid" if config_present else "workspace_config_missing"
         if config_bad:
             issues.append(WorkspaceIssue(config_code, "error", "工作区配置缺失或损坏。", "请恢复有效配置或重新选择工作区。"))
         missing = any(not d.is_dir() for d in self.paths.all_directories())
@@ -194,7 +195,7 @@ class WorkspaceService:
         try:
             usage = self.disk_usage(root)
             free = usage.free if hasattr(usage, "free") else usage[2]
-            if not isinstance(free, int) or free < 0:
+            if type(free) is not int or free < 0:
                 raise ValueError
             if free < self.minimum_free_bytes:
                 issues.append(WorkspaceIssue("workspace_space_low", "error", "工作区磁盘空间不足。", "释放磁盘空间后重试。"))

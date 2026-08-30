@@ -260,3 +260,33 @@ def test_diagnose_existing_root_invalid_free_is_none_and_json_safe(tmp_path):
     assert "workspace_inspection_failed" in [issue.code for issue in diagnostic.issues]
     assert diagnostic.free_bytes is None
     json.dumps(diagnostic.to_dict())
+
+
+def test_boolean_capacity_values_are_rejected(tmp_path):
+    paths = WorkspacePaths(tmp_path / "ws")
+    for value in (False, True):
+        with pytest.raises(ValueError):
+            WorkspaceService(paths, minimum_free_bytes=value)
+
+        service = WorkspaceService(paths, minimum_free_bytes=0,
+                                   disk_usage=lambda _, free=value: (0, 0, free))
+        with pytest.raises(WorkspaceInitializationError):
+            service.initialize()
+        diagnostic = service.diagnose()
+        assert "workspace_inspection_failed" in [issue.code for issue in diagnostic.issues]
+        assert diagnostic.free_bytes is None
+
+
+def test_broken_config_symlink_is_invalid_not_missing(tmp_path):
+    paths = WorkspacePaths(tmp_path / "ws")
+    paths.root.mkdir()
+    try:
+        paths.config_file.symlink_to(paths.root / "missing-config-target.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symbolic links unavailable")
+
+    diagnostic = WorkspaceService(paths, minimum_free_bytes=0).diagnose()
+
+    codes = [issue.code for issue in diagnostic.issues]
+    assert "workspace_config_invalid" in codes
+    assert "workspace_config_missing" not in codes
