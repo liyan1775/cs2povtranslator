@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Callable, Mapping
 
 from cs2pov.application.workspace import WorkspaceSelectionPort, WorkspaceSelectionPortError
-from cs2pov.workspace.errors import WorkspaceError
+from cs2pov.workspace.errors import WorkspaceConfigError, WorkspaceError
 from cs2pov.workspace.models import WorkspaceDiagnostic
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.service import WorkspaceService
@@ -64,7 +64,10 @@ class WorkspaceRuntimeResolver:
         if not diagnostic.initialized:
             issue = diagnostic.issues[0] if diagnostic.issues else None
             raise WorkspaceRuntimeError("workspace_unhealthy", issue.message_zh if issue else "工作区配置无效。", issue.suggestion_zh if issue else "请初始化工作区后重试。", diagnostic)
-        config = service.load_config()
+        try:
+            config = service.load_config()
+        except WorkspaceConfigError as exc:
+            raise WorkspaceRuntimeError("workspace_unhealthy", str(exc), "请修复工作区配置后重试。", diagnostic) from exc
         return WorkspaceRuntime(paths.root, config.workspace_id, config.schema_version, config.layout_version)
 
     def resolve_selected(self) -> WorkspaceRuntime:

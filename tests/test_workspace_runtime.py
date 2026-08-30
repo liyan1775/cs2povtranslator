@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 
 from cs2pov.application.workspace import WorkspaceSelection
+from cs2pov.application.workspace import WorkspaceSelectionPortError
+from cs2pov.workspace.errors import WorkspaceConfigError
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore
 from cs2pov.workspace.paths import WorkspacePaths
@@ -72,3 +74,85 @@ def test_resolver_does_not_mask_unexpected_runtime_error(tmp_path):
     store.save(WorkspaceSelection(1, str(root)))
     with pytest.raises(RuntimeError, match="programming bug"):
         WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: BadService()).resolve_selected()
+
+
+def test_selection_store_error_preserves_structured_contract(tmp_path):
+    class BadStore:
+        def load(self):
+            raise WorkspaceSelectionPortError("selection_state_read_failed", "读取失败", "请重试")
+    with pytest.raises(WorkspaceRuntimeError) as caught:
+        WorkspaceRuntimeResolver(BadStore()).resolve_selected()
+    assert (caught.value.code, caught.value.message_zh, caught.value.suggestion_zh) == ("selection_state_read_failed", "读取失败", "请重试")
+
+
+@pytest.mark.parametrize("config_mode", ["missing", "corrupt"])
+def test_real_config_failures_are_unhealthy_with_diagnostic(tmp_path, config_mode):
+    root = prepare_workspace(tmp_path)
+    config = root / "workspace.json"
+    if config_mode == "missing":
+        config.unlink()
+    else:
+        config.write_text("{}", encoding="utf-8")
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    with pytest.raises(WorkspaceRuntimeError) as caught:
+        WorkspaceRuntimeResolver(store).resolve_selected()
+    assert caught.value.code == "workspace_unhealthy"
+    assert caught.value.diagnostic is not None
+
+
+@pytest.mark.parametrize("failure", ["layout", "writable", "space"])
+def test_resolve_for_write_rejects_unhealthy_without_repair_or_selection_change(tmp_path, monkeypatch, failure):
+    root = prepare_workspace(tmp_path)
+    paths = WorkspacePaths(root)
+    original = WorkspaceSelection(1, str(root))
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(original)
+    if failure == "layout":
+        paths.models_dir.rmdir()
+    elif failure == "writable":
+        monkeypatch.setattr(os, "access", lambda *_: False)
+    factory = (lambda p: WorkspaceService(p, minimum_free_bytes=100, disk_usage=lambda _: (0, 0, 1))) if failure == "space" else WorkspaceService
+    with pytest.raises(WorkspaceRuntimeError) as caught:
+        WorkspaceRuntimeResolver(store, workspace_service_factory=factory).resolve_for_write()
+    assert caught.value.code == "workspace_unhealthy"
+    assert store.load() == original
+    assert not (root / "new-output").exists()
+    if failure == "layout":
+        assert not paths.models_dir.exists()
+
+
+def test_read_resolution_allows_low_space_and_unwritable_health(tmp_path, monkeypatch):
+    root = prepare_workspace(tmp_path)
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    low = WorkspaceRuntimeResolver(store, workspace_service_factory=lambda p: WorkspaceService(p, minimum_free_bytes=100, disk_usage=lambda _: (0, 0, 1))).resolve_selected()
+    assert low.root == root.resolve()
+    monkeypatch.setattr(os, "access", lambda *_: False)
+    writable = WorkspaceRuntimeResolver(store).resolve_selected()
+    assert writable.workspace_id == low.workspace_id
+
+
+def test_runtime_metadata_and_all_paths_are_exact_snapshot(tmp_path):
+    root = prepare_workspace(tmp_path)
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    runtime = WorkspaceRuntimeResolver(store).resolve_selected()
+    config = WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).load_config()
+    assert (runtime.workspace_id, runtime.workspace_schema_version, runtime.workspace_layout_version, runtime.path_policy_version) == (config.workspace_id, 1, 1, 1)
+    assert all(path.is_relative_to(runtime.root) for path in runtime.paths.all_directories())
+
+
+def test_config_disappearing_after_diagnosis_maps_to_unhealthy(tmp_path):
+    root = prepare_workspace(tmp_path)
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    class RacyService:
+        def diagnose(self):
+            return WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).diagnose()
+        def load_config(self):
+            raise WorkspaceConfigError("workspace.json vanished after diagnosis")
+    with pytest.raises(WorkspaceRuntimeError) as caught:
+        WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: RacyService()).resolve_selected()
+    assert caught.value.code == "workspace_unhealthy"
+    assert caught.value.diagnostic is not None
