@@ -132,34 +132,49 @@ def test_select_existing_real_service_never_repairs_missing_bad_or_incomplete_wo
     old = WorkspaceSelection(1, str(tmp_path / "old"))
     for kind in ("missing", "bad", "incomplete"):
         root = tmp_path / kind
+        config_bytes = None
         if kind == "bad":
             root.mkdir()
-            (root / "workspace.json").write_text("{}", encoding="utf-8")
+            config_bytes = b"{}\n"
+            (root / "workspace.json").write_bytes(config_bytes)
         elif kind == "incomplete":
             WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).initialize()
+            config_bytes = (root / "workspace.json").read_bytes()
             (root / "models").rmdir()
         port = FakePort(old)
         app = WorkspaceApplicationService(port)
         with pytest.raises(WorkspaceUseCaseError):
             app.select_existing(root)
         assert port.value == old
-        assert not (root / "models").exists() if kind == "missing" else True
+        if kind == "missing":
+            assert not root.exists()
+        elif kind == "bad":
+            assert (root / "workspace.json").read_bytes() == config_bytes
+            assert not (root / "models").exists()
+        else:
+            assert (root / "workspace.json").read_bytes() == config_bytes
+            assert not (root / "models").exists()
 
 
 def test_initialize_save_failure_preserves_real_workspace_and_can_recover(tmp_path):
     root = tmp_path / "new"
     old = WorkspaceSelection(1, str(tmp_path / "old"))
+    old_snapshot = old
     class FailingPort(FakePort):
         def save(self, selection):
             raise WorkspaceSelectionPortError("selection_state_write_failed", "写入失败", "重试")
-    app = WorkspaceApplicationService(FailingPort(old))
+    failing_port = FailingPort(old)
+    app = WorkspaceApplicationService(failing_port)
     with pytest.raises(WorkspaceUseCaseError):
         app.initialize_and_select(root)
     assert (root / "workspace.json").exists()
+    config_bytes = (root / "workspace.json").read_bytes()
+    assert failing_port.value == old_snapshot
     assert all(path.is_dir() for path in WorkspacePaths(root).all_directories())
     store = JsonWorkspaceSelectionStore(tmp_path / "state" / "state.json")
     recovered = WorkspaceApplicationService(store).select_existing(root)
     assert recovered.selected_workspace == str(root.resolve())
+    assert (root / "workspace.json").read_bytes() == config_bytes
 
 
 def test_explicit_diagnose_does_not_change_selection_even_when_unhealthy(tmp_path):
@@ -226,3 +241,12 @@ def test_unexpected_port_runtime_error_is_not_disguised(tmp_path):
             raise RuntimeError("programming bug")
     with pytest.raises(RuntimeError, match="programming bug"):
         WorkspaceApplicationService(BadPort()).show_current()
+
+
+@pytest.mark.parametrize("root", ["", "relative-root"])
+def test_invalid_root_maps_to_concrete_workspace_root_error(tmp_path, root):
+    with pytest.raises(WorkspaceUseCaseError) as caught:
+        WorkspaceApplicationService(FakePort()).initialize_and_select(root)
+    assert caught.value.code == "workspace_root_invalid"
+    assert caught.value.message_zh
+    assert caught.value.suggestion_zh

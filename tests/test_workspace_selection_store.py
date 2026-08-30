@@ -149,7 +149,7 @@ def test_save_fsync_and_replace_fail_preserve_old_state_and_cleanup(tmp_path, mo
     assert not list(state.parent.glob(".state-*"))
 
 
-def test_forget_symlink_and_unlink_failure(tmp_path, monkeypatch):
+def test_forget_symlink_only_removes_link(tmp_path):
     state, target = tmp_path / "state.json", tmp_path / "target.json"
     target.write_bytes(b"target")
     try:
@@ -158,12 +158,18 @@ def test_forget_symlink_and_unlink_failure(tmp_path, monkeypatch):
         pytest.skip("symbolic links unavailable")
     assert JsonWorkspaceSelectionStore(state).forget() is True
     assert target.read_bytes() == b"target"
+
+
+def test_forget_unlink_failure_preserves_state(tmp_path, monkeypatch):
+    state = tmp_path / "state.json"
     state.write_text("x", encoding="utf-8")
+    original = state.read_bytes()
     monkeypatch.setattr(Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no")))
     with pytest.raises(WorkspaceSelectionStoreError) as caught:
         JsonWorkspaceSelectionStore(state).forget()
     assert caught.value.code == "selection_state_forget_failed"
     assert state.exists()
+    assert state.read_bytes() == original
 
 
 def test_default_state_file_all_platform_branches_are_absolute_and_isolated(tmp_path):
