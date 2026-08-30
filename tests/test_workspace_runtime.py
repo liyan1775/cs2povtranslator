@@ -65,6 +65,31 @@ def test_runtime_snapshot_survives_selection_switch_and_environment_isolated(tmp
     assert os.environ.copy() == before
 
 
+def test_environment_overrides_cover_all_managed_keys_and_are_copies(tmp_path):
+    root = prepare_workspace(tmp_path)
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    runtime = WorkspaceRuntimeResolver(store).resolve_selected()
+    expected = {
+        "HF_HOME": str(runtime.paths.huggingface_cache_dir),
+        "HF_HUB_CACHE": str(runtime.paths.huggingface_hub_cache_dir),
+        "HUGGINGFACE_HUB_CACHE": str(runtime.paths.huggingface_hub_cache_dir),
+        "TMP": str(runtime.paths.temp_dir), "TEMP": str(runtime.paths.temp_dir),
+        "TMPDIR": str(runtime.paths.temp_dir),
+    }
+    assert runtime.environment_overrides() == expected
+    changed = runtime.environment_overrides(); changed["HF_HOME"] = "changed"
+    assert runtime.environment_overrides() == expected
+    parent = os.environ.copy(); os.environ["RUNTIME_TEST_PARENT"] = "keep"
+    try:
+        child = runtime.subprocess_environment(None)
+        assert child["RUNTIME_TEST_PARENT"] == "keep"
+        assert {key: child[key] for key in expected} == expected
+        assert os.environ["RUNTIME_TEST_PARENT"] == "keep"
+    finally:
+        os.environ.clear(); os.environ.update(parent)
+
+
 def test_resolver_does_not_mask_unexpected_runtime_error(tmp_path):
     class BadService:
         def diagnose(self):
@@ -73,6 +98,27 @@ def test_resolver_does_not_mask_unexpected_runtime_error(tmp_path):
     store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
     store.save(WorkspaceSelection(1, str(root)))
     with pytest.raises(RuntimeError, match="programming bug"):
+        WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: BadService()).resolve_selected()
+
+
+def test_resolver_does_not_mask_port_runtime_error(tmp_path):
+    class BadPort:
+        def load(self):
+            raise RuntimeError("port bug")
+    with pytest.raises(RuntimeError, match="port bug"):
+        WorkspaceRuntimeResolver(BadPort()).resolve_selected()
+
+
+def test_resolver_does_not_mask_load_runtime_error(tmp_path):
+    root = prepare_workspace(tmp_path)
+    store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
+    store.save(WorkspaceSelection(1, str(root)))
+    class BadService:
+        def diagnose(self):
+            return WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).diagnose()
+        def load_config(self):
+            raise RuntimeError("load bug")
+    with pytest.raises(RuntimeError, match="load bug"):
         WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: BadService()).resolve_selected()
 
 
@@ -99,6 +145,9 @@ def test_real_config_failures_are_unhealthy_with_diagnostic(tmp_path, config_mod
         WorkspaceRuntimeResolver(store).resolve_selected()
     assert caught.value.code == "workspace_unhealthy"
     assert caught.value.diagnostic is not None
+    assert caught.value.diagnostic.ok is False
+    assert caught.value.diagnostic.initialized is False
+    assert caught.value.diagnostic.issues[0].code == ("workspace_config_missing" if config_mode == "missing" else "workspace_config_invalid")
 
 
 @pytest.mark.parametrize("failure", ["layout", "writable", "space"])
@@ -148,11 +197,22 @@ def test_config_disappearing_after_diagnosis_maps_to_unhealthy(tmp_path):
     store = JsonWorkspaceSelectionStore(tmp_path / "state.json")
     store.save(WorkspaceSelection(1, str(root)))
     class RacyService:
+        def __init__(self):
+            self.inner = WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0)
+            self.first = True
         def diagnose(self):
-            return WorkspaceService(WorkspacePaths(root), minimum_free_bytes=0).diagnose()
+            diagnostic = self.inner.diagnose()
+            if self.first:
+                self.first = False
+                (root / "workspace.json").unlink()
+            return diagnostic
         def load_config(self):
-            raise WorkspaceConfigError("workspace.json vanished after diagnosis")
+            return self.inner.load_config()
+    service = RacyService()
     with pytest.raises(WorkspaceRuntimeError) as caught:
-        WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: RacyService()).resolve_selected()
+        WorkspaceRuntimeResolver(store, workspace_service_factory=lambda _: service).resolve_selected()
     assert caught.value.code == "workspace_unhealthy"
     assert caught.value.diagnostic is not None
+    assert caught.value.diagnostic.ok is False
+    assert caught.value.diagnostic.initialized is False
+    assert caught.value.diagnostic.issues[0].code == "workspace_config_missing"

@@ -67,7 +67,9 @@ class WorkspaceRuntimeResolver:
         try:
             config = service.load_config()
         except WorkspaceConfigError as exc:
-            raise WorkspaceRuntimeError("workspace_unhealthy", str(exc), "请修复工作区配置后重试。", diagnostic) from exc
+            fresh_diagnostic = service.diagnose()
+            issue = fresh_diagnostic.issues[0] if fresh_diagnostic.issues else None
+            raise WorkspaceRuntimeError("workspace_unhealthy", issue.message_zh if issue else str(exc), issue.suggestion_zh if issue else "请修复工作区配置后重试。", fresh_diagnostic) from exc
         return WorkspaceRuntime(paths.root, config.workspace_id, config.schema_version, config.layout_version)
 
     def resolve_selected(self) -> WorkspaceRuntime:
