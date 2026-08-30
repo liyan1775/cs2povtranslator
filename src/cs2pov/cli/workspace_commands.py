@@ -63,11 +63,22 @@ def run_workspace(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif result["ok"]:
         if args.workspace_cmd == "forget":
-            print("已忘记当前工作区选择；不会删除工作区文件。")
+            if result.get("forgotten"):
+                print("已忘记当前工作区路径指针；不会删除工作区文件。")
+            else:
+                print("当前没有已保存选择；不会删除工作区文件。")
         else:
             print(f"当前工作区：{result.get('selected_workspace')}")
             print("状态：健康" if result.get("diagnostic", {}).get("ok") else "状态：需要修复")
     else:
-        print(f"操作失败：{result['error']['message_zh']}")
-        print(f"建议：{result['error']['suggestion_zh']}")
+        diagnostic = result.get("diagnostic")
+        if diagnostic is not None:
+            print(f"当前工作区：{result.get('selected_workspace')}")
+            print("状态：需要修复")
+            for issue in diagnostic.get("issues", []):
+                print(issue["message_zh"])
+                print(f"建议：{issue['suggestion_zh']}")
+        else:
+            print(f"操作失败：{result['error']['message_zh']}")
+            print(f"建议：{result['error']['suggestion_zh']}")
     return code

@@ -78,12 +78,13 @@ def print_banner() -> None:
     print("遇到问题：先选 3 看状态；要发给开发者就选 4 打包反馈包。")
     try:
         from cs2pov.application.workspace import WorkspaceApplicationService, WorkspaceUseCaseError
+        from cs2pov.application.workspace import WorkspaceSelectionPortError
         from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
         view = WorkspaceApplicationService(JsonWorkspaceSelectionStore(default_state_file())).show_current()
         status = "已选择" if view.diagnostic.ok else "需要修复"
     except WorkspaceUseCaseError as exc:
         status = "未选择" if exc.code == "selection_missing" else "需要修复"
-    except Exception:
+    except (WorkspaceUseCaseError, WorkspaceSelectionPortError):
         status = "需要修复"
     print(f"工作区状态：{status}")
 
@@ -190,7 +191,7 @@ def run_workspace_menu() -> None:
     print("5. 忘记当前选择")
     choice = _read_choice("请选择 [3]\n> ", default="3")
     if choice in {"1", "2"}:
-        path = _read_choice("请输入工作区绝对路径\n> ")
+        path = _read_choice("请输入工作区绝对路径\n> ").strip().strip('"')
         run_workspace(argparse.Namespace(workspace_cmd="init" if choice == "1" else "use", path=path, json=False))
     elif choice == "3":
         run_workspace(argparse.Namespace(workspace_cmd="show", path=None, json=False))

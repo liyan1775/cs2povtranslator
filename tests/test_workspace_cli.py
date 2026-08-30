@@ -65,3 +65,46 @@ def test_launcher_homepage_reports_workspace_status_without_creating_state(tmp_p
     assert result.returncode == 0
     assert "工作区状态：未选择" in result.stdout
     assert not (tmp_path / "state").exists()
+
+
+def test_non_json_show_and_doctor_unhealthy_are_friendly(tmp_path):
+    env = dict(__import__("os").environ)
+    env.update({"PYTHONUTF8": "1", "PYTHONPATH": str(Path.cwd() / "src"), "CS2POV_STATE_FILE": str(tmp_path / "state.json")})
+    root = tmp_path / "missing"
+    state = {"schema_version": 1, "selected_workspace": str(root)}
+    (tmp_path / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    show = run_cli(["workspace", "show"], env)
+    doctor = run_cli(["workspace", "doctor", str(root)], env)
+    for result in (show, doctor):
+        assert result.returncode == 1
+        assert "状态：需要修复" in result.stdout
+        assert "处理失败" not in result.stdout
+        assert "Traceback" not in result.stderr
+
+
+def test_forget_false_text_does_not_claim_forgotten(tmp_path):
+    env = dict(__import__("os").environ)
+    env.update({"PYTHONUTF8": "1", "PYTHONPATH": str(Path.cwd() / "src"), "CS2POV_STATE_FILE": str(tmp_path / "state.json")})
+    result = run_cli(["workspace", "forget"], env)
+    assert result.returncode == 0
+    assert "当前没有已保存选择" in result.stdout
+    assert "已忘记当前工作区选择" not in result.stdout
+
+
+def test_launcher_accepts_quoted_workspace_path(tmp_path):
+    env = dict(__import__("os").environ)
+    env.update({"PYTHONUTF8": "1", "PYTHONPATH": str(Path.cwd() / "src"), "CS2POV_STATE_FILE": str(tmp_path / "state.json")})
+    root = tmp_path / "quoted workspace"
+    result = subprocess.run([sys.executable, "-m", "cs2pov.cli.launcher", "--once"], input=f"6\n10\n1\n\"{root}\"\n", capture_output=True, text=True, encoding="utf-8", env=env)
+    assert result.returncode == 0
+    show = run_cli(["workspace", "show", "--json"], env)
+    assert show.returncode == 0
+    assert json.loads(show.stdout)["selected_workspace"] == str(root.resolve())
+
+
+def test_launcher_banner_does_not_hide_unexpected_runtime_error(monkeypatch):
+    import cs2pov.storage.workspace_selection_store as store
+    monkeypatch.setattr(store, "default_state_file", lambda: (_ for _ in ()).throw(RuntimeError("bug")))
+    from cs2pov.cli.launcher import print_banner
+    with pytest.raises(RuntimeError, match="bug"):
+        print_banner()
