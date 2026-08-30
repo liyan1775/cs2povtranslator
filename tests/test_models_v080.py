@@ -71,6 +71,35 @@ def test_model_override_non_json_is_user_readable(monkeypatch, tmp_path, capsys)
     assert "已弃用" in output
 
 
+def test_deprecated_set_cache_and_config_cache_are_zero_write(monkeypatch, tmp_path, capsys):
+    from cs2pov.cli.commands import main
+    import cs2pov.storage.config_store as store
+    config = tmp_path / "config.json"
+    config.write_text('{"llm_model":"OLD"}\n', encoding="utf-8")
+    monkeypatch.setattr(store, "CONFIG_PATH", config)
+    monkeypatch.setattr(store, "CONFIG_DIR", tmp_path)
+    out = tmp_path / "out"
+    assert main(["models", "set-cache", str(out)]) == 1
+    assert not out.exists()
+    before = config.read_bytes()
+    assert main(["config", "set", "--model", "NEW", "--whisper-cache-dir", str(out)]) == 1
+    assert config.read_bytes() == before and not out.exists()
+
+
+def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path):
+    from cs2pov.cli import model_manager
+    import pytest
+    with pytest.raises(TypeError): model_manager.cache_candidates()
+    with pytest.raises(TypeError): model_manager.scan_downloaded_models()
+    runtime = _runtime(tmp_path)
+    for root, name in ((runtime.paths.whisper_cache_dir, "small"), (runtime.paths.huggingface_hub_cache_dir, "small"), (runtime.paths.huggingface_hub_cache_dir, "base")):
+        folder = root / f"models--x--faster-whisper-{name}"
+        folder.mkdir(parents=True)
+        (folder / "x").write_bytes(b"1")
+    rows = model_manager.scan_current_models(runtime)
+    assert [(r["name"], r["source"]) for r in rows] == [("small", "workspace_whisper"), ("base", "workspace_huggingface_hub")]
+
+
 def test_quality_profile_maps_to_small_cpu_int8():
     cfg = profile_to_config("quality")
     assert cfg["whisper_model"] == "small"

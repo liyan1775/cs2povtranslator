@@ -7,7 +7,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
 
-from cs2pov.storage.config_store import load_config, save_config
+from cs2pov.storage.config_store import load_config
 from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 
@@ -95,26 +95,6 @@ def apply_profile_to_values(
     if whisper_compute_type is not None:
         base["whisper_compute_type"] = whisper_compute_type
     return base
-
-
-def configured_cache_dir() -> Path | None:
-    cfg = load_config()
-    value = cfg.get("whisper_cache_dir")
-    if value:
-        return Path(str(value)).expanduser()
-    return None
-
-
-def default_hf_cache_dir() -> Path:
-    # Mirrors the common Hugging Face cache convention.  Users can override it
-    # with HF_HOME / HF_HUB_CACHE or this tool's project-level whisper_cache_dir.
-    hf_hub_cache = os.environ.get("HF_HUB_CACHE")
-    if hf_hub_cache:
-        return Path(hf_hub_cache).expanduser()
-    hf_home = os.environ.get("HF_HOME")
-    if hf_home:
-        return Path(hf_home).expanduser() / "hub"
-    return Path.home() / ".cache" / "huggingface" / "hub"
 
 
 def cache_candidates(runtime: WorkspaceRuntime) -> list[Path]:
@@ -213,6 +193,17 @@ def scan_legacy_models(candidates):
     return rows
 
 
+def _legacy_candidates_for_runtime(runtime, *, config=None, environ=None, home=None):
+    cfg = load_config() if config is None else config
+    env = os.environ if environ is None else environ
+    default = (Path.home() if home is None else Path(home)) / ".cache" / "huggingface" / "hub"
+    return scan_legacy_candidates(
+        configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None,
+        hf_home=Path(env["HF_HOME"]) if env.get("HF_HOME") else None,
+        hf_hub_cache=Path(env["HF_HUB_CACHE"]) if env.get("HF_HUB_CACHE") else None,
+        default_hf=default, runtime=runtime)
+
+
 def scan_downloaded_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
     return scan_current_models(runtime)
 
@@ -238,7 +229,7 @@ def build_models_info(runtime: WorkspaceRuntime) -> dict[str, Any]:
     return {
         "workspace_cache": {"whisper": str(runtime.paths.whisper_cache_dir), "huggingface_hub": str(runtime.paths.huggingface_hub_cache_dir)},
         "deprecated_config": {"present": bool(cfg.get("whisper_cache_dir")), "deprecated": bool(cfg.get("whisper_cache_dir"))},
-    "legacy_candidates": scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, default_hf=Path.home() / ".cache" / "huggingface" / "hub", runtime=runtime),
+        "legacy_candidates": _legacy_candidates_for_runtime(runtime),
         "current_defaults": {
             "transcription_profile": cfg.get("transcription_profile") or "balanced",
             "whisper_model": cfg.get("whisper_model"),
@@ -272,7 +263,7 @@ def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False) -> int
 def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
     models = scan_current_models(runtime)
     cfg = load_config()
-    candidates = scan_legacy_candidates(configured_cache=Path(cfg["whisper_cache_dir"]) if cfg.get("whisper_cache_dir") else None, hf_home=Path(os.environ["HF_HOME"]) if os.environ.get("HF_HOME") else None, hf_hub_cache=Path(os.environ["HF_HUB_CACHE"]) if os.environ.get("HF_HUB_CACHE") else None, default_hf=Path.home() / ".cache" / "huggingface" / "hub", runtime=runtime)
+    candidates = _legacy_candidates_for_runtime(runtime)
     payload = {"model_count": len(models), "models": models, "legacy_candidates": candidates, "legacy_models": scan_legacy_models(candidates)}
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -316,10 +307,6 @@ def print_models_recommend(json_mode: bool = False) -> int:
         print(f"- {item.name:<16} {item.approx_size:<14} {item.recommended_for:<12} {item.notes}")
     print("\n建议：办公本剪视频优先试 quality/small；medium 请先用 cs2pov benchmark-asr 跑 3 回合对比。")
     return 0
-
-
-def set_cache_dir(path: Path) -> Path:
-    raise RuntimeError("模型缓存目录设置入口已弃用；缓存跟随当前工作区。")
 
 
 def test_model_load(model: str, device: str, compute_type: str, cache_dir: str | None = None, local_only: bool = False) -> dict[str, Any]:

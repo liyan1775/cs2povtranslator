@@ -27,7 +27,6 @@ from cs2pov.cli.model_manager import (
     print_models_info,
     print_models_list,
     print_models_recommend,
-    set_cache_dir,
     test_model_load,
 )
 from cs2pov.cli.player_ops import (
