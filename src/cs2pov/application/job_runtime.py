@@ -90,6 +90,8 @@ class JobRuntime:
             self.output_root,
             map_name=map_name if map_name is not None else config.map_name,
             job_id=job_id if job_id is not None else config.job_id,
+            audio_cache_root=self.runtime.paths.audio_cache_dir,
+            keep_temp_audio=config.keep_temp_audio,
         )
 
     def create_manifest(self, job_id: str, config: PipelineConfig | None = None) -> "PipelineManifest":

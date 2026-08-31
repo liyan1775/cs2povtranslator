@@ -17,7 +17,13 @@ def safe_name(text: str, max_len: int = 80) -> str:
 
 
 class ArtifactStore:
-    def __init__(self, job_dir: Path):
+    def __init__(
+        self,
+        job_dir: Path,
+        *,
+        audio_cache_root: Path | None = None,
+        keep_temp_audio: bool = False,
+    ):
         self.job_dir = Path(job_dir)
         self.input_dir = self.job_dir / "input"
         self.artifacts_dir = self.job_dir / "artifacts"
@@ -25,10 +31,28 @@ class ArtifactStore:
         self.final_dir = self.job_dir / "final"
         self.review_dir = self.job_dir / "review"
         self.debug_dir = self.job_dir / "debug"
-        self.temp_audio_dir = self.artifacts_dir / "temp_audio"
+        self._audio_cache_root = Path(audio_cache_root) if audio_cache_root is not None else None
+        self._keep_temp_audio = bool(keep_temp_audio)
+        self.temp_audio_dir = self._temp_audio_path(self.job_dir)
+
+    def _temp_audio_path(self, job_dir: Path) -> Path:
+        if self._keep_temp_audio:
+            return job_dir / "debug" / "temp_audio"
+        if self._audio_cache_root is not None:
+            return self._audio_cache_root / job_dir.name
+        # A store loaded from an old Job keeps its historical layout.
+        return job_dir / "artifacts" / "temp_audio"
 
     @classmethod
-    def create(cls, output_root: Path, map_name: str | None = None, job_id: str | None = None) -> "ArtifactStore":
+    def create(
+        cls,
+        output_root: Path,
+        map_name: str | None = None,
+        job_id: str | None = None,
+        *,
+        audio_cache_root: Path | None = None,
+        keep_temp_audio: bool = False,
+    ) -> "ArtifactStore":
         if job_id is not None:
             _validate_job_id(job_id)
         root = _normalize_output_root(output_root)
@@ -46,7 +70,7 @@ class ArtifactStore:
             except FileExistsError:
                 index += 1
                 continue
-            store = cls(candidate)
+            store = cls(candidate, audio_cache_root=audio_cache_root, keep_temp_audio=keep_temp_audio)
             try:
                 store.ensure_dirs()
             except Exception:
@@ -56,7 +80,10 @@ class ArtifactStore:
             return store
 
     def ensure_dirs(self) -> None:
-        for p in [self.input_dir, self.artifacts_dir, self.voice_dir, self.temp_audio_dir, self.final_dir, self.review_dir, self.debug_dir]:
+        paths = [self.input_dir, self.artifacts_dir, self.voice_dir, self.final_dir, self.review_dir, self.debug_dir]
+        if self._keep_temp_audio or self._audio_cache_root is None:
+            paths.append(self.temp_audio_dir)
+        for p in paths:
             p.mkdir(parents=True, exist_ok=True)
 
     def rename_suffix(self, suffix: str) -> "ArtifactStore":
@@ -77,6 +104,7 @@ class ArtifactStore:
         target = self.job_dir.with_name(new_name)
         base = target
         idx = 2
+        old_temp_audio = self.temp_audio_dir
         with _rename_claim(self.job_dir.parent, self.job_dir.name):
             while True:
                 _reject_escaped_candidate(target, self.job_dir.parent.resolve())
@@ -84,6 +112,11 @@ class ArtifactStore:
                 # critical section for all ArtifactStore writers.  A target
                 # is never replaced, including an empty directory.
                 if target.exists() or target.is_symlink():
+                    target = base.with_name(f"{base.name}_{idx}")
+                    idx += 1
+                    continue
+                target_temp_audio = self._temp_audio_path(target)
+                if old_temp_audio.exists() and target_temp_audio.exists() and old_temp_audio != target_temp_audio:
                     target = base.with_name(f"{base.name}_{idx}")
                     idx += 1
                     continue
@@ -95,7 +128,10 @@ class ArtifactStore:
                     # the same target, since POSIX rename can replace dirs.
                     target = base.with_name(f"{base.name}_{idx}")
                     idx += 1
-        store = ArtifactStore(target)
+        if old_temp_audio.exists() and old_temp_audio != target_temp_audio:
+            target_temp_audio.parent.mkdir(parents=True, exist_ok=True)
+            old_temp_audio.rename(target_temp_audio)
+        store = ArtifactStore(target, audio_cache_root=self._audio_cache_root, keep_temp_audio=self._keep_temp_audio)
         store.ensure_dirs()
         return store
 

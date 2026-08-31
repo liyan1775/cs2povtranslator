@@ -35,6 +35,9 @@ from cs2pov.cli.player_ops import (
     print_players_report,
     set_player_alias,
 )
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
+from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="专家模式：直接运行 pipeline")
     run.add_argument("demo")
-    run.add_argument("--output", default="output")
+    run.add_argument("--output", default=None)
     run.add_argument("--map", dest="map_name")
     run.add_argument("--pov-steamid")
     run.add_argument("--team", type=int, dest="team_number")
@@ -256,6 +259,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return dispatch(args, parser)
+    except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+        print(f"错误[{exc.code}]：{exc.message_zh}")
+        print(f"建议：{exc.suggestion_zh}")
+        return 1
     except FileNotFoundError as exc:
         print(f"错误：{exc}")
         print("提示：可以先运行 cs2pov inspect-job output 查看最新 Job，或用 cs2pov-wizard 新建任务。")
@@ -709,6 +716,13 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
+    runtime = _resolve_write_runtime()
+    if args.whisper_cache_dir is not None:
+        raise JobRuntimeError(
+            "legacy_model_cache_override_rejected",
+            "--whisper-cache-dir 已弃用，不能覆盖当前工作区模型缓存。",
+            "请移除该参数；模型缓存固定使用当前工作区 cache/whisper。",
+        )
     defaults = load_config()
     explicit_whisper_override = any([args.whisper_model, args.whisper_device, args.whisper_compute_type])
     profile_id = args.transcription_profile or (None if explicit_whisper_override else defaults.get("transcription_profile"))
@@ -727,7 +741,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             whisper_compute_type=args.whisper_compute_type,
         )
     config = PipelineConfig(
-        output_root=args.output,
+        output_root=args.output or str(runtime.paths.jobs_dir),
         map_name=args.map_name,
         selected_pov_steamid=args.pov_steamid,
         selected_team_number=args.team_number,
@@ -737,7 +751,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         whisper_model=str(resolved_profile.get("whisper_model") or defaults.get("whisper_model") or "base"),
         whisper_device=str(resolved_profile.get("whisper_device") or defaults.get("whisper_device") or "cpu"),
         whisper_compute_type=str(resolved_profile.get("whisper_compute_type") or defaults.get("whisper_compute_type") or "int8"),
-        whisper_cache_dir=args.whisper_cache_dir or defaults.get("whisper_cache_dir"),
+        whisper_cache_dir=str(runtime.paths.whisper_cache_dir),
         whisper_vad_filter=bool(defaults.get("whisper_vad_filter", True)) if args.whisper_vad is None else bool(args.whisper_vad),
         transcription_mode=args.transcription_mode or defaults.get("transcription_mode") or "round",
         activity_padding_seconds=args.activity_padding,
@@ -761,11 +775,22 @@ def run_pipeline(args: argparse.Namespace) -> int:
         glossary_enabled=bool(defaults.get("glossary_enabled", True)) if args.glossary is None else bool(args.glossary),
         player_aliases=_parse_player_alias_args(args.player_alias),
     )
-    engine = PipelineEngine(config)
+    policy = JobRuntime.from_config(runtime, config, output_root=args.output)
+    config = policy.adapt_config(config)
+    if policy.legacy_external_output:
+        print("警告：正在使用旧版外部输出兼容模式（旧版外部输出），Job 将写入显式 --output 目录。")
+    engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
     engine.run(Path(args.demo), from_stage=from_stage, to_stage=to_stage)
+    if policy.legacy_external_output:
+        print("警告：旧版外部输出任务已完成；请检查并迁移该 Job。")
     return 0
+
+
+def _resolve_write_runtime():
+    """Resolve the write snapshot before reading/creating any Job assets."""
+    return WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
 
 
 def _parse_player_alias_args(values: list[str] | None) -> dict[str, str]:
