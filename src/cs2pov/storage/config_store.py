@@ -41,7 +41,9 @@ def load_config() -> dict[str, Any]:
         return dict(DEFAULT_CONFIG)
     try:
         data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeError, OSError):
+        return dict(DEFAULT_CONFIG)
+    if not isinstance(data, dict):
         return dict(DEFAULT_CONFIG)
     merged = dict(DEFAULT_CONFIG)
     merged.update(data)
@@ -74,6 +76,9 @@ def mask_config_for_display(config: dict[str, Any]) -> dict[str, Any]:
     replacement = recommended_llm_model(model)
     if replacement:
         masked["recommended_llm_model"] = replacement
+    masked["whisper_cache_dir_deprecated"] = bool(masked.get("whisper_cache_dir"))
+    if masked["whisper_cache_dir_deprecated"]:
+        masked["whisper_cache_dir_note"] = "已弃用：模型缓存跟随当前工作区。"
     return masked
 
 

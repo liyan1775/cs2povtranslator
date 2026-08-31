@@ -1,3 +1,5 @@
+import pytest
+
 from cs2pov.cli import launcher
 
 
@@ -50,6 +52,17 @@ def test_setup_check_menu_is_available(monkeypatch, capsys):
     assert _run_with_inputs(monkeypatch, ["5"]) == 0
     out = capsys.readouterr().out
     assert "启动前检查" in out or "setup" in out.lower()
+
+
+def test_models_menu_explains_workspace_bound_cache(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "0")
+
+    with pytest.raises(launcher.ReturnToMainMenu):
+        launcher.run_models_menu()
+
+    out = capsys.readouterr().out
+    assert "模型缓存跟随当前工作区" in out
+    assert "项目级缓存配置" not in out
 
 
 def test_tools_menu_can_return_to_main(monkeypatch, capsys):

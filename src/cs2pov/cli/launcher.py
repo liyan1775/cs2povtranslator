@@ -354,12 +354,12 @@ def run_models_menu() -> None:
     print("\nWhisper 模型管理")
     print("=" * 72)
     print("用途：查看模型放在哪里、C 盘是否被占用、已有模型多大，以及 tiny/base/small/medium 哪个值得下载。")
-    print("本工具采用项目级缓存配置，不会悄悄修改系统全局环境变量。")
+    print("模型缓存跟随当前工作区；旧缓存只读显示，不会自动迁移或修改系统全局环境变量。")
     print("输入 0 / q / back 可返回主菜单。")
     print("1. 查看当前缓存目录和默认模型")
     print("2. 列出已下载模型")
     print("3. 查看模型大小与质量档位建议")
-    print("4. 设置模型缓存目录到 D 盘/自定义目录")
+    print("4. 查看旧缓存迁移说明")
     print("5. 测试当前/指定模型能否加载")
     choice = _read_choice("请选择 [1]\n> ", default="1")
     import argparse
@@ -373,10 +373,7 @@ def run_models_menu() -> None:
         run_models(argparse.Namespace(models_cmd="recommend", json=False), argparse.ArgumentParser())
         return
     if choice == "4":
-        print("请输入缓存根目录，例如 D:\\AIModels\\huggingface。")
-        print("建议不要放在 output/ 或项目目录里；模型较大，推荐单独目录。")
-        path = _read_choice("> ", default="D:\\AIModels\\huggingface")
-        run_models(argparse.Namespace(models_cmd="set-cache", path=path), argparse.ArgumentParser())
+        run_models(argparse.Namespace(models_cmd="info", json=False), argparse.ArgumentParser())
         return
     if choice == "5":
         print("输入模型名，例如 small。直接回车使用当前默认模型。")
