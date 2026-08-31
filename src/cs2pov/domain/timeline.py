@@ -138,6 +138,8 @@ class DemoDescriptor:
         )
         t = require_mapping(d["tick_rate"], "tick_rate")
         require_exact_keys(t, {"numerator", "denominator"}, set(), "tick_rate")
+        if not isinstance(d["players"], (list, tuple)):
+            bad("domain_field_invalid")
         return cls(
             require_sha256(d["demo_asset_id"], "demo_asset_id"),
             require_identifier(d["map_name"], "map_name"),
@@ -291,6 +293,8 @@ class RoundCollection:
         reject_private_data(d, "rounds")
         require_current_schema(d, "rounds")
         require_exact_keys(d, {"schema_version", "rounds"}, set(), "rounds")
+        if not isinstance(d["rounds"], (list, tuple)):
+            bad("domain_field_invalid")
         return cls(tuple(Round.from_dict(x) for x in d["rounds"]))
 
 

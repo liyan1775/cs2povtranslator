@@ -262,3 +262,19 @@ def test_non_array_public_inputs_raise_domain_error():
     ):
         with pytest.raises(DomainSchemaError):
             call()
+
+
+def test_from_dict_non_array_collections_are_domain_errors():
+    with pytest.raises(DomainSchemaError):
+        DemoDescriptor.from_dict(
+            {
+                "schema_version": 1,
+                "demo_asset_id": "a" * 64,
+                "map_name": "de_mirage",
+                "server_name": None,
+                "tick_rate": {"numerator": 64, "denominator": 1},
+                "players": 123,
+            }
+        )
+    with pytest.raises(DomainSchemaError):
+        RoundCollection.from_dict({"schema_version": 1, "rounds": 123})

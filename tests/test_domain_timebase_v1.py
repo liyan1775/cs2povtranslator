@@ -190,3 +190,8 @@ def test_mapped_segments_must_be_ordered_and_exact_round_rejects_anchor_uncertai
 
     with pytest.raises(DomainSchemaError):
         MappedTime((TimeRange(2, 4), TimeRange(3, 5)), ("a", "b"), 0)
+
+
+def test_time_range_contains_rejects_non_integer():
+    with pytest.raises(DomainSchemaError):
+        TimeRange(1, 2).contains("1")

@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
-from math import ceil
 from .errors import DomainSchemaError
 from .schema import (
     MAX_DEMO_TIME_US,
@@ -41,6 +40,7 @@ class TimeRange:
         return self.end_us - self.start_us
 
     def contains(self, v):
+        require_int(v, "demo_time_us", minimum=0, maximum=MAX_DEMO_TIME_US)
         return self.start_us <= v < self.end_us
 
 
