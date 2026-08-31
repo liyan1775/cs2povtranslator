@@ -1,6 +1,6 @@
 # 新版 Job 领域模型、统一时间轴与持久化设计
 
-- 状态：用户逐节确认，待实施计划
+- 状态：用户逐节确认；02A 实施计划已编写，审查修订中
 - 日期：2026-08-31
 - 前置：统一工作区与 DemoAsset（Luna-01A 至 01E-B）已经完成
 - 后续：阶段 2 领域内核；Web、理解翻译完整实现和 POV 录制仍按后续阶段交付
@@ -66,6 +66,8 @@ TimeRange = [start_us, end_us), end_us > start_us
 
 采用半开区间可消除相邻 Cue/回合边界的双重归属。序列化和验证必须拒绝负数、布尔值伪装的整数、反向区间和超出合理范围的值。
 
+当前版本把 Demo 时间上限固定为 30 天（`2_592_000_000_000us`），源时钟位置上限固定为有符号 64 位整数最大值。该上限远大于真实比赛，同时能阻止损坏文档构造无限大整数。
+
 ### 4.2 来源证据与 TimeAnchor
 
 原始 tick、音频采样点、压缩音频偏移、视频帧号必须保留为来源证据，但不能形成各自独立的“真时间”。它们通过版本化 `TimeAnchor` 映射到 Demo 时间：
@@ -90,7 +92,9 @@ TimeRange = [start_us, end_us), end_us > start_us
 - 压缩玩家音频是不连续语音包的拼接，必须使用分段锚点，不能使用单一全局 offset；
 - 未来视频至少返回实际首尾帧与 Demo 时间锚点；如果观测到漂移，允许使用多段映射；
 - 每个锚点记录来源与可选误差，不能把估算值伪装成精确值；
+- 同一 `(source_clock, source_stream_id)` 的锚点按源位置排序后，源范围不得重叠，映射到 Demo 的范围也必须严格单调且不得重叠或倒退；
 - Round 保存规范时间和可用的原始起止 tick，回合局部时间只由 `demo_time_us - round.start_us` 派生。
+- `EXACT` 回合若带 tick，tick 锚点必须精确映射到其 Demo 范围；估算回合必须显式保存边界误差，并在误差内通过映射校验。
 
 ### 4.3 导出舍入
 
@@ -107,19 +111,26 @@ TimeRange = [start_us, end_us), end_us > start_us
 
 - `DemoAssetRef`：工作区资源 ID 和相对 manifest 引用，不含外部绝对路径。
 - `DemoTimeline`：Demo 元数据、玩家快照、Round 引用和 TimeAnchor 引用。
-- `Round`：稳定 `round_id`、显示序号、规范时间范围、可选 tick、来源、可靠性和比赛阶段。
+- `Round`：稳定 `round_id`、显示序号、规范时间范围、可选 tick、来源、可靠性、边界误差和明确比赛阶段（热身、常规上下半场、加时上下半场或未知）。
 
-`round_id` 不等同于可变的显示序号。人工校正边界时保留 ID；重新解析得到无法对应的新回合时才创建新 ID并明确失效关联数据。
+`round_id` 不等同于可变的显示序号。人工校正边界时保留 ID；重新解析得到无法对应的新回合时才创建新 ID 并明确失效关联数据。
 
 ### 5.2 转录、理解与复核
 
-- `TranscriptCue`：稳定 `cue_id`、说话人、回合、规范时间范围、ASR 原文、语言、置信信息和 ASR 调用引用。生成后不可被翻译阶段覆盖。
-- `UnderstandingResult`：`asr_original`、`interpreted_source`、`translated_zh`、依据、置信度、警告和模型调用快照引用。
+- `VoiceActivityCue`：说话人、规范时间范围、语音包数量、锚点和误差。
+- `TranscriptCue`：稳定 `cue_id`、说话人、可空回合引用、规范时间范围、源时钟范围、ASR 原文、语言、置信信息、VoiceActivity 引用和 ASR 调用引用。生成后不可被翻译阶段覆盖。
+- `UnderstandingResult`：`asr_original`、`interpreted_source`、`translated_zh`、依据、置信度、警告和实际模型调用记录引用。
 - `RoundTranslationTask`：回合级状态、输入/输出指纹、尝试记录、模型配置快照和结果引用。
 - `DraftCommsTimeline`：模型结果的可复核聚合，必须标记为 draft。
 - `ReviewDecision`：人工修改的字段、修改前后、理由、时间和原结果引用。
 - `ReviewedCommsTimeline`：将 TranscriptCue、UnderstandingResult 与 ReviewDecision 合成的最终可信交流时间线。
 - `KnowledgeProposal`：从人工修改产生的候选；本阶段只预留契约，不自动让候选进入全局词典。
+
+未可靠归属回合的 TranscriptCue 使用 `round_id: null` 并进入 `unassigned.jsonl`。无目标队伍语音的正常回合允许产生成功的空 Understanding 文档，不得伪造模型调用。
+
+一个 TranscriptCue 只能覆盖一个连续 Demo 时间范围。若源音频范围跨越不连续锚点，适配器必须拆分 Cue；领域工厂对非连续 `MappedTime` 返回稳定错误，不能只写警告后把静音间隙包入 Cue。
+
+领域层提供可复用聚合校验，验证玩家、回合、VoiceActivity、锚点和 Cue 的引用与时间包含关系。夹具脚本与未来 Job 仓储必须调用同一校验函数，不能各自实现一套规则。
 
 示例必须同时保留三层含义：
 
@@ -135,11 +146,13 @@ TimeRange = [start_us, end_us), end_us > start_us
 }
 ```
 
-### 5.3 模型调用快照
+### 5.3 模型配置快照与逐调用记录
 
-Job 只保存非秘密调用快照：服务商类型、base URL 的安全标识、模型名、提示模板版本、参数、知识修订、请求内容指纹和适配器版本。API Key 只保存秘密引用或“已配置”状态，绝不进入 Job、日志、反馈包和测试夹具。
+`ModelConfigurationSnapshot` 是一个批次共享的非秘密配置：能力类型（ASR 或理解翻译）、服务商类型、endpoint profile ID、模型名、提示模板版本、参数、知识修订、适配器版本和由这些字段规范计算的配置指纹。API Key 只保存秘密引用或“已配置”状态，绝不进入 Job、日志、反馈包和测试夹具。
 
-不同回合必须共享本次批处理冻结的调用快照。并发过程中不能因为用户修改默认配置而静默切换服务商或模型。
+`ModelInvocationRecord` 表示一次真实调用：调用 ID、共享配置快照 ID、任务/回合 ID、请求内容指纹和响应内容指纹。不同回合共享配置快照，但每次请求拥有自己的 InvocationRecord；不得把不同回合的请求内容指纹错误地塞进同一个共享对象。ASR 调用也使用同一记录契约，TranscriptCue 的调用引用必须能在 Job 中解析。
+
+并发过程中不能因为用户修改默认配置而静默切换服务商或模型。每个 UnderstandingResult 引用实际产生它的 InvocationRecord。
 
 ## 6. Job 文件布局
 
@@ -185,6 +198,12 @@ jobs/<job_id>/
 9. `round_<round_id>` 文件名只能由领域层生成的安全 ID 构造，不能直接使用玩家名、地图名或其他用户文本。
 10. `job_events.jsonl` 是单协调器追加日志；崩溃留下的不完整末行会被报告并隔离，不能让此前完整事件失效。
 
+### 6.1 规范内容指纹
+
+所有内容指纹使用 UTF-8 的规范 JSON：键按 Unicode 码点排序、分隔符固定为 `,`/`:`、`ensure_ascii=false`、禁止 NaN/Infinity，再计算小写 SHA-256。指纹由生产代码从领域对象的规范 payload 计算，调用方不能提交一个未验证的任意 64 位字符串冒充内容哈希。
+
+UnderstandingResult 和 DraftCommsTimeline 提供 `content_fingerprint()`。复核合成器必须重新计算并验证来源指纹、确保每个 Draft Cue 恰好一个决定、没有缺失或多余决定、EDIT 实际改变至少一个最终字段，并把排除决定保留在 ReviewedTimeline 中。
+
 ## 7. 新版历史 Job 的打开语义
 
 ### 7.1 定义和发现
@@ -210,6 +229,8 @@ jobs/<job_id>/
 - 一个 Job 可以被多个只读客户端打开，但同时只允许一个写入协调器。跨进程 claim 保存随机运行 ID、进程信息和心跳租约；不能仅凭 PID 判断所有权。
 - 程序退出后遗留的 `RUNNING` 在只读打开时根据 claim/租约**在内存中显示**为 `INTERRUPTED`，不改盘；只有用户明确继续或修复时，协调器才原子持久化状态转换。
 - 当前只接受当前 `schema_version`。不匹配返回 `job_schema_unsupported`，不扫描旧目录、不迁移、不改写。
+
+02A 领域对象内部返回 `domain_schema_unsupported`；后续 02B Job 仓储在打开 Job 的边界将其翻译为 `job_schema_unsupported`，并保留原始 cause 供诊断。
 
 ### 7.3 工作区范围
 
@@ -281,10 +302,19 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 - `job_shard_invalid`
 - `job_write_busy`
 - `job_write_interrupted`
+- `domain_schema_unsupported`
+- `domain_field_invalid`
+- `domain_secret_forbidden`
+- `domain_fingerprint_mismatch`
 - `time_range_invalid`
 - `time_anchor_invalid`
+- `player_reference_invalid`
 - `round_reference_invalid`
 - `cue_reference_invalid`
+- `cue_time_discontinuous`
+- `invocation_reference_invalid`
+- `review_decision_invalid`
+- `timeline_invalid`
 - `round_task_output_mismatch`
 
 所有错误包含中文说明、影响范围和下一步建议。结构化文件、日志和报告只保存工作区相对路径或资源 ID；测试必须扫描 API Key、用户目录和盘符泄露。
@@ -301,6 +331,7 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 - `be be be -> B, B, B -> B点，B点，B点`；
 - 回合任务乱序返回和一次可重试失败；
 - 一个 Cue 的人工修改；
+- 一个未分配回合的 Cue 和一个无语音的正常回合；
 - 整场与逐回合字幕聚合；
 - 无 CS2/GPU 合法结束。
 
@@ -310,6 +341,8 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 2. 真实进程 E2E：实际命令创建三回合 Job，退出，重新启动，列出、打开、继续并校验乱序完成后的聚合顺序。
 3. 故障恢复 E2E：写入中止、一个回合失败、单分片损坏和写锁冲突；证明其他回合仍可读且只重跑必要部分。
 4. 浏览器 E2E 契约：本阶段固定应用服务与夹具；Web 阶段用 Playwright 真实执行“打开历史 Job—查看回合—继续—检查产物”。
+
+契约测试还必须篡改有效夹具，分别验证：秘密字段、Windows/Unix/UNC 绝对路径、坏引用、被改写的 ASR 原文、伪造指纹、不支持的 schema、倒序 Cue、倒退/重叠锚点都会稳定失败。
 
 CI 至少覆盖 Windows 和 Ubuntu；测试工作区包含中文和空格。领域测试不依赖 CS2、GPU、FFmpeg、Whisper 或真实付费 API。外部工具和真实供应商测试在各自阶段增加，不替代确定性门禁。
 

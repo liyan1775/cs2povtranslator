@@ -30,13 +30,15 @@ New production files:
 
 - `src/cs2pov/domain/errors.py`: stable domain error object with user-facing Chinese message and action.
 - `src/cs2pov/domain/schema.py`: schema/version, exact-key, scalar, identifier, SHA-256, and secret-key validation helpers.
+- `src/cs2pov/domain/fingerprint.py`: canonical JSON encoding and derived SHA-256 content fingerprints.
 - `src/cs2pov/domain/timebase.py`: integer Demo ranges, source clocks, segmented anchors, source-to-Demo mapping, round-local conversion, and export rounding.
 - `src/cs2pov/domain/timeline.py`: player snapshots, Demo descriptor, rounds, round collection, and validated in-memory Demo timeline aggregate.
-- `src/cs2pov/domain/invocation.py`: non-secret frozen model invocation snapshot.
+- `src/cs2pov/domain/invocation.py`: non-secret shared model configuration snapshots and per-call invocation records.
 - `src/cs2pov/domain/voice.py`: immutable integer-time voice-activity JSONL record.
 - `src/cs2pov/domain/transcript.py`: immutable ASR `TranscriptCue` JSONL record.
 - `src/cs2pov/domain/understanding.py`: interpretation result and per-round understanding document.
 - `src/cs2pov/domain/review.py`: typed human decisions plus draft/reviewed timeline contracts.
+- `src/cs2pov/domain/validation.py`: reusable cross-object reference, time-containment, and provenance validation.
 
 New tests and fixtures:
 
@@ -46,6 +48,7 @@ New tests and fixtures:
 - `tests/test_domain_invocation_v1.py`
 - `tests/test_domain_understanding_v1.py`
 - `tests/test_domain_review_v1.py`
+- `tests/test_domain_validation_v1.py`
 - `tests/test_new_domain_contract_replay.py`
 - `tests/golden/fixtures/new_domain_contract_v1.json`
 - `scripts/check_new_domain_contract.py`
@@ -63,12 +66,15 @@ Documentation updates:
 **Files:**
 - Create: `src/cs2pov/domain/errors.py`
 - Create: `src/cs2pov/domain/schema.py`
+- Create: `src/cs2pov/domain/fingerprint.py`
 - Create: `tests/test_domain_schema_v1.py`
 
 **Interfaces:**
 - Produces: `DomainSchemaError(code: str, message: str, action: str, path: str | None = None)`.
 - Produces: `CURRENT_DOMAIN_SCHEMA_VERSION: Final[int] = 1`.
+- Produces: `MAX_DEMO_TIME_US = 2_592_000_000_000`, `MAX_SOURCE_POSITION = 9_223_372_036_854_775_807`, and `MAX_COUNT = 2_147_483_647`.
 - Produces: `require_mapping`, `require_exact_keys`, `require_current_schema`, `require_int`, `require_optional_int`, `require_str`, `require_optional_str`, `require_identifier`, `require_sha256`, `require_probability`, `require_string_list`, and `reject_secret_keys`.
+- Produces: `canonical_json_bytes(value: object) -> bytes` and `content_fingerprint(value: object) -> str`.
 - All later `from_dict` factories depend on these exact helpers and error codes.
 
 Use these signatures throughout the batch:
@@ -77,8 +83,8 @@ Use these signatures throughout the batch:
 def require_mapping(value: object, path: str) -> Mapping[str, object]
 def require_exact_keys(data: Mapping[str, object], required: set[str], optional: set[str], path: str) -> None
 def require_current_schema(data: Mapping[str, object], path: str) -> int
-def require_int(value: object, path: str, *, minimum: int | None = None) -> int
-def require_optional_int(value: object, path: str, *, minimum: int | None = None) -> int | None
+def require_int(value: object, path: str, *, minimum: int | None = None, maximum: int | None = None) -> int
+def require_optional_int(value: object, path: str, *, minimum: int | None = None, maximum: int | None = None) -> int | None
 def require_str(value: object, path: str, *, allow_empty: bool = False) -> str
 def require_optional_str(value: object, path: str, *, allow_empty: bool = False) -> str | None
 def require_identifier(value: object, path: str) -> str
@@ -98,8 +104,10 @@ from __future__ import annotations
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.fingerprint import canonical_json_bytes, content_fingerprint
 from cs2pov.domain.schema import (
     CURRENT_DOMAIN_SCHEMA_VERSION,
+    MAX_DEMO_TIME_US,
     reject_secret_keys,
     require_current_schema,
     require_identifier,
@@ -140,7 +148,7 @@ def test_integer_validator_rejects_bool_and_negative_values() -> None:
 def test_identifier_is_safe_as_one_cross_platform_path_segment() -> None:
     assert require_identifier("round-001", "round_id") == "round-001"
 
-    for value in ("", ".", "..", "round/1", "round\\1", "B 点", "x" * 129):
+    for value in ("", ".", "..", "CON", "nul.txt", "COM1", "round/1", "round\\1", "B 点", "x" * 129):
         with pytest.raises(DomainSchemaError) as caught:
             require_identifier(value, "round_id")
         assert caught.value.code == "domain_identifier_invalid"
@@ -169,6 +177,27 @@ def test_secret_key_scan_rejects_nested_credentials_but_not_max_tokens() -> None
         with pytest.raises(DomainSchemaError) as caught:
             reject_secret_keys(payload, "parameters")
         assert caught.value.code == "domain_secret_forbidden"
+
+
+def test_demo_time_has_a_bounded_current_version_range() -> None:
+    assert require_int(MAX_DEMO_TIME_US, "demo_time_us", minimum=0, maximum=MAX_DEMO_TIME_US) == MAX_DEMO_TIME_US
+
+    with pytest.raises(DomainSchemaError) as caught:
+        require_int(MAX_DEMO_TIME_US + 1, "demo_time_us", minimum=0, maximum=MAX_DEMO_TIME_US)
+    assert caught.value.code == "domain_field_invalid"
+
+
+def test_canonical_json_fingerprint_is_derived_and_order_independent() -> None:
+    left = {"translated_zh": "B点", "confidence": 0.86, "warnings": []}
+    right = {"warnings": [], "confidence": 0.86, "translated_zh": "B点"}
+
+    assert canonical_json_bytes(left) == canonical_json_bytes(right)
+    assert content_fingerprint(left) == content_fingerprint(right)
+    assert len(content_fingerprint(left)) == 64
+
+    with pytest.raises(DomainSchemaError) as caught:
+        canonical_json_bytes({"confidence": float("nan")})
+    assert caught.value.code == "domain_field_invalid"
 ```
 
 - [ ] **Step 2: Run the focused test and confirm the import failure**
@@ -194,9 +223,12 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_SECRET_KEYS = frozenset({
     "api_key", "api-key", "authorization", "access_token", "secret", "password"
 })
+WINDOWS_RESERVED_STEMS = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
 ```
 
 `require_exact_keys(data, required, optional, path)` must reject both missing and unknown keys with `domain_schema_invalid`. `require_current_schema` must convert missing, boolean, non-integer, and non-1 versions into `domain_schema_unsupported`. `reject_secret_keys` must recursively inspect mapping keys and list elements, compare keys case-insensitively, and never reject the legitimate key `max_tokens`.
+
+`require_identifier` must reject Windows device stems case-insensitively even when followed by an extension. `canonical_json_bytes` uses `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")`; translate unsupported values and non-finite numbers to `DomainSchemaError("domain_field_invalid", ...)`. `content_fingerprint` is always `hashlib.sha256(canonical_json_bytes(value)).hexdigest()` and never accepts a caller-supplied digest.
 
 - [ ] **Step 4: Run focused tests and confirm they pass**
 
@@ -211,7 +243,7 @@ Expected: all tests in `test_domain_schema_v1.py` pass.
 - [ ] **Step 5: Commit the schema foundation**
 
 ```powershell
-git add src/cs2pov/domain/errors.py src/cs2pov/domain/schema.py tests/test_domain_schema_v1.py
+git add src/cs2pov/domain/errors.py src/cs2pov/domain/schema.py src/cs2pov/domain/fingerprint.py tests/test_domain_schema_v1.py
 git commit -m "feat: add strict domain schema validation"
 ```
 
@@ -229,6 +261,7 @@ git commit -m "feat: add strict domain schema validation"
 - Produces: `SourceClock` values `DEMO_TICK`, `COMPACT_AUDIO_SAMPLE`, and `VIDEO_FRAME`.
 - Produces: `TimeAnchor(anchor_id, source_clock, source_stream_id, source_start, source_end, demo_range, uncertainty_us, provenance)`.
 - Produces: `MappedTime(segments, anchor_ids, uncertainty_us)` with `is_contiguous` and `envelope`.
+- Produces: `validate_anchor_sequence(anchors) -> None`.
 - Produces: `map_source_range(anchors, source_clock, source_stream_id, source_start, source_end) -> MappedTime`.
 - Produces: `demo_to_round_local_us(demo_time_us, round_range) -> int` and `to_export_milliseconds(time_range) -> tuple[int, int]`.
 
@@ -356,6 +389,24 @@ def test_anchor_mapping_rejects_gaps_and_wrong_streams() -> None:
         assert caught.value.code == "time_anchor_gap"
 
 
+@pytest.mark.parametrize("second_demo_start", (5_000_000, 10_500_000))
+def test_anchor_sequence_rejects_demo_time_reversal_and_overlap(second_demo_start: int) -> None:
+    anchors = (
+        _audio_anchor("anchor-a", 0, 24_000, 10_000_000),
+        _audio_anchor("anchor-b", 24_000, 48_000, second_demo_start),
+    )
+
+    with pytest.raises(DomainSchemaError) as caught:
+        map_source_range(
+            anchors,
+            SourceClock.COMPACT_AUDIO_SAMPLE,
+            "player-alpha",
+            0,
+            48_000,
+        )
+    assert caught.value.code == "time_anchor_invalid"
+
+
 def test_anchor_round_trip_uses_exact_current_schema() -> None:
     anchor = _audio_anchor("anchor-a", 0, 24_000, 10_000_000)
     payload = anchor.to_dict()
@@ -394,10 +445,11 @@ Expected: collection fails because `cs2pov.domain.timebase` does not exist.
 
 Implement these policies in `timebase.py`:
 
-- `TimeRange` validates both values through `require_int(value, path, minimum=0)` and requires `end_us > start_us`.
-- `TimeAnchor` requires a non-empty source span, one safe `source_stream_id`, non-negative uncertainty, and non-empty provenance.
+- `TimeRange` validates both values through `require_int(value, path, minimum=0, maximum=MAX_DEMO_TIME_US)` and requires `end_us > start_us`.
+- `TimeAnchor` bounds source positions by `MAX_SOURCE_POSITION`, requires a non-empty source span, one safe `source_stream_id`, non-negative uncertainty, and a safe identifier for provenance so local paths cannot be stored there.
 - Source overlap is mapped linearly using integer arithmetic. Start boundaries use floor division; end boundaries use ceiling division, so the mapped range never becomes shorter through rounding.
 - `map_source_range` filters by both clock and stream, sorts anchors by `source_start`, rejects overlapping source anchors, requires the full requested source range to be covered, returns each discontinuous Demo segment separately, and never silently converts gaps into continuous time.
+- `validate_anchor_sequence` groups by `(source_clock, source_stream_id)` and rejects source overlap, mapped Demo overlap, and mapped Demo reversal; both `map_source_range` and `DemoTimeline` call it.
 - `MappedTime.is_contiguous` is true only when every adjacent Demo segment touches exactly; `envelope` spans first start to last end.
 - `to_export_milliseconds` floors the start and ceilings the end with integer arithmetic.
 - `TimeAnchor.to_dict()` emits only the exact tested fields: `schema_version`, IDs, clock, integer source boundaries, integer Demo boundaries, uncertainty, and provenance.
@@ -432,7 +484,8 @@ git commit -m "feat: add unified demo time and anchors"
 - Produces: `PlayerSnapshot(player_id, display_name, team_number)`.
 - Produces: `DemoDescriptor(demo_asset_id, map_name, server_name, tick_rate_numerator, tick_rate_denominator, players)` for `timeline/demo.json`.
 - Produces: `RoundBoundaryConfidence` values `EXACT`, `ESTIMATED`, and `FALLBACK`.
-- Produces: `Round(round_id, display_number, time_range, start_tick, end_tick, is_warmup, provenance, confidence)`.
+- Produces: `MatchPhase` values `WARMUP`, `REGULATION_FIRST_HALF`, `REGULATION_SECOND_HALF`, `OVERTIME_FIRST_HALF`, `OVERTIME_SECOND_HALF`, and `UNKNOWN`.
+- Produces: `Round(round_id, display_number, time_range, start_tick, end_tick, match_phase, provenance, confidence, boundary_uncertainty_us)`.
 - Produces: `RoundCollection(rounds)` for `timeline/rounds.json`.
 - Produces: `DemoTimeline(descriptor, rounds, anchors)` as a validated in-memory aggregate with `round_for_time(demo_time_us)`.
 
@@ -454,6 +507,7 @@ from cs2pov.domain.timeline import (
     Round,
     RoundBoundaryConfidence,
     RoundCollection,
+    MatchPhase,
 )
 
 
@@ -462,11 +516,12 @@ def _round(round_id: str, number: int, start_us: int, end_us: int) -> Round:
         round_id=round_id,
         display_number=number,
         time_range=TimeRange(start_us, end_us),
-        start_tick=start_us // 15_625,
-        end_tick=end_us // 15_625,
-        is_warmup=False,
+        start_tick=None,
+        end_tick=None,
+        match_phase=MatchPhase.REGULATION_FIRST_HALF,
         provenance="synthetic-round-parser-v1",
         confidence=RoundBoundaryConfidence.EXACT,
+        boundary_uncertainty_us=0,
     )
 
 
@@ -558,6 +613,59 @@ def test_anchor_stream_must_refer_to_known_player_or_demo_stream() -> None:
     with pytest.raises(DomainSchemaError) as caught:
         DemoTimeline(_descriptor(), RoundCollection((_round("round-001", 1, 10_000_000, 20_000_000),)), (anchor,))
     assert caught.value.code == "time_anchor_invalid"
+
+
+def test_exact_tick_boundaries_must_map_to_declared_demo_range() -> None:
+    tick_anchor = TimeAnchor(
+        anchor_id="anchor-demo-ticks",
+        source_clock=SourceClock.DEMO_TICK,
+        source_stream_id="demo",
+        source_start=640,
+        source_end=1280,
+        demo_range=TimeRange(10_000_000, 20_000_000),
+        uncertainty_us=0,
+        provenance="synthetic-round-parser-v1",
+    )
+    mismatched = Round(
+        round_id="round-001",
+        display_number=1,
+        time_range=TimeRange(10_000_000, 20_000_000),
+        start_tick=640,
+        end_tick=1200,
+        match_phase=MatchPhase.REGULATION_FIRST_HALF,
+        provenance="synthetic-round-parser-v1",
+        confidence=RoundBoundaryConfidence.EXACT,
+        boundary_uncertainty_us=0,
+    )
+
+    with pytest.raises(DomainSchemaError) as caught:
+        DemoTimeline(_descriptor(), RoundCollection((mismatched,)), (tick_anchor,))
+    assert caught.value.code == "round_reference_invalid"
+
+
+def test_estimated_tick_boundary_may_differ_only_within_declared_uncertainty() -> None:
+    tick_anchor = TimeAnchor(
+        anchor_id="anchor-demo-ticks",
+        source_clock=SourceClock.DEMO_TICK,
+        source_stream_id="demo",
+        source_start=640,
+        source_end=1280,
+        demo_range=TimeRange(10_000_000, 20_000_000),
+        uncertainty_us=0,
+        provenance="synthetic-round-parser-v1",
+    )
+
+    def estimated(uncertainty_us: int) -> Round:
+        return Round(
+            "round-001", 1, TimeRange(10_000_000, 20_000_000), 640, 1279,
+            MatchPhase.REGULATION_FIRST_HALF, "synthetic-round-parser-v1",
+            RoundBoundaryConfidence.ESTIMATED, uncertainty_us,
+        )
+
+    DemoTimeline(_descriptor(), RoundCollection((estimated(20_000),)), (tick_anchor,))
+    with pytest.raises(DomainSchemaError) as caught:
+        DemoTimeline(_descriptor(), RoundCollection((estimated(10_000),)), (tick_anchor,))
+    assert caught.value.code == "round_reference_invalid"
 ```
 
 - [ ] **Step 2: Run the focused timeline test and confirm it fails**
@@ -579,6 +687,7 @@ Implement `timeline.py` so that:
 - tick-rate numerator and denominator are positive integers and remain rational, never a float;
 - team number is `None` or a non-negative integer;
 - Round tick fields are both present or both absent; when present, end tick must be greater than start tick;
+- `EXACT` requires `boundary_uncertainty_us == 0`; estimated/fallback rounds require a non-negative bounded value. When ticks exist, `DemoTimeline` maps them through the `demo` tick anchor: exact boundaries must equal the declared Demo range, while estimated/fallback boundary differences must not exceed their declared uncertainty;
 - `RoundCollection` requires unique IDs, unique display numbers, ascending time, and no overlap;
 - `DemoTimeline` requires unique anchor IDs; `COMPACT_AUDIO_SAMPLE` streams refer to known player IDs; `DEMO_TICK` uses stream `demo`; future `VIDEO_FRAME` streams may use any safe renderer-generated ID;
 - `DemoDescriptor.from_dict` and `RoundCollection.from_dict` reject unknown keys and unsupported versions;
@@ -591,7 +700,7 @@ The durable document shapes are exact:
 ```
 
 ```json
-{"schema_version": 1, "rounds": [{"round_id": "round-001", "display_number": 1, "start_us": 10000000, "end_us": 20000000, "start_tick": 640, "end_tick": 1280, "is_warmup": false, "provenance": "synthetic-round-parser-v1", "confidence": "exact"}]}
+{"schema_version": 1, "rounds": [{"round_id": "round-001", "display_number": 1, "start_us": 10000000, "end_us": 20000000, "start_tick": 640, "end_tick": 1280, "match_phase": "regulation_first_half", "provenance": "synthetic-round-parser-v1", "confidence": "exact", "boundary_uncertainty_us": 0}]}
 ```
 
 - [ ] **Step 4: Run all domain tests created so far**
@@ -613,16 +722,18 @@ git commit -m "feat: add demo timeline domain contracts"
 
 ---
 
-### Task 4: Non-secret model invocation snapshot
+### Task 4: Shared model configuration and per-call provenance
 
 **Files:**
 - Create: `src/cs2pov/domain/invocation.py`
 - Create: `tests/test_domain_invocation_v1.py`
 
 **Interfaces:**
-- Consumes: Task 1 validation helpers.
-- Produces: `ModelInvocationSnapshot(snapshot_id, provider_kind, endpoint_profile_id, model_name, prompt_template_version, parameters, knowledge_revision_ids, adapter_version, request_content_fingerprint)`.
-- Produces deterministic `to_dict()` and strict `from_dict()` for the Job-safe snapshot.
+- Consumes: Task 1 validation and canonical fingerprint helpers.
+- Produces: `ModelCapability` values `ASR` and `UNDERSTANDING_TRANSLATION`.
+- Produces: `ModelConfigurationSnapshot(snapshot_id, capability, provider_kind, endpoint_profile_id, model_name, prompt_template_version, parameters, knowledge_revision_ids, adapter_version)` with derived `configuration_fingerprint`.
+- Produces: `ModelInvocationRecord(invocation_id, configuration_snapshot_id, task_id, request_content_fingerprint, response_content_fingerprint)` plus `from_payloads(...)`.
+- Produces deterministic strict current-version dictionaries without request text or secrets.
 
 - [ ] **Step 1: Write failing snapshot round-trip and secret-rejection tests**
 
@@ -634,12 +745,17 @@ from __future__ import annotations
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError
-from cs2pov.domain.invocation import ModelInvocationSnapshot
+from cs2pov.domain.invocation import (
+    ModelCapability,
+    ModelConfigurationSnapshot,
+    ModelInvocationRecord,
+)
 
 
-def _snapshot(parameters: dict[str, object] | None = None) -> ModelInvocationSnapshot:
-    return ModelInvocationSnapshot(
-        snapshot_id="invoke-001",
+def _configuration(parameters: dict[str, object] | None = None) -> ModelConfigurationSnapshot:
+    return ModelConfigurationSnapshot(
+        snapshot_id="llm-config-001",
+        capability=ModelCapability.UNDERSTANDING_TRANSLATION,
         provider_kind="openai-compatible",
         endpoint_profile_id="provider-local-profile",
         model_name="fixture-model",
@@ -647,45 +763,92 @@ def _snapshot(parameters: dict[str, object] | None = None) -> ModelInvocationSna
         parameters=parameters or {"temperature": 0.2, "max_tokens": 512},
         knowledge_revision_ids=("knowledge-global-001",),
         adapter_version="adapter-v1",
-        request_content_fingerprint="a" * 64,
     )
 
 
-def test_invocation_snapshot_round_trips_without_secret_or_raw_url() -> None:
-    snapshot = _snapshot()
-    payload = snapshot.to_dict()
+def test_configuration_round_trips_without_secret_request_or_raw_url() -> None:
+    configuration = _configuration()
+    payload = configuration.to_dict()
 
     assert payload["schema_version"] == 1
     assert payload["endpoint_profile_id"] == "provider-local-profile"
+    assert len(payload["configuration_fingerprint"]) == 64
     assert "api_key" not in str(payload).lower()
     assert "base_url" not in payload
-    assert ModelInvocationSnapshot.from_dict(payload) == snapshot
+    assert "request_content_fingerprint" not in payload
+    assert ModelConfigurationSnapshot.from_dict(payload) == configuration
 
 
-def test_snapshot_copies_nested_json_parameters_to_prevent_mutation() -> None:
+def test_configuration_copies_nested_json_parameters_to_prevent_mutation() -> None:
     source = {"response_format": {"type": "json_object"}}
-    snapshot = _snapshot(source)
+    configuration = _configuration(source)
     source["response_format"] = {"type": "text"}
 
-    assert snapshot.to_dict()["parameters"] == {"response_format": {"type": "json_object"}}
+    assert configuration.to_dict()["parameters"] == {"response_format": {"type": "json_object"}}
 
 
-def test_snapshot_rejects_secret_bearing_parameters() -> None:
+def test_configuration_rejects_secret_bearing_parameters() -> None:
     with pytest.raises(DomainSchemaError) as caught:
-        _snapshot({"headers": {"authorization": "Bearer private"}})
+        _configuration({"headers": {"authorization": "Bearer private"}})
     assert caught.value.code == "domain_secret_forbidden"
 
 
-def test_snapshot_rejects_non_json_values_and_bad_fingerprint() -> None:
+def test_configuration_rejects_non_json_values_and_tampered_fingerprint() -> None:
     with pytest.raises(DomainSchemaError) as caught:
-        _snapshot({"temperature": object()})
+        _configuration({"temperature": object()})
     assert caught.value.code == "domain_field_invalid"
 
-    payload = _snapshot().to_dict()
-    payload["request_content_fingerprint"] = "not-a-sha256"
+    payload = _configuration().to_dict()
+    payload["model_name"] = "silently-changed-model"
     with pytest.raises(DomainSchemaError) as caught:
-        ModelInvocationSnapshot.from_dict(payload)
-    assert caught.value.code == "domain_field_invalid"
+        ModelConfigurationSnapshot.from_dict(payload)
+    assert caught.value.code == "domain_fingerprint_mismatch"
+
+
+def test_rounds_share_configuration_but_have_distinct_invocation_records() -> None:
+    configuration = _configuration()
+    round_one = ModelInvocationRecord.from_payloads(
+        invocation_id="invoke-round-001",
+        configuration_snapshot_id=configuration.snapshot_id,
+        task_id="round-001",
+        request_payload={"round_id": "round-001", "text": "one jungle"},
+        response_payload={"translated_zh": "警家一个"},
+    )
+    round_two = ModelInvocationRecord.from_payloads(
+        invocation_id="invoke-round-002",
+        configuration_snapshot_id=configuration.snapshot_id,
+        task_id="round-002",
+        request_payload={"round_id": "round-002", "text": "be be be"},
+        response_payload={"translated_zh": "B点，B点，B点"},
+    )
+
+    assert round_one.configuration_snapshot_id == round_two.configuration_snapshot_id
+    assert round_one.request_content_fingerprint != round_two.request_content_fingerprint
+    assert ModelInvocationRecord.from_dict(round_one.to_dict()) == round_one
+
+
+def test_local_asr_uses_same_closed_provenance_graph_without_endpoint_profile() -> None:
+    configuration = ModelConfigurationSnapshot(
+        snapshot_id="asr-config-001",
+        capability=ModelCapability.ASR,
+        provider_kind="faster-whisper-local",
+        endpoint_profile_id=None,
+        model_name="fixture-asr-model",
+        prompt_template_version=None,
+        parameters={"language": "en"},
+        knowledge_revision_ids=(),
+        adapter_version="faster-whisper-adapter-v1",
+    )
+    invocation = ModelInvocationRecord.from_payloads(
+        invocation_id="asr-invoke-001",
+        configuration_snapshot_id=configuration.snapshot_id,
+        task_id="asr-batch-001",
+        request_payload={"audio_content_fingerprint": "9" * 64},
+        response_payload={"cue_ids": ["cue-b-callout"]},
+    )
+
+    assert ModelConfigurationSnapshot.from_dict(configuration.to_dict()) == configuration
+    assert ModelInvocationRecord.from_dict(invocation.to_dict()) == invocation
 ```
 
 - [ ] **Step 2: Run the focused snapshot test and confirm it fails**
@@ -703,12 +866,21 @@ Expected: collection fails because `cs2pov.domain.invocation` does not exist.
 Implement `invocation.py` with these policies:
 
 - all identity/version fields are non-empty strings; ID fields use `require_identifier`;
-- `request_content_fingerprint` is exactly lower-case SHA-256;
 - parameters recursively accept only `None`, `bool`, finite `int`/`float`, `str`, lists, and dictionaries with string keys;
-- copy parameters into an immutable internal representation on construction and return fresh JSON-compatible containers from `to_dict`, so caller mutation cannot alter the snapshot;
+- copy parameters into an immutable internal representation on construction and return fresh JSON-compatible containers from `to_dict`, so caller mutation cannot alter the configuration;
 - call `reject_secret_keys` before storage;
-- emit no base URL, API key, credential value, request text, SteamID, or filesystem path;
+- compute the configuration fingerprint from the exact configuration payload excluding `schema_version` and `configuration_fingerprint`; `from_dict` recomputes and rejects mismatch;
+- `ModelInvocationRecord.from_payloads` derives request/response hashes with Task 1 `content_fingerprint`; direct construction and `from_dict` only accept validated lowercase hashes because raw request/response payloads are intentionally not persisted;
+- different round invocations may reference one shared configuration but must have unique invocation IDs and task IDs;
+- emit no base URL, API key, credential value, request/response text, SteamID, or filesystem path;
 - reject missing/unknown keys and unsupported schema versions.
+
+Use these exact durable shapes:
+
+- configuration document: `schema_version`, `snapshot_id`, `capability`, `provider_kind`, `endpoint_profile_id`, `model_name`, `prompt_template_version`, `parameters`, `knowledge_revision_ids`, `adapter_version`, derived `configuration_fingerprint`;
+- invocation record: `schema_version`, `invocation_id`, `configuration_snapshot_id`, `task_id`, `request_content_fingerprint`, `response_content_fingerprint`.
+
+The request and response fingerprints belong only to an actual invocation record. They must never be copied into the reusable configuration snapshot, and `from_dict` must reject such extra keys.
 
 - [ ] **Step 4: Run schema and invocation tests**
 
@@ -720,11 +892,11 @@ py -3.12 -m pytest tests/test_domain_schema_v1.py tests/test_domain_invocation_v
 
 Expected: both files pass.
 
-- [ ] **Step 5: Commit the invocation snapshot**
+- [ ] **Step 5: Commit configuration and per-call provenance**
 
 ```powershell
 git add src/cs2pov/domain/invocation.py tests/test_domain_invocation_v1.py
-git commit -m "feat: add safe model invocation snapshots"
+git commit -m "feat: add safe model invocation provenance"
 ```
 
 ---
@@ -740,9 +912,9 @@ git commit -m "feat: add safe model invocation snapshots"
 **Interfaces:**
 - Consumes: `TimeRange`, current schema validators, and SHA-256/identifier helpers.
 - Produces: `VoiceActivityCue(activity_id, player_id, time_range, packet_count, anchor_ids, uncertainty_us)`.
-- Produces: `TranscriptCue(cue_id, player_id, round_id, time_range, asr_original, language, confidence, anchor_ids, voice_activity_ids, asr_invocation_snapshot_id)`.
-- Produces: `UnderstandingResult(cue_id, round_id, asr_original, interpreted_source, translated_zh, confidence, evidence, warnings, model_invocation_snapshot_id)`.
-- Produces: `RoundUnderstandingDocument(round_id, input_fingerprint, model_invocation_snapshot_id, results)`.
+- Produces: `TranscriptCue(cue_id, player_id, round_id, time_range, source_clock, source_stream_id, source_start, source_end, asr_original, language, confidence, anchor_ids, voice_activity_ids, asr_invocation_record_id)` plus `from_source_span(...)`.
+- Produces: `UnderstandingResult(cue_id, round_id, asr_original, interpreted_source, translated_zh, confidence, evidence, warnings, model_invocation_record_id)` with derived `content_fingerprint()`.
+- Produces: `RoundUnderstandingDocument(round_id, input_fingerprint, model_configuration_snapshot_id, invocation_record_id, results)`; empty successful results require `invocation_record_id=None`.
 - Produces: `validate_understanding_against_transcript(result, cue) -> None`.
 
 - [ ] **Step 1: Write failing three-layer meaning and source-integrity tests**
@@ -755,7 +927,7 @@ from __future__ import annotations
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError
-from cs2pov.domain.timebase import TimeRange
+from cs2pov.domain.timebase import SourceClock, TimeAnchor, TimeRange
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.voice import VoiceActivityCue
 from cs2pov.domain.understanding import (
@@ -771,12 +943,16 @@ def _cue() -> TranscriptCue:
         player_id="player-bravo",
         round_id="round-002",
         time_range=TimeRange(20_500_000, 21_700_000),
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE,
+        source_stream_id="player-bravo",
+        source_start=0,
+        source_end=28_800,
         asr_original="be be be",
         language="en",
         confidence=0.62,
         anchor_ids=("anchor-bravo-001",),
         voice_activity_ids=("activity-bravo-001",),
-        asr_invocation_snapshot_id="asr-001",
+        asr_invocation_record_id="asr-invoke-001",
     )
 
 
@@ -790,7 +966,7 @@ def _result() -> UnderstandingResult:
         confidence=0.86,
         evidence=("same-round-context", "case-letter-b-v1"),
         warnings=(),
-        model_invocation_snapshot_id="invoke-001",
+        model_invocation_record_id="invoke-round-002",
     )
 
 
@@ -803,6 +979,39 @@ def test_transcript_jsonl_record_preserves_original_asr_and_integer_time() -> No
     assert payload["start_us"] == 20_500_000
     assert isinstance(payload["start_us"], int)
     assert TranscriptCue.from_dict(payload) == cue
+
+
+def test_unassigned_transcript_is_explicit_and_round_trips() -> None:
+    payload = _cue().to_dict()
+    payload["round_id"] = None
+
+    cue = TranscriptCue.from_dict(payload)
+    assert cue.round_id is None
+
+
+def test_transcript_factory_rejects_discontinuous_compact_audio_span() -> None:
+    anchors = (
+        TimeAnchor("anchor-a", SourceClock.COMPACT_AUDIO_SAMPLE, "player-bravo", 0, 24_000, TimeRange(10_000_000, 11_000_000), 16_000, "voice-extractor-v1"),
+        TimeAnchor("anchor-b", SourceClock.COMPACT_AUDIO_SAMPLE, "player-bravo", 24_000, 48_000, TimeRange(20_000_000, 21_000_000), 16_000, "voice-extractor-v1"),
+    )
+
+    with pytest.raises(DomainSchemaError) as caught:
+        TranscriptCue.from_source_span(
+            cue_id="cue-discontinuous",
+            player_id="player-bravo",
+            round_id=None,
+            source_clock=SourceClock.COMPACT_AUDIO_SAMPLE,
+            source_stream_id="player-bravo",
+            source_start=18_000,
+            source_end=30_000,
+            anchors=anchors,
+            asr_original="crosses a silence gap",
+            language="en",
+            confidence=0.5,
+            voice_activity_ids=("activity-bravo-001",),
+            asr_invocation_record_id="asr-invoke-001",
+        )
+    assert caught.value.code == "cue_time_discontinuous"
 
 
 def test_voice_activity_jsonl_record_preserves_anchor_evidence() -> None:
@@ -843,11 +1052,21 @@ def test_understanding_cannot_silently_change_source_cue() -> None:
     assert caught.value.code == "cue_reference_invalid"
 
 
+def test_understanding_content_fingerprint_changes_with_meaning() -> None:
+    original = _result()
+    payload = original.to_dict()
+    payload["translated_zh"] = "改写后的翻译"
+    changed = UnderstandingResult.from_dict(payload)
+
+    assert original.content_fingerprint() != changed.content_fingerprint()
+
+
 def test_round_document_requires_one_result_per_cue_and_matching_round() -> None:
     document = RoundUnderstandingDocument(
         round_id="round-002",
         input_fingerprint="b" * 64,
-        model_invocation_snapshot_id="invoke-001",
+        model_configuration_snapshot_id="llm-config-001",
+        invocation_record_id="invoke-round-002",
         results=(_result(),),
     )
     assert RoundUnderstandingDocument.from_dict(document.to_dict()) == document
@@ -856,10 +1075,23 @@ def test_round_document_requires_one_result_per_cue_and_matching_round() -> None
         RoundUnderstandingDocument(
             round_id="round-001",
             input_fingerprint="b" * 64,
-            model_invocation_snapshot_id="invoke-001",
+            model_configuration_snapshot_id="llm-config-001",
+            invocation_record_id="invoke-round-002",
             results=(_result(),),
         )
     assert caught.value.code == "round_reference_invalid"
+
+
+def test_speechless_round_is_successful_without_fake_model_call() -> None:
+    document = RoundUnderstandingDocument(
+        round_id="round-003",
+        input_fingerprint="3" * 64,
+        model_configuration_snapshot_id="llm-config-001",
+        invocation_record_id=None,
+        results=(),
+    )
+
+    assert RoundUnderstandingDocument.from_dict(document.to_dict()) == document
 
 
 def test_empty_interpretation_translation_or_evidence_is_invalid() -> None:
@@ -891,13 +1123,14 @@ Expected: collection fails because voice/transcript/understanding modules do not
 
 Implement the three modules with exact-key `to_dict`/`from_dict` factories. Apply these rules:
 
-- cue and round/player/snapshot/anchor IDs use safe identifiers;
-- voice activity has a positive packet count, at least one anchor ID, and non-negative uncertainty;
+- cue and round/player/configuration/invocation/anchor IDs use safe identifiers; only TranscriptCue permits `round_id=None`;
+- voice activity has a positive packet count no greater than `MAX_COUNT`, at least one anchor ID, and non-negative uncertainty no greater than `MAX_DEMO_TIME_US`;
 - `TranscriptCue.asr_original` is non-empty and frozen;
+- transcript source positions are non-negative and no greater than `MAX_SOURCE_POSITION`;
 - confidence is optional only on `TranscriptCue`; `UnderstandingResult.confidence` is required;
-- one cue has one contiguous Demo `TimeRange`; adapters receiving discontinuous `MappedTime` must split or warn before creating a cue;
+- `TranscriptCue.from_source_span` maps its integer source span through anchors and rejects non-contiguous `MappedTime` with `cue_time_discontinuous`; adapters must split before retrying and no warning-only bypass exists;
 - evidence is a non-empty tuple of non-empty strings; warnings may be empty;
-- `RoundUnderstandingDocument` results have unique cue IDs, all reference its round, and all reference its frozen model snapshot;
+- `RoundUnderstandingDocument` results have unique cue IDs and all reference its round/invocation record. Non-empty results require one invocation record; empty results require `invocation_record_id=None` and remain a valid successful no-speech round;
 - source validation compares cue ID, round ID, and exact `asr_original` without normalization or rewriting.
 
 The four durable shapes use these exact keys:
@@ -907,14 +1140,14 @@ The four durable shapes use these exact keys:
 ```
 
 ```json
-{"schema_version": 1, "cue_id": "cue-b-callout", "player_id": "player-bravo", "round_id": "round-002", "start_us": 20500000, "end_us": 21700000, "asr_original": "be be be", "language": "en", "confidence": 0.62, "anchor_ids": ["anchor-bravo-001"], "voice_activity_ids": ["activity-bravo-001"], "asr_invocation_snapshot_id": "asr-001"}
+{"schema_version": 1, "cue_id": "cue-b-callout", "player_id": "player-bravo", "round_id": "round-002", "start_us": 20500000, "end_us": 21700000, "source_clock": "compact_audio_sample", "source_stream_id": "player-bravo", "source_start": 0, "source_end": 28800, "asr_original": "be be be", "language": "en", "confidence": 0.62, "anchor_ids": ["anchor-bravo-001"], "voice_activity_ids": ["activity-bravo-001"], "asr_invocation_record_id": "asr-invoke-001"}
 ```
 
 ```json
-{"schema_version": 1, "cue_id": "cue-b-callout", "round_id": "round-002", "asr_original": "be be be", "interpreted_source": "B, B, B", "translated_zh": "B点，B点，B点", "confidence": 0.86, "evidence": ["same-round-context"], "warnings": [], "model_invocation_snapshot_id": "invoke-001"}
+{"schema_version": 1, "cue_id": "cue-b-callout", "round_id": "round-002", "asr_original": "be be be", "interpreted_source": "B, B, B", "translated_zh": "B点，B点，B点", "confidence": 0.86, "evidence": ["same-round-context"], "warnings": [], "model_invocation_record_id": "invoke-round-002"}
 ```
 
-The RoundUnderstandingDocument top level has exactly `schema_version`, `round_id`, `input_fingerprint`, `model_invocation_snapshot_id`, and `results`; `results` must contain at least one full UnderstandingResult dictionary in its tested serialized shape.
+The RoundUnderstandingDocument top level has exactly `schema_version`, `round_id`, `input_fingerprint`, `model_configuration_snapshot_id`, `invocation_record_id`, and `results`. An empty `results` list is valid only with a null invocation record.
 
 - [ ] **Step 4: Run transcript/understanding and timebase tests**
 
@@ -939,14 +1172,18 @@ git commit -m "feat: add transcript and understanding contracts"
 
 **Files:**
 - Create: `src/cs2pov/domain/review.py`
+- Create: `src/cs2pov/domain/validation.py`
 - Create: `tests/test_domain_review_v1.py`
+- Create: `tests/test_domain_validation_v1.py`
 
 **Interfaces:**
 - Consumes: `TimeRange`, `UnderstandingResult`, identifiers, SHA-256, and current schema helpers.
 - Produces: `ReviewAction` values `ACCEPT`, `EDIT`, and `EXCLUDE`.
 - Produces: `ReviewDecision(decision_id, cue_id, source_result_fingerprint, action, reviewed_at, reviewer_label, reason, revised_time_range, revised_interpreted_source, revised_translated_zh)`.
-- Produces: `DraftCommsCue` and `ReviewedCommsCue` preserving source, interpreted, and translated layers.
-- Produces: `DraftCommsTimeline` and `ReviewedCommsTimeline` with explicit `timebase` and deterministic ordering validation.
+- Produces: `DraftCommsCue.from_transcript_and_understanding(...)` and `ReviewedCommsCue` preserving source, interpreted, and translated layers.
+- Produces: `DraftCommsTimeline.content_fingerprint()` and `ReviewedCommsTimeline` with explicit `timebase` and deterministic ordering validation.
+- Produces: `compose_reviewed_timeline(draft, decisions) -> ReviewedCommsTimeline` as the only public composition path.
+- Produces: `validate_voice_activity_against_timeline`, `validate_transcript_against_timeline`, `validate_understanding_document_graph(document, transcripts, configurations, invocations)`, and `validate_reviewed_timeline_graph`.
 
 - [ ] **Step 1: Write failing review action, preservation, and timebase tests**
 
@@ -963,33 +1200,52 @@ from cs2pov.domain.review import (
     DraftCommsTimeline,
     ReviewAction,
     ReviewDecision,
-    ReviewedCommsCue,
     ReviewedCommsTimeline,
+    compose_reviewed_timeline,
 )
-from cs2pov.domain.timebase import TimeRange
+from cs2pov.domain.timebase import SourceClock, TimeRange
+from cs2pov.domain.transcript import TranscriptCue
+from cs2pov.domain.understanding import UnderstandingResult
 
 
 def _draft(cue_id: str = "cue-b-callout", start_us: int = 20_500_000) -> DraftCommsCue:
-    return DraftCommsCue(
+    transcript = TranscriptCue(
+        cue_id=cue_id,
+        player_id="player-bravo",
+        round_id="round-002",
+        time_range=TimeRange(start_us, start_us + 1_200_000),
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE,
+        source_stream_id="player-bravo",
+        source_start=0,
+        source_end=28_800,
+        asr_original="be be be",
+        language="en",
+        confidence=0.62,
+        anchor_ids=("anchor-bravo-001",),
+        voice_activity_ids=("activity-bravo-001",),
+        asr_invocation_record_id="asr-invoke-001",
+    )
+    result = UnderstandingResult(
         cue_id=cue_id,
         round_id="round-002",
-        player_id="player-bravo",
-        time_range=TimeRange(start_us, start_us + 1_200_000),
         asr_original="be be be",
         interpreted_source="B, B, B",
         translated_zh="B点，B点，B点",
         confidence=0.86,
         evidence=("same-round-context",),
-        understanding_result_fingerprint="c" * 64,
+        warnings=(),
+        model_invocation_record_id="invoke-round-002",
     )
+    return DraftCommsCue.from_transcript_and_understanding(transcript, result)
 
 
 def test_accept_decision_cannot_smuggle_revised_content() -> None:
+    draft = _draft()
     with pytest.raises(DomainSchemaError) as caught:
         ReviewDecision(
             decision_id="decision-001",
             cue_id="cue-b-callout",
-            source_result_fingerprint="c" * 64,
+            source_result_fingerprint=draft.understanding_result_fingerprint,
             action=ReviewAction.ACCEPT,
             reviewed_at="2026-08-31T12:00:00+00:00",
             reviewer_label="local-user",
@@ -1002,11 +1258,12 @@ def test_accept_decision_cannot_smuggle_revised_content() -> None:
 
 
 def test_edit_requires_a_change_and_exclude_requires_reason() -> None:
+    draft = _draft()
     with pytest.raises(DomainSchemaError) as caught:
         ReviewDecision(
             decision_id="decision-001",
             cue_id="cue-b-callout",
-            source_result_fingerprint="c" * 64,
+            source_result_fingerprint=draft.understanding_result_fingerprint,
             action=ReviewAction.EDIT,
             reviewed_at="2026-08-31T12:00:00+00:00",
             reviewer_label="local-user",
@@ -1021,7 +1278,7 @@ def test_edit_requires_a_change_and_exclude_requires_reason() -> None:
         ReviewDecision(
             decision_id="decision-002",
             cue_id="cue-b-callout",
-            source_result_fingerprint="c" * 64,
+            source_result_fingerprint=draft.understanding_result_fingerprint,
             action=ReviewAction.EXCLUDE,
             reviewed_at="2026-08-31T12:00:00+00:00",
             reviewer_label="local-user",
@@ -1033,7 +1290,7 @@ def test_edit_requires_a_change_and_exclude_requires_reason() -> None:
     assert caught.value.code == "review_decision_invalid"
 
 
-def test_reviewed_cue_preserves_original_and_records_final_values() -> None:
+def test_composition_preserves_original_and_records_final_values() -> None:
     draft = _draft()
     decision = ReviewDecision(
         decision_id="decision-001",
@@ -1047,7 +1304,9 @@ def test_reviewed_cue_preserves_original_and_records_final_values() -> None:
         revised_interpreted_source=None,
         revised_translated_zh="B点！B点！B点！",
     )
-    cue = ReviewedCommsCue.from_draft_and_decision(draft, decision)
+    draft_timeline = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+    reviewed_timeline = compose_reviewed_timeline(draft_timeline, (decision,))
+    cue = reviewed_timeline.cues[0]
 
     assert cue.asr_original == "be be be"
     assert cue.interpreted_source == "B, B, B"
@@ -1056,6 +1315,7 @@ def test_reviewed_cue_preserves_original_and_records_final_values() -> None:
     assert cue.evidence == ("same-round-context",)
     assert cue.final_translated_zh == "B点！B点！B点！"
     assert cue.review_decision_id == "decision-001"
+    assert reviewed_timeline.source_draft_fingerprint == draft_timeline.content_fingerprint()
 
 
 def test_timeline_requires_explicit_demo_timebase_and_sorted_cues() -> None:
@@ -1089,7 +1349,7 @@ def test_timeline_requires_explicit_demo_timebase_and_sorted_cues() -> None:
     assert caught.value.code == "timeline_invalid"
 
 
-def test_reviewed_timeline_round_trips_and_rejects_duplicate_cues() -> None:
+def test_reviewed_timeline_round_trips_from_verified_composition() -> None:
     draft = _draft()
     decision = ReviewDecision(
         decision_id="decision-001",
@@ -1103,73 +1363,277 @@ def test_reviewed_timeline_round_trips_and_rejects_duplicate_cues() -> None:
         revised_interpreted_source=None,
         revised_translated_zh=None,
     )
-    reviewed = ReviewedCommsCue.from_draft_and_decision(draft, decision)
-    timeline = ReviewedCommsTimeline(
-        demo_asset_id="a" * 64,
-        timebase="demo-microseconds",
-        source_draft_fingerprint="d" * 64,
-        cues=(reviewed,),
-        excluded_decision_ids=(),
-    )
+    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+    timeline = compose_reviewed_timeline(source, (decision,))
 
     assert ReviewedCommsTimeline.from_dict(timeline.to_dict()) == timeline
 
+
+def test_composition_rejects_missing_extra_stale_and_noop_decisions() -> None:
+    draft = _draft()
+    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+
+    with pytest.raises(DomainSchemaError) as caught:
+        compose_reviewed_timeline(source, ())
+    assert caught.value.code == "review_decision_invalid"
+
+    extra = ReviewDecision(
+        "decision-extra", "cue-extra", "0" * 64, ReviewAction.ACCEPT,
+        "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None,
+    )
+    with pytest.raises(DomainSchemaError) as caught:
+        compose_reviewed_timeline(source, (extra,))
+    assert caught.value.code == "review_decision_invalid"
+
+    stale = ReviewDecision(
+        "decision-stale", draft.cue_id, "0" * 64, ReviewAction.ACCEPT,
+        "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None,
+    )
+    with pytest.raises(DomainSchemaError) as caught:
+        compose_reviewed_timeline(source, (stale,))
+    assert caught.value.code == "domain_fingerprint_mismatch"
+
+    noop = ReviewDecision(
+        "decision-noop", draft.cue_id, draft.understanding_result_fingerprint, ReviewAction.EDIT,
+        "2026-08-31T12:00:00.000000Z", "local-user", "重复原译文", None, None, draft.translated_zh,
+    )
+    with pytest.raises(DomainSchemaError) as caught:
+        compose_reviewed_timeline(source, (noop,))
+    assert caught.value.code == "review_decision_invalid"
+
+
+def test_tampered_draft_payload_cannot_keep_old_content_fingerprint() -> None:
+    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (_draft(),))
+    payload = source.to_dict()
+    original_fingerprint = source.content_fingerprint()
+    payload["cues"][0]["translated_zh"] = "被篡改"
+    changed = DraftCommsTimeline.from_dict(payload)
+
+    assert changed.content_fingerprint() != original_fingerprint
+
+
+def test_direct_reviewed_document_rejects_duplicate_cues() -> None:
+    draft = _draft()
+    decision = ReviewDecision(
+        "decision-001", draft.cue_id, draft.understanding_result_fingerprint, ReviewAction.ACCEPT,
+        "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None,
+    )
+    reviewed = compose_reviewed_timeline(
+        DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,)),
+        (decision,),
+    ).cues[0]
+
     with pytest.raises(DomainSchemaError) as caught:
         ReviewedCommsTimeline(
-            demo_asset_id="a" * 64,
-            timebase="demo-microseconds",
-            source_draft_fingerprint="d" * 64,
-            cues=(reviewed, reviewed),
-            excluded_decision_ids=(),
+            "a" * 64, "demo-microseconds", "d" * 64, (reviewed, reviewed), (),
         )
     assert caught.value.code == "timeline_invalid"
 ```
 
-- [ ] **Step 2: Run the focused review test and confirm it fails**
+- [ ] **Step 2: Write failing cross-object containment and provenance tests**
+
+Create `tests/test_domain_validation_v1.py` with one closed graph and two tamper cases:
+
+```python
+from __future__ import annotations
+
+import pytest
+
+from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.fingerprint import content_fingerprint
+from cs2pov.domain.invocation import ModelCapability, ModelConfigurationSnapshot, ModelInvocationRecord
+from cs2pov.domain.review import DraftCommsCue, DraftCommsTimeline, ReviewAction, ReviewDecision, compose_reviewed_timeline
+from cs2pov.domain.timebase import SourceClock, TimeAnchor, TimeRange
+from cs2pov.domain.timeline import DemoDescriptor, DemoTimeline, MatchPhase, PlayerSnapshot, Round, RoundBoundaryConfidence, RoundCollection
+from cs2pov.domain.transcript import TranscriptCue
+from cs2pov.domain.understanding import RoundUnderstandingDocument, UnderstandingResult
+from cs2pov.domain.validation import (
+    validate_reviewed_timeline_graph,
+    validate_transcript_against_timeline,
+    validate_understanding_document_graph,
+)
+from cs2pov.domain.voice import VoiceActivityCue
+
+
+def _closed_graph() -> tuple[DemoTimeline, VoiceActivityCue, TranscriptCue, ModelConfigurationSnapshot, ModelInvocationRecord]:
+    descriptor = DemoDescriptor("a" * 64, "de_mirage", None, 64, 1, (PlayerSnapshot("player-alpha", "Alpha", 2),))
+    rounds = RoundCollection((Round(
+        "round-001", 1, TimeRange(10_000_000, 11_000_000), None, None,
+        MatchPhase.REGULATION_FIRST_HALF, "round-parser-v1", RoundBoundaryConfidence.EXACT, 0,
+    ),))
+    anchor = TimeAnchor(
+        "anchor-alpha-001", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 0, 24_000,
+        TimeRange(10_000_000, 11_000_000), 16_000, "voice-extractor-v1",
+    )
+    timeline = DemoTimeline(descriptor, rounds, (anchor,))
+    activity = VoiceActivityCue(
+        "activity-alpha-001", "player-alpha", TimeRange(10_000_000, 10_500_000),
+        8, ("anchor-alpha-001",), 16_000,
+    )
+    configuration = ModelConfigurationSnapshot(
+        "asr-config-001", ModelCapability.ASR, "faster-whisper-local", None,
+        "fixture-asr-model", None, {"language": "en"}, (), "asr-adapter-v1",
+    )
+    invocation = ModelInvocationRecord.from_payloads(
+        "asr-invoke-001", configuration.snapshot_id, "asr-batch-001",
+        {"audio_content_fingerprint": "9" * 64}, {"cue_ids": ["cue-alpha-001"]},
+    )
+    transcript = TranscriptCue.from_source_span(
+        cue_id="cue-alpha-001", player_id="player-alpha", round_id="round-001",
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE, source_stream_id="player-alpha",
+        source_start=0, source_end=12_000, anchors=(anchor,), asr_original="one jungle",
+        language="en", confidence=0.9, voice_activity_ids=(activity.activity_id,),
+        asr_invocation_record_id=invocation.invocation_id,
+    )
+    return timeline, activity, transcript, configuration, invocation
+
+
+def test_transcript_graph_validates_player_round_activity_anchor_and_asr_call() -> None:
+    timeline, activity, transcript, configuration, invocation = _closed_graph()
+
+    validate_transcript_against_timeline(
+        transcript, timeline, (activity,), (configuration,), (invocation,),
+    )
+
+
+def test_transcript_graph_rejects_unknown_player_dangling_call_and_round_crossing() -> None:
+    timeline, activity, transcript, configuration, invocation = _closed_graph()
+
+    payload = transcript.to_dict()
+    payload["player_id"] = "player-missing"
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_transcript_against_timeline(
+            TranscriptCue.from_dict(payload), timeline, (activity,), (configuration,), (invocation,),
+        )
+    assert caught.value.code == "player_reference_invalid"
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_transcript_against_timeline(transcript, timeline, (activity,), (configuration,), ())
+    assert caught.value.code == "invocation_reference_invalid"
+
+    payload = transcript.to_dict()
+    payload["end_us"] = 11_000_001
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_transcript_against_timeline(
+            TranscriptCue.from_dict(payload), timeline, (activity,), (configuration,), (invocation,),
+        )
+    assert caught.value.code == "cue_reference_invalid"
+
+
+def test_understanding_graph_derives_request_response_and_source_integrity() -> None:
+    _, _, transcript, asr_configuration, _ = _closed_graph()
+    configuration = ModelConfigurationSnapshot(
+        "llm-config-001", ModelCapability.UNDERSTANDING_TRANSLATION, "openai-compatible",
+        "provider-local-profile", "fixture-model", "understanding-v1",
+        {"temperature": 0.2}, (), "adapter-v1",
+    )
+    result = UnderstandingResult(
+        transcript.cue_id, "round-001", transcript.asr_original, "one jungle", "警家一个",
+        0.93, ("same-round-context",), (), "invoke-round-001",
+    )
+    request = {"round_id": "round-001", "transcript_cues": [transcript.to_dict()]}
+    response = {"round_id": "round-001", "results": [result.to_dict()]}
+    invocation = ModelInvocationRecord.from_payloads(
+        "invoke-round-001", configuration.snapshot_id, "round-001", request, response,
+    )
+    document = RoundUnderstandingDocument(
+        "round-001", content_fingerprint(request), configuration.snapshot_id,
+        invocation.invocation_id, (result,),
+    )
+
+    validate_understanding_document_graph(
+        document, (transcript,), (configuration,), (invocation,),
+    )
+
+    changed_payload = result.to_dict()
+    changed_payload["asr_original"] = "B B B"
+    changed_document = RoundUnderstandingDocument(
+        "round-001", document.input_fingerprint, configuration.snapshot_id,
+        invocation.invocation_id, (UnderstandingResult.from_dict(changed_payload),),
+    )
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_understanding_document_graph(
+            changed_document, (transcript,), (configuration,), (invocation,),
+        )
+    assert caught.value.code == "cue_reference_invalid"
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_understanding_document_graph(
+            document, (transcript,), (asr_configuration,), (invocation,),
+        )
+    assert caught.value.code == "invocation_reference_invalid"
+
+
+def test_reviewed_time_edit_must_remain_inside_declared_round() -> None:
+    timeline, _, transcript, _, _ = _closed_graph()
+    result = UnderstandingResult(
+        transcript.cue_id, "round-001", transcript.asr_original, "one jungle", "警家一个",
+        0.93, ("same-round-context",), (), "invoke-round-001",
+    )
+    draft_cue = DraftCommsCue.from_transcript_and_understanding(transcript, result)
+    draft = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft_cue,))
+    decision = ReviewDecision(
+        "decision-001", draft_cue.cue_id, draft_cue.understanding_result_fingerprint,
+        ReviewAction.EDIT, "2026-08-31T12:00:00.000000Z", "local-user",
+        "调整显示时间", TimeRange(9_000_000, 9_500_000), None, None,
+    )
+    reviewed = compose_reviewed_timeline(draft, (decision,))
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_reviewed_timeline_graph(reviewed, draft, timeline)
+    assert caught.value.code == "cue_reference_invalid"
+```
+
+- [ ] **Step 3: Run the focused review/validation tests and confirm they fail**
 
 Run:
 
 ```powershell
-py -3.12 -m pytest tests/test_domain_review_v1.py -q
+py -3.12 -m pytest tests/test_domain_review_v1.py tests/test_domain_validation_v1.py -q
 ```
 
-Expected: collection fails because `cs2pov.domain.review` does not exist.
+Expected: collection fails because `cs2pov.domain.review` and `cs2pov.domain.validation` do not exist.
 
-- [ ] **Step 3: Implement typed decisions and immutable draft/reviewed timelines**
+- [ ] **Step 4: Implement typed decisions, composition, and aggregate validation**
 
 Apply these exact policies:
 
-- parse `reviewed_at` with `datetime.fromisoformat`, require a timezone-aware timestamp, and serialize the original normalized ISO text;
+- parse `reviewed_at` with `datetime.fromisoformat` after accepting a terminal `Z`, require a timezone-aware timestamp, convert to UTC, and serialize exactly `YYYY-MM-DDTHH:MM:SS.ffffffZ`;
 - `ACCEPT` permits no revision fields; `EDIT` requires at least one revised field; `EXCLUDE` permits no revisions and requires a non-empty reason;
-- every decision fingerprint must match the draft result fingerprint before composition;
+- `UnderstandingResult.content_fingerprint()` derives from its exact `to_dict()` with Task 1 canonical JSON; `DraftCommsCue.from_transcript_and_understanding` computes and stores that value rather than accepting one from its caller;
+- `DraftCommsTimeline.content_fingerprint()` derives from its exact serialized document;
+- `compose_reviewed_timeline` requires exactly one unique decision per draft cue, rejects missing/extra/stale decisions, rejects an EDIT whose resolved values equal the draft, derives `source_draft_fingerprint`, and is the only application-facing composition path;
 - `ReviewedCommsCue` retains ASR original, interpreted source, and model translation even when final time/text changes;
 - excluded cues do not appear in reviewed cues but their decision IDs are retained in `excluded_decision_ids`;
 - timeline timebase is exactly `demo-microseconds`; per-round/local export timebases are later exporter manifests, not stored as core truth;
 - draft/reviewed timeline `demo_asset_id` values use `require_sha256`;
 - cue IDs are unique, cues are sorted by `(start_us, end_us, cue_id)`, and all serialized documents reject unknown keys and unsupported versions.
+- aggregate validation uses production functions, not fixture-only checks: it recomputes transcript source mapping, validates known players/rounds/activities/anchors, requires the referenced invocation and configuration with `ASR` capability, verifies cue containment in its declared half-open round, and verifies reviewed edits remain in their original round;
+- `validate_understanding_document_graph` derives the canonical request payload as `{"round_id": document.round_id, "transcript_cues": [cue.to_dict(), ...]}` from the sorted assigned cues in that round and the response payload as `{"round_id": document.round_id, "results": [result.to_dict(), ...]}`; it requires the document input fingerprint, invocation request/response fingerprints, configuration reference, `UNDERSTANDING_TRANSLATION` capability, invocation task ID, result set, cue source fields, and invocation IDs all to match. A speechless round uses the same empty request fingerprint but has no invocation and an empty result set;
+- unassigned transcript cues are valid members of the transcript collection but are intentionally absent from every per-round understanding document until a later routing stage assigns or dismisses them.
 
 Use these exact top-level keys:
 
 - ReviewDecision JSONL record: `schema_version`, `decision_id`, `cue_id`, `source_result_fingerprint`, `action`, `reviewed_at`, `reviewer_label`, `reason`, `revised_start_us`, `revised_end_us`, `revised_interpreted_source`, `revised_translated_zh`.
 - Draft timeline document: `schema_version`, `demo_asset_id`, `timebase`, `input_fingerprint`, `cues`.
 - Each draft cue: `cue_id`, `round_id`, `player_id`, `start_us`, `end_us`, `asr_original`, `interpreted_source`, `translated_zh`, `confidence`, `evidence`, `understanding_result_fingerprint`.
-- Reviewed timeline document: `schema_version`, `demo_asset_id`, `timebase`, `source_draft_fingerprint`, `cues`, `excluded_decision_ids`.
+- Reviewed timeline document: `schema_version`, `demo_asset_id`, `timebase`, derived `source_draft_fingerprint`, `cues`, `excluded_decision_ids`.
 - Each reviewed cue: `cue_id`, `round_id`, `player_id`, `start_us`, `end_us`, `asr_original`, `interpreted_source`, `model_translated_zh`, `model_confidence`, `evidence`, `final_interpreted_source`, `final_translated_zh`, `review_decision_id`.
 
-- [ ] **Step 4: Run review, understanding, and timebase tests**
+- [ ] **Step 5: Run review, validation, understanding, and timebase tests**
 
 Run:
 
 ```powershell
-py -3.12 -m pytest tests/test_domain_timebase_v1.py tests/test_domain_understanding_v1.py tests/test_domain_review_v1.py -q
+py -3.12 -m pytest tests/test_domain_timebase_v1.py tests/test_domain_understanding_v1.py tests/test_domain_review_v1.py tests/test_domain_validation_v1.py -q
 ```
 
-Expected: all three files pass.
+Expected: all four files pass.
 
-- [ ] **Step 5: Commit the review contracts**
+- [ ] **Step 6: Commit the review and aggregate validation contracts**
 
 ```powershell
-git add src/cs2pov/domain/review.py tests/test_domain_review_v1.py
+git add src/cs2pov/domain/review.py src/cs2pov/domain/validation.py tests/test_domain_review_v1.py tests/test_domain_validation_v1.py
 git commit -m "feat: add human review timeline contracts"
 ```
 
@@ -1243,69 +1707,114 @@ descriptor = DemoDescriptor(
     players=(PlayerSnapshot("player-alpha", "Alpha", 2), PlayerSnapshot("player-bravo", "Bravo", 2)),
 )
 rounds = RoundCollection((
-    Round("round-001", 1, TimeRange(10_000_000, 20_000_000), 640, 1280, False, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT),
-    Round("round-002", 2, TimeRange(20_000_000, 30_000_000), 1280, 1920, False, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT),
-    Round("round-003", 3, TimeRange(30_000_000, 40_000_000), 1920, 2560, False, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT),
+    Round("round-001", 1, TimeRange(10_000_000, 20_000_000), 640, 1280, MatchPhase.REGULATION_FIRST_HALF, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT, 0),
+    Round("round-002", 2, TimeRange(20_000_000, 30_000_000), 1280, 1920, MatchPhase.REGULATION_FIRST_HALF, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT, 0),
+    Round("round-003", 3, TimeRange(30_000_000, 40_000_000), 1920, 2560, MatchPhase.REGULATION_SECOND_HALF, "synthetic-round-parser-v1", RoundBoundaryConfidence.EXACT, 0),
 ))
 anchors = (
     TimeAnchor("anchor-demo-ticks", SourceClock.DEMO_TICK, "demo", 640, 2560, TimeRange(10_000_000, 40_000_000), 0, "synthetic-round-parser-v1"),
     TimeAnchor("anchor-alpha-001", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 0, 24_000, TimeRange(10_500_000, 11_500_000), 16_000, "synthetic-voice-extractor-v1"),
     TimeAnchor("anchor-alpha-002", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 24_000, 48_000, TimeRange(20_000_000, 21_000_000), 16_000, "synthetic-voice-extractor-v1"),
-    TimeAnchor("anchor-alpha-003", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 48_000, 67_200, TimeRange(30_500_000, 31_300_000), 16_000, "synthetic-voice-extractor-v1"),
+    TimeAnchor("anchor-alpha-unassigned", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 48_000, 67_200, TimeRange(40_500_000, 41_300_000), 16_000, "synthetic-voice-extractor-v1"),
     TimeAnchor("anchor-bravo-001", SourceClock.COMPACT_AUDIO_SAMPLE, "player-bravo", 0, 28_800, TimeRange(20_500_000, 21_700_000), 16_000, "synthetic-voice-extractor-v1"),
 )
-invocation = ModelInvocationSnapshot(
-    "invoke-001", "openai-compatible", "provider-local-profile", "fixture-model", "understanding-v1",
-    {"temperature": 0.2, "max_tokens": 512}, ("knowledge-global-001",), "adapter-v1", "a" * 64,
+timeline = DemoTimeline(descriptor, rounds, anchors)
+asr_configuration = ModelConfigurationSnapshot(
+    "asr-config-001", ModelCapability.ASR, "faster-whisper-local", None,
+    "fixture-asr-model", None, {"language": "en"}, (), "asr-adapter-v1",
+)
+llm_configuration = ModelConfigurationSnapshot(
+    "llm-config-001", ModelCapability.UNDERSTANDING_TRANSLATION, "openai-compatible",
+    "provider-local-profile", "fixture-model", "understanding-v1",
+    {"temperature": 0.2, "max_tokens": 512}, ("knowledge-global-001",), "adapter-v1",
 )
 voice_activities = (
     VoiceActivityCue("activity-alpha-001", "player-alpha", TimeRange(10_750_000, 11_250_000), 8, ("anchor-alpha-001",), 16_000),
     VoiceActivityCue("activity-bravo-001", "player-bravo", TimeRange(20_500_000, 21_700_000), 12, ("anchor-bravo-001",), 16_000),
     VoiceActivityCue("activity-alpha-002", "player-alpha", TimeRange(20_650_000, 20_950_000), 5, ("anchor-alpha-002",), 16_000),
-    VoiceActivityCue("activity-alpha-003", "player-alpha", TimeRange(30_500_000, 31_300_000), 7, ("anchor-alpha-003",), 16_000),
+    VoiceActivityCue("activity-alpha-unassigned", "player-alpha", TimeRange(40_500_000, 41_300_000), 7, ("anchor-alpha-unassigned",), 16_000),
 )
 transcripts = (
-    TranscriptCue("cue-first", "player-alpha", "round-001", TimeRange(10_750_000, 11_250_000), "one jungle", "en", 0.91, ("anchor-alpha-001",), ("activity-alpha-001",), "asr-001"),
-    TranscriptCue("cue-b-callout", "player-bravo", "round-002", TimeRange(20_500_000, 21_700_000), "be be be", "en", 0.62, ("anchor-bravo-001",), ("activity-bravo-001",), "asr-001"),
-    TranscriptCue("cue-overlap", "player-alpha", "round-002", TimeRange(20_650_000, 20_950_000), "two short", "en", 0.84, ("anchor-alpha-002",), ("activity-alpha-002",), "asr-001"),
-    TranscriptCue("cue-third", "player-alpha", "round-003", TimeRange(30_500_000, 31_300_000), "save awp", "en", 0.88, ("anchor-alpha-003",), ("activity-alpha-003",), "asr-001"),
+    TranscriptCue.from_source_span(
+        cue_id="cue-first", player_id="player-alpha", round_id="round-001",
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE, source_stream_id="player-alpha",
+        source_start=6_000, source_end=18_000, anchors=(anchors[1],),
+        asr_original="one jungle", language="en", confidence=0.91,
+        voice_activity_ids=("activity-alpha-001",), asr_invocation_record_id="asr-invoke-001",
+    ),
+    TranscriptCue.from_source_span(
+        cue_id="cue-b-callout", player_id="player-bravo", round_id="round-002",
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE, source_stream_id="player-bravo",
+        source_start=0, source_end=28_800, anchors=(anchors[4],),
+        asr_original="be be be", language="en", confidence=0.62,
+        voice_activity_ids=("activity-bravo-001",), asr_invocation_record_id="asr-invoke-001",
+    ),
+    TranscriptCue.from_source_span(
+        cue_id="cue-overlap", player_id="player-alpha", round_id="round-002",
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE, source_stream_id="player-alpha",
+        source_start=39_600, source_end=46_800, anchors=(anchors[2],),
+        asr_original="two short", language="en", confidence=0.84,
+        voice_activity_ids=("activity-alpha-002",), asr_invocation_record_id="asr-invoke-001",
+    ),
+    TranscriptCue.from_source_span(
+        cue_id="cue-unassigned", player_id="player-alpha", round_id=None,
+        source_clock=SourceClock.COMPACT_AUDIO_SAMPLE, source_stream_id="player-alpha",
+        source_start=48_000, source_end=67_200, anchors=(anchors[3],),
+        asr_original="after round chatter", language="en", confidence=0.74,
+        voice_activity_ids=("activity-alpha-unassigned",), asr_invocation_record_id="asr-invoke-001",
+    ),
 )
 results = (
-    UnderstandingResult("cue-first", "round-001", "one jungle", "one jungle", "警家一个", 0.93, ("same-round-context",), (), "invoke-001"),
-    UnderstandingResult("cue-b-callout", "round-002", "be be be", "B, B, B", "B点，B点，B点", 0.86, ("same-round-context", "case-letter-b-v1"), (), "invoke-001"),
-    UnderstandingResult("cue-overlap", "round-002", "two short", "two short", "短箱两个", 0.88, ("same-round-context",), (), "invoke-001"),
-    UnderstandingResult("cue-third", "round-003", "save awp", "save AWP", "保大狙", 0.9, ("same-round-context",), (), "invoke-001"),
+    UnderstandingResult("cue-first", "round-001", "one jungle", "one jungle", "警家一个", 0.93, ("same-round-context",), (), "invoke-round-001"),
+    UnderstandingResult("cue-b-callout", "round-002", "be be be", "B, B, B", "B点，B点，B点", 0.86, ("same-round-context", "case-letter-b-v1"), (), "invoke-round-002"),
+    UnderstandingResult("cue-overlap", "round-002", "two short", "two short", "短箱两个", 0.88, ("same-round-context",), (), "invoke-round-002"),
+)
+round_one_request = {"round_id": "round-001", "transcript_cues": [transcripts[0].to_dict()]}
+round_two_request = {"round_id": "round-002", "transcript_cues": [transcripts[1].to_dict(), transcripts[2].to_dict()]}
+round_three_request = {"round_id": "round-003", "transcript_cues": []}
+invocations = (
+    ModelInvocationRecord.from_payloads(
+        "asr-invoke-001", asr_configuration.snapshot_id, "asr-batch-001",
+        {"audio_content_fingerprint": "9" * 64},
+        {"cue_ids": [cue.cue_id for cue in transcripts]},
+    ),
+    ModelInvocationRecord.from_payloads(
+        "invoke-round-001", llm_configuration.snapshot_id, "round-001", round_one_request,
+        {"round_id": "round-001", "results": [results[0].to_dict()]},
+    ),
+    ModelInvocationRecord.from_payloads(
+        "invoke-round-002", llm_configuration.snapshot_id, "round-002", round_two_request,
+        {"round_id": "round-002", "results": [results[1].to_dict(), results[2].to_dict()]},
+    ),
 )
 round_documents = (
-    RoundUnderstandingDocument("round-001", "1" * 64, "invoke-001", (results[0],)),
-    RoundUnderstandingDocument("round-002", "2" * 64, "invoke-001", (results[1], results[2])),
-    RoundUnderstandingDocument("round-003", "3" * 64, "invoke-001", (results[3],)),
+    RoundUnderstandingDocument("round-001", content_fingerprint(round_one_request), llm_configuration.snapshot_id, "invoke-round-001", (results[0],)),
+    RoundUnderstandingDocument("round-002", content_fingerprint(round_two_request), llm_configuration.snapshot_id, "invoke-round-002", (results[1], results[2])),
+    RoundUnderstandingDocument("round-003", content_fingerprint(round_three_request), llm_configuration.snapshot_id, None, ()),
 )
 draft_cues = (
-    DraftCommsCue("cue-first", "round-001", "player-alpha", TimeRange(10_750_000, 11_250_000), "one jungle", "one jungle", "警家一个", 0.93, ("same-round-context",), "e" * 64),
-    DraftCommsCue("cue-b-callout", "round-002", "player-bravo", TimeRange(20_500_000, 21_700_000), "be be be", "B, B, B", "B点，B点，B点", 0.86, ("same-round-context", "case-letter-b-v1"), "c" * 64),
-    DraftCommsCue("cue-overlap", "round-002", "player-alpha", TimeRange(20_650_000, 20_950_000), "two short", "two short", "短箱两个", 0.88, ("same-round-context",), "b" * 64),
-    DraftCommsCue("cue-third", "round-003", "player-alpha", TimeRange(30_500_000, 31_300_000), "save awp", "save AWP", "保大狙", 0.9, ("same-round-context",), "f" * 64),
+    DraftCommsCue.from_transcript_and_understanding(transcripts[0], results[0]),
+    DraftCommsCue.from_transcript_and_understanding(transcripts[1], results[1]),
+    DraftCommsCue.from_transcript_and_understanding(transcripts[2], results[2]),
 )
+draft_input_fingerprint = content_fingerprint({
+    "round_understanding": [document.to_dict() for document in round_documents],
+})
+draft_timeline = DraftCommsTimeline("a" * 64, "demo-microseconds", draft_input_fingerprint, draft_cues)
 decisions = (
-    ReviewDecision("decision-first", "cue-first", "e" * 64, ReviewAction.ACCEPT, "2026-08-31T12:00:00+00:00", "local-user", None, None, None, None),
-    ReviewDecision("decision-b-callout", "cue-b-callout", "c" * 64, ReviewAction.EDIT, "2026-08-31T12:01:00+00:00", "local-user", "将呼叫翻译调整为更自然的中文", None, None, "B点！B点！B点！"),
-    ReviewDecision("decision-overlap", "cue-overlap", "b" * 64, ReviewAction.ACCEPT, "2026-08-31T12:02:00+00:00", "local-user", None, None, None, None),
-    ReviewDecision("decision-third", "cue-third", "f" * 64, ReviewAction.ACCEPT, "2026-08-31T12:03:00+00:00", "local-user", None, None, None, None),
+    ReviewDecision("decision-first", "cue-first", draft_cues[0].understanding_result_fingerprint, ReviewAction.ACCEPT, "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None),
+    ReviewDecision("decision-b-callout", "cue-b-callout", draft_cues[1].understanding_result_fingerprint, ReviewAction.EDIT, "2026-08-31T12:01:00.000000Z", "local-user", "将呼叫翻译调整为更自然的中文", None, None, "B点！B点！B点！"),
+    ReviewDecision("decision-overlap", "cue-overlap", draft_cues[2].understanding_result_fingerprint, ReviewAction.ACCEPT, "2026-08-31T12:02:00.000000Z", "local-user", None, None, None, None),
 )
-reviewed_cues = tuple(
-    ReviewedCommsCue.from_draft_and_decision(draft, decision)
-    for draft, decision in zip(draft_cues, decisions, strict=True)
-)
-draft_timeline = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, draft_cues)
-reviewed_timeline = ReviewedCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, reviewed_cues, ())
+reviewed_timeline = compose_reviewed_timeline(draft_timeline, decisions)
 payload = {
     "schema_version": 1,
     "fixture_id": "new-domain-three-round-v1",
     "demo": descriptor.to_dict(),
     "rounds": rounds.to_dict(),
     "time_anchors": [item.to_dict() for item in anchors],
-    "invocation_snapshot": invocation.to_dict(),
+    "model_configurations": [asr_configuration.to_dict(), llm_configuration.to_dict()],
+    "model_invocations": [item.to_dict() for item in invocations],
     "voice_activities": [item.to_dict() for item in voice_activities],
     "transcript_cues": [item.to_dict() for item in transcripts],
     "round_understanding": [item.to_dict() for item in round_documents],
@@ -1319,32 +1828,118 @@ payload = {
         "asr_original": "be be be",
         "interpreted_source": "B, B, B",
         "final_translated_zh": "B点！B点！B点！",
-        "reviewed_cue_order": ["cue-first", "cue-b-callout", "cue-overlap", "cue-third"],
+        "reviewed_cue_order": ["cue-first", "cue-b-callout", "cue-overlap"],
+        "speechless_round_id": "round-003",
+        "unassigned_cue_id": "cue-unassigned",
     },
 }
 ```
 
-The fixture must contain no SteamID, absolute path, URL, API key, credential, real Demo hash, or private media.
+The fixture must contain no SteamID, absolute path, URL, API key, credential, real Demo hash, or private media. Round 3 is deliberately a successful speechless round and `cue-unassigned` deliberately remains outside every round document; neither condition is represented by a fake result or fake invocation.
 
 - [ ] **Step 4: Implement the standalone replay validator**
 
 Create `scripts/check_new_domain_contract.py` that:
 
 1. resolves the fixture relative to repository root;
-2. loads JSON as UTF-8 and requires exact transport keys and transport `schema_version == 1`;
-3. reconstructs all production domain objects exclusively through their `from_dict` factories;
-4. validates every VoiceActivityCue anchor/player reference and every TranscriptCue activity/anchor/player reference;
-5. validates each UnderstandingResult against its TranscriptCue;
-6. builds `DemoTimeline` and checks all cue round references;
-7. checks the B callout source/interpretation/final translation against `expected`;
-8. checks reviewed cues are in expected Demo-time order despite the declared completion order;
-9. recursively rejects dictionary keys `path`, `steamid`, `steam_id`, `api_key`, `authorization`, `access_token`, `password`, and `secret`;
-10. recursively rejects string values beginning with a Windows drive, `/`, `\\`, `http://`, or `https://`;
-11. prints exactly `new domain contract replay passed` on success and returns 0; on validation failure it prints one concise line to stderr and returns 1 without a traceback.
+2. loads JSON as UTF-8, rejects duplicate JSON object keys, and requires the exact transport keys shown in Step 3 with transport `schema_version == 1`;
+3. performs the recursive privacy scan before object construction: reject dictionary keys `path`, `steamid`, `steam_id`, `api_key`, `authorization`, `access_token`, `password`, and `secret`, and reject string values beginning with a Windows drive, `/`, `\\`, `http://`, or `https://`;
+4. reconstructs every configuration, invocation, Demo, round, anchor, activity, transcript, understanding document, decision, draft timeline, and reviewed timeline exclusively through production `from_dict` factories; reject duplicate IDs in every collection and dangling configuration IDs in every invocation;
+5. builds `DemoTimeline`, which applies production anchor-sequence and exact-round/tick validation, then calls `validate_voice_activity_against_timeline` and `validate_transcript_against_timeline` for every activity and transcript;
+6. requires exactly one understanding document per known round, calls `validate_understanding_document_graph` for each, requires the expected speechless round to have zero results and no invocation, and requires the expected unassigned cue to have `round_id=None` and appear in no round document;
+7. reconstructs draft cues from the validated transcript/result pairs, compares them to the stored draft timeline, recomputes the draft input fingerprint from canonical round documents, recomposes the reviewed timeline only through `compose_reviewed_timeline`, compares it to the stored reviewed document, and calls `validate_reviewed_timeline_graph`;
+8. checks the B callout source/interpretation/final translation against `expected` and checks reviewed cues are in expected Demo-time order despite the declared parallel completion order;
+9. requires `round_completion_order` to be a duplicate-free permutation of all round IDs but never uses completion order to determine persisted cue order or fingerprints;
+10. normalizes all schema, JSON, reference, privacy, and fingerprint failures to a concise `ContractValidationError` from the public `validate_contract(path: Path) -> None` function;
+11. prints exactly `new domain contract replay passed` on success and returns 0; the CLI catches `ContractValidationError`, prints one concise line to stderr, and returns 1 without a traceback.
 
-Keep a callable `validate_contract(path: Path) -> None` so the test suite can add focused tamper cases later.
+- [ ] **Step 5: Add adversarial tamper tests against the public validator**
 
-- [ ] **Step 5: Run the fresh-process replay test and direct script**
+Extend `tests/test_new_domain_contract_replay.py` with imports for `copy`, `json`, `pytest`, `Any`, `Callable`, and `validate_contract`/`ContractValidationError`. Define named mutators and this parameterized test; do not use a broad `pytest.raises(Exception)` assertion:
+
+```python
+FIXTURE = ROOT / "tests" / "golden" / "fixtures" / "new_domain_contract_v1.json"
+
+
+def _secret(payload: dict[str, Any]) -> None:
+    payload["model_configurations"][0]["api_key"] = "private"
+
+
+def _windows_path(payload: dict[str, Any]) -> None:
+    payload["demo"]["server_name"] = r"C:\private\demo.dem"
+
+
+def _unix_path(payload: dict[str, Any]) -> None:
+    payload["demo"]["server_name"] = "/home/private/demo.dem"
+
+
+def _unc_path(payload: dict[str, Any]) -> None:
+    payload["demo"]["server_name"] = r"\\server\share\demo.dem"
+
+
+def _unknown_player(payload: dict[str, Any]) -> None:
+    payload["transcript_cues"][0]["player_id"] = "player-missing"
+
+
+def _dangling_invocation(payload: dict[str, Any]) -> None:
+    payload["transcript_cues"][0]["asr_invocation_record_id"] = "asr-call-missing"
+
+
+def _changed_asr(payload: dict[str, Any]) -> None:
+    payload["round_understanding"][1]["results"][0]["asr_original"] = "B B B"
+
+
+def _stale_review_fingerprint(payload: dict[str, Any]) -> None:
+    payload["review_decisions"][0]["source_result_fingerprint"] = "0" * 64
+
+
+def _stale_configuration_fingerprint(payload: dict[str, Any]) -> None:
+    payload["model_configurations"][1]["model_name"] = "tampered-model"
+
+
+def _unsupported_schema(payload: dict[str, Any]) -> None:
+    payload["schema_version"] = 2
+
+
+def _reversed_cues(payload: dict[str, Any]) -> None:
+    payload["draft_timeline"]["cues"].reverse()
+
+
+def _overlapping_anchor_sources(payload: dict[str, Any]) -> None:
+    payload["time_anchors"][2]["source_start"] = 12_000
+
+
+TAMPERS: tuple[Callable[[dict[str, Any]], None], ...] = (
+    _secret,
+    _windows_path,
+    _unix_path,
+    _unc_path,
+    _unknown_player,
+    _dangling_invocation,
+    _changed_asr,
+    _stale_review_fingerprint,
+    _stale_configuration_fingerprint,
+    _unsupported_schema,
+    _reversed_cues,
+    _overlapping_anchor_sources,
+)
+
+
+@pytest.mark.parametrize("mutate", TAMPERS, ids=lambda item: item.__name__)
+def test_contract_tampering_is_rejected(
+    tmp_path: Path,
+    mutate: Callable[[dict[str, Any]], None],
+) -> None:
+    payload = copy.deepcopy(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    mutate(payload)
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(ContractValidationError):
+        validate_contract(tampered)
+```
+
+- [ ] **Step 6: Run the fresh-process replay, tamper tests, and direct script**
 
 Run:
 
@@ -1355,7 +1950,7 @@ py -3.12 scripts/check_new_domain_contract.py
 
 Expected: test passes and direct script prints the unique success line.
 
-- [ ] **Step 6: Document the isolated core and its verification command**
+- [ ] **Step 7: Document the isolated core and its verification command**
 
 Update `docs/ARCHITECTURE.zh.md` with a section titled `新版领域与统一时间内核（02A）` that states:
 
@@ -1372,20 +1967,20 @@ py -3.12 scripts/check_new_domain_contract.py
 
 State that it uses anonymous JSON only and needs no CS2/GPU/model/API. Update `tests/golden/README.zh.md` to say `structured_timeline_v1.json` remains the frozen v0.9.8 baseline while `new_domain_contract_v1.json` validates the new current-version contract and must not be presented as legacy output equivalence.
 
-- [ ] **Step 7: Run documentation, fixture, and focused tests**
+- [ ] **Step 8: Run documentation, fixture, and focused tests**
 
 Run:
 
 ```powershell
 git diff --check
-py -3.12 -m pytest tests/test_domain_schema_v1.py tests/test_domain_timebase_v1.py tests/test_domain_timeline_v1.py tests/test_domain_invocation_v1.py tests/test_domain_understanding_v1.py tests/test_domain_review_v1.py tests/test_new_domain_contract_replay.py -q
+py -3.12 -m pytest tests/test_domain_schema_v1.py tests/test_domain_timebase_v1.py tests/test_domain_timeline_v1.py tests/test_domain_invocation_v1.py tests/test_domain_understanding_v1.py tests/test_domain_review_v1.py tests/test_domain_validation_v1.py tests/test_new_domain_contract_replay.py -q
 py -3.12 scripts/check_new_domain_contract.py
 py -3.12 scripts/check_repository_hygiene.py
 ```
 
 Expected: every command exits 0; the replay script prints its unique success line; hygiene reports pass.
 
-- [ ] **Step 8: Commit the contract fixture and documentation**
+- [ ] **Step 9: Commit the contract fixture and documentation**
 
 ```powershell
 git add tests/golden/fixtures/new_domain_contract_v1.json scripts/check_new_domain_contract.py tests/test_new_domain_contract_replay.py docs/ARCHITECTURE.zh.md docs/TESTING_GUIDE.zh.md tests/golden/README.zh.md
@@ -1432,13 +2027,13 @@ Run:
 
 ```powershell
 git diff --name-only master...HEAD
-rg -n "start_time|end_time" src/cs2pov/domain/errors.py src/cs2pov/domain/schema.py src/cs2pov/domain/timebase.py src/cs2pov/domain/timeline.py src/cs2pov/domain/invocation.py src/cs2pov/domain/voice.py src/cs2pov/domain/transcript.py src/cs2pov/domain/understanding.py src/cs2pov/domain/review.py
+rg -n "start_time|end_time" src/cs2pov/domain/errors.py src/cs2pov/domain/schema.py src/cs2pov/domain/fingerprint.py src/cs2pov/domain/timebase.py src/cs2pov/domain/timeline.py src/cs2pov/domain/invocation.py src/cs2pov/domain/voice.py src/cs2pov/domain/transcript.py src/cs2pov/domain/understanding.py src/cs2pov/domain/review.py src/cs2pov/domain/validation.py
 rg -n "api_key|authorization|access_token|password" tests/golden/fixtures/new_domain_contract_v1.json
 ```
 
 Expected:
 
-- changed production files are limited to the nine new domain modules;
+- changed production files are limited to the eleven new domain modules;
 - no new domain serialization field uses ambiguous `start_time`/`end_time` (method names or explanatory comments must be reviewed manually if matched);
 - the anonymous fixture contains no secret-bearing keys;
 - `src/cs2pov/pipeline/engine.py`, CLI files, existing `domain/models.py`, and storage code are unchanged.
