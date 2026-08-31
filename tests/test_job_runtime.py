@@ -12,7 +12,7 @@ from cs2pov.application.workspace import WorkspaceSelection
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeResolver
 from cs2pov.domain.models import PipelineConfig
 from cs2pov.pipeline.manifest import PipelineManifest
-from cs2pov.storage.artifact_store import ArtifactStore
+from cs2pov.storage.artifact_store import ArtifactStore, safe_name
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.service import WorkspaceService
@@ -286,3 +286,27 @@ def test_explicit_job_id_has_stable_component_length_error(tmp_path: Path):
         ArtifactStore.create(tmp_path, job_id="x" * 256)
 
     assert caught.value.code == "job_id_invalid"
+
+
+def test_safe_name_strips_dot_reintroduced_by_max_length_truncation():
+    value = safe_name("a" * 79 + ".suffix")
+
+    assert value == "a" * 79
+    assert len(value) <= 80
+    assert not value.endswith((".", " "))
+
+
+@pytest.mark.parametrize("output_root", ["", "   "])
+def test_empty_explicit_output_root_is_rejected_without_cwd_assets(tmp_path: Path, monkeypatch, output_root: str):
+    runtime = _runtime(tmp_path)
+    config = PipelineConfig()
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    before = sorted(path.name for path in cwd.iterdir())
+
+    with pytest.raises(JobRuntimeError) as caught:
+        JobRuntime.from_config(runtime, config, output_root=output_root)
+
+    assert caught.value.code == "job_path_escape"
+    assert sorted(path.name for path in cwd.iterdir()) == before

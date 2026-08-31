@@ -12,8 +12,8 @@ from cs2pov.application.job_runtime import JobRuntimeError
 
 def safe_name(text: str, max_len: int = 80) -> str:
     cleaned = re.sub(r"[^\w.\-]+", "_", text, flags=re.UNICODE).strip("_")
-    cleaned = cleaned.rstrip(". ")
-    return (cleaned or "unnamed")[:max_len]
+    cleaned = cleaned.rstrip(". ")[:max_len].rstrip(". ")
+    return cleaned or "unnamed"
 
 
 class ArtifactStore:

@@ -41,6 +41,12 @@ class JobRuntime:
         output_root: str | Path | None = None,
     ) -> "JobRuntime":
         explicit = output_root is not None
+        if explicit and isinstance(output_root, str) and not output_root.strip():
+            raise JobRuntimeError(
+                "job_path_escape",
+                "Job 输出目录不能为空。",
+                "请提供可访问的输出目录，或移除 --output 使用当前工作区。",
+            )
         root = Path(output_root).expanduser() if explicit else runtime.paths.jobs_dir
         if "\x00" in str(root):
             raise JobRuntimeError("job_path_escape", "Job 输出目录路径无效。", "请提供可访问的输出目录后重试。")
