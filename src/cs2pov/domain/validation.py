@@ -5,7 +5,11 @@ from typing import Any
 
 from .errors import DomainSchemaError
 from .fingerprint import content_fingerprint
-from .invocation import ModelCapability
+from .invocation import (
+    ModelCapability,
+    ModelConfigurationSnapshot,
+    ModelInvocationRecord,
+)
 from .review import DraftCommsCue, DraftCommsTimeline, ReviewedCommsTimeline
 from .timebase import SourceClock, TimeRange, map_source_range
 from .timeline import DemoTimeline
@@ -44,8 +48,17 @@ def _covers(ranges: object, target: TimeRange) -> bool:
     return False
 
 
-def _index(values: object, path: str, attr: str) -> dict[str, Any]:
+def _index(
+    values: object,
+    path: str,
+    attr: str,
+    expected_type: type[Any] | None = None,
+) -> dict[str, Any]:
     seq = _items(values, path)
+    if expected_type is not None and any(
+        type(item) is not expected_type for item in seq
+    ):
+        _error("domain_field_invalid", path)
     try:
         result = {getattr(item, attr): item for item in seq}
     except (AttributeError, TypeError) as exc:
@@ -88,6 +101,11 @@ def validate_voice_activity_against_timeline(
         activity.time_range,
     ):
         _error("cue_reference_invalid", "time_range")
+    anchor_uncertainty = max(
+        anchors[anchor_id].uncertainty_us for anchor_id in activity.anchor_ids
+    )
+    if activity.uncertainty_us < anchor_uncertainty:
+        _error("cue_reference_invalid", "uncertainty_us")
 
 
 def validate_transcript_against_timeline(
@@ -136,7 +154,7 @@ def validate_transcript_against_timeline(
         or mapped.envelope != transcript.time_range
     ):
         _error("cue_reference_invalid", "source_mapping")
-    activity_map = _index(activities, "activities", "activity_id")
+    activity_map = _index(activities, "activities", "activity_id", VoiceActivityCue)
     for activity_id in transcript.voice_activity_ids:
         activity = activity_map.get(activity_id)
         if activity is None:
@@ -152,11 +170,18 @@ def validate_transcript_against_timeline(
         transcript.time_range,
     ):
         _error("cue_reference_invalid", "voice_activity_ids")
-    invocation_map = _index(invocations, "invocations", "invocation_id")
+    invocation_map = _index(
+        invocations, "invocations", "invocation_id", ModelInvocationRecord
+    )
     invocation = invocation_map.get(transcript.asr_invocation_record_id)
     if invocation is None:
         _error("invocation_reference_invalid", "asr_invocation_record_id")
-    configuration_map = _index(configurations, "configurations", "snapshot_id")
+    configuration_map = _index(
+        configurations,
+        "configurations",
+        "snapshot_id",
+        ModelConfigurationSnapshot,
+    )
     configuration = configuration_map.get(invocation.configuration_snapshot_id)
     if configuration is None or configuration.capability is not ModelCapability.ASR:
         _error("invocation_reference_invalid", "configuration_snapshot_id")
@@ -187,7 +212,12 @@ def validate_understanding_document_graph(
     }
     if document.input_fingerprint != content_fingerprint(request):
         _error("domain_fingerprint_mismatch", "input_fingerprint")
-    config_map = _index(configurations, "configurations", "snapshot_id")
+    config_map = _index(
+        configurations,
+        "configurations",
+        "snapshot_id",
+        ModelConfigurationSnapshot,
+    )
     configuration = config_map.get(document.model_configuration_snapshot_id)
     if (
         configuration is None
@@ -205,7 +235,12 @@ def validate_understanding_document_graph(
     ):
         _error("cue_reference_invalid", "results")
     invocation_values = _items(invocations, "invocations")
-    invocation_map = _index(invocation_values, "invocations", "invocation_id")
+    invocation_map = _index(
+        invocation_values,
+        "invocations",
+        "invocation_id",
+        ModelInvocationRecord,
+    )
     if not assigned:
         if document.invocation_record_id is not None or results:
             _error("invocation_reference_invalid", "invocation_record_id")

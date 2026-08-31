@@ -583,6 +583,52 @@ def test_reviewed_graph_rejects_duplicate_review_decision_ids() -> None:
         )
 
 
+def test_transcript_validation_rejects_fake_invocation_with_domain_error() -> None:
+    timeline, activity, transcript, configuration, invocation = _closed_graph()
+
+    class FakeInvocation:
+        invocation_id = invocation.invocation_id
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_transcript_against_timeline(
+            transcript,
+            timeline,
+            (activity,),
+            (configuration,),
+            (FakeInvocation(),),
+        )
+    assert caught.value.code == "domain_field_invalid"
+
+
+def test_understanding_validation_rejects_fake_configuration_with_domain_error() -> (
+    None
+):
+    _, _, transcript, _, _, configuration, invocation, document = _understanding_graph()
+
+    class FakeConfiguration:
+        snapshot_id = configuration.snapshot_id
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_understanding_document_graph(
+            document,
+            (transcript,),
+            (FakeConfiguration(),),
+            (invocation,),
+        )
+    assert caught.value.code == "domain_field_invalid"
+
+
+def test_voice_activity_validation_rejects_uncertainty_below_anchor() -> None:
+    timeline, activity, _, _, _ = _closed_graph()
+    payload = activity.to_dict()
+    payload["uncertainty_us"] = 0
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_voice_activity_against_timeline(
+            VoiceActivityCue.from_dict(payload), timeline
+        )
+    assert caught.value.code == "cue_reference_invalid"
+
+
 def _dummy_draft_for_review_graph() -> DraftCommsTimeline:
     from cs2pov.domain.review import DraftCommsCue
 
