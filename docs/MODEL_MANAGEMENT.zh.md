@@ -8,7 +8,7 @@ v0.8.0 新增模型管理命令：
 cs2pov models info
 cs2pov models list
 cs2pov models recommend
-cs2pov models set-cache "D:\AIModels\huggingface"
+模型缓存跟随已选择的工作区；旧 cache override 仅返回迁移说明。
 cs2pov models test --model small --local-only
 ```
 
@@ -26,10 +26,7 @@ cs2pov models test --model small --local-only
 
 ## 缓存目录
 
-推荐将模型缓存放到 D 盘，例如：
+旧版本缓存只读列为迁移候选，不会自动移动、复制或删除。可运行
+`python scripts/check_workspace_model_runtime_e2e.py` 验证隔离的真实子进程缓存绑定。
 
-```powershell
-cs2pov models set-cache "D:\AIModels\huggingface"
-```
-
-这个设置是项目级配置，不会悄悄修改系统全局环境变量。
+`run`、Job、Demo、临时音频及向导的工作区迁移仍属于 Luna-01D-B，尚未完成。
