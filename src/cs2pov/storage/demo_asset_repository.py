@@ -57,6 +57,15 @@ def _is_link(path: Path) -> bool:
     return path.is_symlink() or bool(attributes & reparse_point)
 
 
+def _normalize_display_name(value: str) -> str:
+    normalized = "".join(
+        "_" if char in {"/", "\\"} or ord(char) < 32 or ord(char) == 127 else char
+        for char in value
+    ).strip()
+    normalized = normalized[:255].strip()
+    return normalized or "demo.dem"
+
+
 class FileSystemDemoAssetRepository:
     def __init__(
         self,
@@ -119,7 +128,7 @@ class FileSystemDemoAssetRepository:
                 source_size_bytes=source_size,
                 source_format=source_format,
                 source_relative_path=f"library/demos/{asset_id}/source.{source_format}",
-                display_name=source_path.name.strip(),
+                display_name=_normalize_display_name(source_path.name),
                 imported_at=imported_at,
             )
             manifest = staging_asset / "asset.json"
@@ -145,7 +154,9 @@ class FileSystemDemoAssetRepository:
                 return DemoImportResult(existing, "reused", 0)
             try:
                 staging_asset.rename(final_asset)
-            except FileExistsError:
+            except OSError as exc:
+                if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise
                 existing = self._load_asset(final_asset)
                 self._repair_existing_cache_from_candidate(
                     existing,
@@ -453,6 +464,10 @@ class FileSystemDemoAssetRepository:
             source_hash != asset.logical_sha256 or source_size != asset.logical_size_bytes or source_hash != asset.asset_id
         ):
             raise _error("demo_asset_integrity_failed")
+        if asset.source_format == "dem.zst":
+            logical_hash, logical_size = self._hash_decompressed_source(source)
+            if logical_hash != asset.logical_sha256 or logical_size != asset.logical_size_bytes:
+                raise _error("demo_asset_integrity_failed")
         children = {child.name for child in asset_dir.iterdir()}
         if children != {"asset.json", f"source.{asset.source_format}"}:
             raise _error("demo_asset_integrity_failed")
@@ -498,6 +513,20 @@ class FileSystemDemoAssetRepository:
             raise _error("demo_cache_rebuild_failed") from exc
         if size == 0:
             raise _error("demo_cache_rebuild_failed")
+        return digest.hexdigest(), size
+
+    def _hash_decompressed_source(self, source: Path) -> tuple[str, int]:
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with source.open("rb") as compressed:
+                for chunk in self.decompressor.iter_decompressed(compressed, chunk_size=self.chunk_size):
+                    digest.update(chunk)
+                    size += len(chunk)
+        except (DemoCompressionError, OSError) as exc:
+            raise _error("demo_asset_integrity_failed") from exc
+        if size == 0:
+            raise _error("demo_asset_integrity_failed")
         return digest.hexdigest(), size
 
     def _commit_cache(self, candidate: Path, asset_id: str, staging_root: Path, logical_size: int) -> Path:

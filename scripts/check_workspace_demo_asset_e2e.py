@@ -138,15 +138,18 @@ def main() -> int:
         plain = inputs / "same content.dem"
         zst_a = inputs / "first source.dem.zst"
         zst_b = inputs / "different compression.dem.zst"
+        concurrent_source = inputs / "fresh concurrent source.dem.zst"
         plain.write_bytes(logical)
         first_compressed = zstandard.ZstdCompressor(level=1).compress(logical)
         second_compressed = zstandard.ZstdCompressor(level=9).compress(logical)
         assert first_compressed != second_compressed
         zst_a.write_bytes(first_compressed)
         zst_b.write_bytes(second_compressed)
+        concurrent_logical = b"fresh-concurrent-logical-demo" * 65536
+        concurrent_source.write_bytes(zstandard.ZstdCompressor(level=3).compress(concurrent_logical))
         source_stats = {
             path: (path.stat().st_size, path.stat().st_mtime_ns, _hash_file(path))
-            for path in (plain, zst_a, zst_b)
+            for path in (plain, zst_a, zst_b, concurrent_source)
         }
 
         source_before = _snapshot(source_root)
@@ -227,16 +230,22 @@ def main() -> int:
         orphan_marker = orphan / "incomplete.txt"
         orphan_marker.write_text("keep", encoding="utf-8")
         assert _run(source_root, env, "demos", "list", "--json")["count"] == 1
-        processes = [_spawn_import(source_root, env, zst_b) for _ in range(6)]
+        processes = [_spawn_import(source_root, env, concurrent_source) for _ in range(6)]
         concurrent = []
         for process in processes:
             stdout, stderr = process.communicate(timeout=45)
             assert process.returncode == 0, {"stdout": stdout, "stderr": stderr}
             assert stderr == ""
             concurrent.append(json.loads(stdout))
-        assert all(item["result"]["asset"]["asset_id"] == asset_id for item in concurrent)
-        assert all(item["result"]["disposition"] == "reused" for item in concurrent)
-        assert len([path for path in library.iterdir() if path.is_dir()]) == 1
+        concurrent_asset_id = hashlib.sha256(concurrent_logical).hexdigest()
+        assert all(item["result"]["asset"]["asset_id"] == concurrent_asset_id for item in concurrent)
+        assert sorted(item["result"]["disposition"] for item in concurrent) == ["imported", *("reused" for _ in range(5))]
+        assert len([path for path in library.iterdir() if path.is_dir()]) == 2
+        concurrent_asset = library / concurrent_asset_id
+        assert {path.name for path in concurrent_asset.iterdir()} == {"asset.json", "source.dem.zst"}
+        assert (
+            workspace / "cache" / "decompressed_demos" / f"{concurrent_asset_id}.dem"
+        ).read_bytes() == concurrent_logical
         assert orphan_marker.read_text("utf-8") == "keep"
 
         workspace_config = workspace / "workspace.json"
@@ -259,9 +268,16 @@ def main() -> int:
         workspace_config.write_bytes(config_bytes)
 
         stored_source = asset_dir / "source.dem.zst"
-        tampered = bytearray(stored_source.read_bytes())
-        tampered[-1] ^= 0x01
-        stored_source.write_bytes(tampered)
+        replacement_logical = b"different-logical-content" * 4096
+        replacement_source = zstandard.ZstdCompressor(level=1).compress(replacement_logical)
+        stored_source.write_bytes(replacement_source)
+        tampered_manifest = dict(manifest)
+        tampered_manifest["source_sha256"] = hashlib.sha256(replacement_source).hexdigest()
+        tampered_manifest["source_size_bytes"] = len(replacement_source)
+        manifest_path.write_text(
+            json.dumps(tampered_manifest, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
         damaged_before = _snapshot(asset_dir)
         damaged_inspection = _run(
             source_root,

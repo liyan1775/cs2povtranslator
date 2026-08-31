@@ -7,12 +7,14 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 from uuid import UUID
 
 import pytest
 import zstandard
 
+import cs2pov.storage.demo_asset_repository as demo_asset_repository
 from cs2pov.domain.assets import DemoAsset
 from cs2pov.domain.assets import DemoAssetRef
 from cs2pov.storage.demo_asset_repository import (
@@ -28,6 +30,18 @@ def fixed_clock() -> datetime:
 
 def make_paths(tmp_path):
     return WorkspacePaths(tmp_path / "workspace")
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("odd\nname.dem", "odd_name.dem"),
+        ("odd\\name.dem", "odd_name.dem"),
+        ("  readable demo.dem  ", "readable demo.dem"),
+    ],
+)
+def test_display_name_normalization_removes_unsafe_filename_characters(raw, expected):
+    assert demo_asset_repository._normalize_display_name(raw) == expected
 
 
 def test_import_dem_commits_one_content_addressed_asset(tmp_path):
@@ -52,6 +66,20 @@ def test_import_dem_commits_one_content_addressed_asset(tmp_path):
         path.stat().st_size for path in (asset_dir / "source.dem", asset_dir / "asset.json")
     )
     assert not list((paths.temp_dir / "demo_imports").glob("*/asset"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Win32 文件名不允许控制字符或反斜线")
+@pytest.mark.parametrize("source_name", ["odd\nname.dem", "odd\\name.dem"])
+def test_import_dem_normalizes_unsafe_posix_display_name(source_name, tmp_path):
+    source = tmp_path / source_name
+    source.write_bytes(b"anonymous-demo")
+    repo = FileSystemDemoAssetRepository(make_paths(tmp_path), clock=fixed_clock)
+
+    result = repo.import_source(source)
+
+    assert result.asset.display_name == "odd_name.dem"
+    manifest_path = repo.paths.demo_library_dir / result.asset.asset_id / "asset.json"
+    assert json.loads(manifest_path.read_text("utf-8"))["display_name"] == "odd_name.dem"
 
 
 def test_import_zst_reports_decompression_failure_for_invalid_source(tmp_path):
@@ -205,6 +233,30 @@ def test_import_dem_maps_commit_failure_without_visible_asset(tmp_path, monkeypa
         repo.import_source(source)
     assert getattr(exc_info.value, "code", None) == "demo_asset_commit_failed"
     assert not list(repo.paths.demo_library_dir.glob("*"))
+
+
+def test_import_dem_treats_enotempty_directory_race_as_reused_winner(tmp_path, monkeypatch):
+    source = tmp_path / "match.dem"
+    source.write_bytes(b"same-logical-demo")
+    paths = make_paths(tmp_path)
+    repo = FileSystemDemoAssetRepository(paths, clock=fixed_clock)
+    original_rename = Path.rename
+
+    def emulate_posix_competing_winner(self, target):
+        if self.name == "asset":
+            shutil.copytree(self, target)
+            raise OSError(errno.ENOTEMPTY, "competing directory is not empty")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", emulate_posix_competing_winner)
+
+    result = repo.import_source(source)
+
+    assert result.disposition == "reused"
+    assert result.persistent_bytes_added == 0
+    asset_dir = paths.demo_library_dir / result.asset.asset_id
+    assert {path.name for path in asset_dir.iterdir()} == {"asset.json", "source.dem"}
+    assert (asset_dir / "source.dem").read_bytes() == source.read_bytes()
 
 
 def test_import_dem_precomputes_result_before_commit_stat_boundary(tmp_path, monkeypatch):
@@ -783,6 +835,45 @@ def test_resolve_zst_validates_persistent_source_before_using_cache(tmp_path):
         repo.resolve_asset(result.asset.to_ref())
 
     assert exc_info.value.code == "demo_asset_integrity_failed"
+    assert cache.read_bytes() == cache_before
+
+
+def test_zst_consistent_source_manifest_tamper_cannot_change_content_identity(tmp_path):
+    logical = b"original-logical-content" * 512
+    replacement_logical = b"different-logical-content" * 512
+    source = tmp_path / "source.dem.zst"
+    source.write_bytes(_zst_payload(logical, 1))
+    paths = make_paths(tmp_path)
+    repo = FileSystemDemoAssetRepository(paths)
+    result = repo.import_source(source)
+    asset_dir = paths.demo_library_dir / result.asset.asset_id
+    stored = asset_dir / "source.dem.zst"
+    manifest_path = asset_dir / "asset.json"
+    replacement_source = _zst_payload(replacement_logical, 1)
+    stored.write_bytes(replacement_source)
+    manifest = json.loads(manifest_path.read_text("utf-8"))
+    manifest["source_sha256"] = hashlib.sha256(replacement_source).hexdigest()
+    manifest["source_size_bytes"] = len(replacement_source)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    asset_before = _tree_snapshot(asset_dir)
+    cache = paths.decompressed_demos_cache_dir / f"{result.asset.asset_id}.dem"
+    cache_before = cache.read_bytes()
+
+    inspection = repo.inspect_asset(result.asset.asset_id)
+    listed = repo.list_assets()
+
+    assert inspection.source_ok is False
+    assert inspection.issues == ("demo_asset_integrity_failed",)
+    assert len(listed) == 1
+    assert listed[0].healthy is False
+    assert listed[0].issue_code == "demo_asset_integrity_failed"
+    with pytest.raises(DemoAssetRepositoryError) as resolve_error:
+        repo.resolve_asset(result.asset.to_ref())
+    assert resolve_error.value.code == "demo_asset_integrity_failed"
+    with pytest.raises(DemoAssetRepositoryError) as import_error:
+        repo.import_source(source)
+    assert import_error.value.code == "demo_asset_integrity_failed"
+    assert _tree_snapshot(asset_dir) == asset_before
     assert cache.read_bytes() == cache_before
 
 
