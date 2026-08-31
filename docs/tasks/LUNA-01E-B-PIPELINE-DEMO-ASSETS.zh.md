@@ -1,5 +1,7 @@
 # Luna-01E-B：Pipeline 自动使用 DemoAsset 实施计划
 
+> **后续决策说明（2026-08-31）：** 本任务完成时写下的“下一步进入阶段 1.3 旧 Job 迁移”已被用户取消。本文其余内容仍是 01E-B 的历史实施记录；当前后续以新版 Job 领域模型、统一时间轴和同版本历史打开为准。
+
 **Goal：** 让所有正式新任务入口在创建 Job 前自动导入或复用工作区 DemoAsset，让新 Job 与 Pipeline 只保存并消费稳定素材引用，不再把 `.dem` / `.dem.zst` 复制、解压或链接到每个 Job 的 `input/`；同时完整保留旧 Job 的原地兼容行为。
 
 **Architecture：** 外部路径只停留在入口与 `ImportDemoAsset` 用例。入口解析一次健康的 `WorkspaceRuntime`，用绑定到该不可变 runtime 的 `DemoAssetApplicationService` 导入素材，再把 `DemoAssetRef`、安全显示名和同一服务显式注入 `PipelineEngine`。Engine 需要 Demo 时通过服务解析工作区内受管 `.dem` 路径，但绝不把绝对素材路径写进 Job。新 Job manifest 记录版本化输入模式和相对素材引用；旧 Job 继续使用自己的 `input/`，不自动迁移。
@@ -485,4 +487,4 @@ git commit -m "test: gate Pipeline DemoAsset lifecycle"
 - 独立强审查关闭全部 Critical/Important；
 - GitHub 全矩阵通过，PR 合并，本地/远端 master 同步。
 
-完成后进入阶段 1.3：旧 Job 只读扫描、迁移报告与幂等导入。不得在 01E-B 中提前做迁移。
+原计划下一步为阶段 1.3 旧 Job 迁移；该后续已于 2026-08-31 取消。当前直接进入阶段 2 的新版核心设计与实施。
