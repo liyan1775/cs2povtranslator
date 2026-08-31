@@ -10,11 +10,13 @@ v0.9.0 以后，最常用的文件仍在 `final/`，默认推荐双语字幕；�
 
 ## 工作区素材与 Job 输入的区别
 
-- `library/demos/<asset_id>/`：01E-A 的持久 Demo 素材；包含 `asset.json` 和首次导入的一个 `source.dem` 或 `source.dem.zst`。
+- `library/demos/<asset_id>/`：01E 的持久 Demo 素材；包含 `asset.json` 和首次导入的一个 `source.dem` 或 `source.dem.zst`。新建 Pipeline Job 只引用它，不复制它。
 - `cache/decompressed_demos/<asset_id>.dem`：可清理、可重建的解压缓存，不是最终产物。
-- `jobs/<job>/input/`：现有 Pipeline 的 Job 输入副本。01E-A 尚未改变它；01E-B 才会让 Job 自动引用素材库。
+- `jobs/<job>/input/`：legacy Job 的输入副本；受管 Job 通常为空，Demo 路径由素材库服务在内存中解析。
 
-可用 `cs2pov demos import/list/inspect` 管理前两项。当前没有 delete、独立 repair 命令或旧 Job 自动迁移，不能手工把素材目录当作 Job 输出目录。
+可用 `cs2pov demos import/list/inspect` 管理和诊断前两项；`run`/向导也会自动
+import/reuse。当前没有 delete、独立 repair 命令或旧 Job 自动迁移，不能手工把素材
+目录当作 Job 输出目录。
 
 ## final/
 

@@ -39,8 +39,10 @@ cs2pov workspace init D:\cs2pov-workspace
 cs2pov run D:\demos\match.dem.zst
 ```
 
-01E-A also provides an explicit, content-addressed Demo library for people who
-want to organize inputs before processing them:
+The workspace now automatically imports and reuses each selected demo as a
+content-addressed DemoAsset when a new `run` or wizard job starts. You do not
+need to import it manually first. The explicit commands remain useful for
+organizing and diagnosing the library:
 
 ```powershell
 cs2pov demos import D:\demos\match.dem.zst
@@ -50,9 +52,16 @@ cs2pov demos inspect <asset-id>
 
 Persistent sources live under `library/demos/<asset-id>/`; decompressed copies
 under `cache/decompressed_demos/` are rebuildable cache. This is deliberately
-an explicit management feature in 01E-A: the existing `run`/wizard Pipeline
-still handles its own Job `input/` copy. Automatic Pipeline/Job references are
-reserved for 01E-B.
+separate from Job output. New managed Jobs reference the asset and leave
+`jobs/<job>/input/` empty; they do not copy, link, or record the source path.
+After a successful import, the original external file may be removed. Keep the
+workspace's persistent `library/demos/<asset-id>/` source; the decompressed
+cache can be deleted and will be rebuilt when needed.
+
+Existing legacy Jobs keep using their own `input/` files and are not migrated
+automatically. A managed Job must be resumed from the workspace containing its
+DemoAsset. `--output` only places a new Job in an external output root; the
+DemoAsset remains owned by the selected workspace.
 
 Job paths may be omitted for the normal workspace flow. `--output` is an
 explicit, warned legacy-compatibility mode for a temporary external output
@@ -98,9 +107,11 @@ v0.9.x  Comms Overlay MVP: editable per-round comms YAML and right-middle biling
 This is a local-first tool. It does not upload demo files or audio by default. LLM translation sends only the text selected for translation to the configured OpenAI-compatible API endpoint. Feedback packages intentionally exclude raw demo files, large audio artifacts, API keys, and local absolute paths.
 
 Do not commit real Demo files, workspace `library/demos/`, decompressed caches,
-or asset manifests containing hashes from real inputs. 01E-A does not include
-asset deletion, a standalone repair command, old-Job migration, a Web UI,
-understanding translation, or POV recording.
+or asset manifests containing hashes from real inputs. The 01E DemoAsset
+workflow does not include asset deletion, a standalone repair command, old-Job
+migration, a Web UI, understanding translation, POV recording, or final-video
+one-click integration. The main outputs remain round-aligned bilingual
+subtitles, review YAML/HTML, and green-screen/transparent overlay assets.
 
 
 ## v0.9.8 time display note
