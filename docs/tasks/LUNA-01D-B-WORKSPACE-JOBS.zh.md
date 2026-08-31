@@ -94,6 +94,7 @@ src/cs2pov/pipeline/engine.py
 src/cs2pov/pipeline/manifest.py
 src/cs2pov/services/demo_service.py                # 仅准备输入边界
 src/cs2pov/services/transcription_service.py       # 仅临时音频清理生命周期
+src/cs2pov/services/comms_service.py               # 仅渲染临时目录显式注入
 src/cs2pov/cli/commands.py
 src/cs2pov/cli/job_ops.py
 src/cs2pov/cli/wizard.py
@@ -177,8 +178,8 @@ legacy_model_cache_override_rejected
 2. 显式输出只进入一个 `legacy_external_output=True` 分支，仍保留工作区模型/临时缓存；
 3. 兼容适配返回新的 `PipelineConfig`，原对象不变；
 4. 旧 `output_root` 与旧 `whisper_cache_dir` 不影响新任务落点；
-5. Job ID 拒绝 `None` 以外的空白、`.`、`..`、绝对路径、盘符、`/`、`\` 和任何路径穿越；
-6. Unicode、连字符、下划线等安全可读名称仍可用；
+5. Job ID 拒绝 `None` 以外的空白、`.`、`..`、绝对路径、盘符、`/`、`\`、Windows 设备保留名、尾随点/空格和任何路径穿越；
+6. Unicode、连字符、下划线等安全可读名称仍可用，Windows 非法名称在所有平台都返回同一个稳定应用错误；
 7. 自动 ID 和显式 ID 在目录已存在时稳定使用 `_2`、`_3` 等后缀，绝不复用旧目录；
 8. 两个并发创建者不能同时取得同一目录；测试必须验证真实文件系统结果；
 9. 创建结果最终位于规范化 Job 根目录内；符号链接/junction 逃逸必须拒绝；
@@ -193,6 +194,7 @@ legacy_model_cache_override_rejected
 - `ArtifactStore.create()` 必须用原子目录 claim（例如目标根已确认后，对候选 Job 目录使用 `mkdir(exist_ok=False)`），不能先 `exists()` 再复用；
 - 输出根和最终候选都要规范化并做 containment 检查；显式外部输出只豁免“必须位于 workspace/jobs”，不豁免 Job ID 安全和必须位于该显式根目录；
 - 碰撞命名可从 `_2` 顺序递增，用户能从最终 `job_dir` 和 manifest 观察到真实名称；
+- Job ID 的跨平台校验至少覆盖 `CON`、`PRN`、`AUX`、`NUL`、`COM1..9`、`LPT1..9` 及其带扩展名形式，不能等 Windows 文件系统抛出不可理解的 `OSError`；
 - `rename_suffix()` 必须保留临时音频策略，并继续原子避让冲突；
 - public manifest 使用语义占位值而非本机绝对路径，例如 `[workspace-managed]` 或 `[legacy-external-output]`；加载后由单一兼容层重新注入真实运行路径；
 - 新字段使用向后兼容默认值：旧 manifest 不应被误标为本次显式外部输出。
@@ -294,13 +296,16 @@ feat: route pipeline assets through workspace runtime
 10. `benchmark-asr --cache-dir` 返回稳定弃用错误；默认每个 benchmark Job 位于 `workspace/jobs`，报告也位于工作区；
 11. benchmark 的显式 `--output` 走同一外部兼容分支，不能另写一套路径逻辑；
 12. 反馈包默认不再写 cwd；
-13. 写门禁路径错误不显示 traceback，带 `--json` 的入口 stdout 仍是单个可解析 JSON 文档。
+13. Comms 渲染的临时帧目录来自 `runtime.paths.temp_dir/<task-id>`，成功或失败后清理，不使用系统默认 temp；
+14. 写门禁路径错误不显示 traceback，带 `--json` 的入口 stdout 仍是单个可解析 JSON 文档。
 
 ### 8.3 benchmark 落点
 
 默认 benchmark 每个模型建立一个正常的顶层 Job，例如 `jobs/<timestamp>_benchmark_<model>`；汇总报告写到 `jobs/asr_benchmark_<timestamp>.json`。可以采用等价、无嵌套歧义的可读命名，但不得创建 `jobs/bench_model/<另一个job>` 这种双层 Job 根。
 
 显式 `benchmark-asr --output` 在同一过渡规则下把 Job 和报告写到该根目录；仍使用工作区模型与临时缓存，并显示外部输出警告。所有 model 名在进入 Job ID 前必须经过同一安全命名逻辑。
+
+`CommsService.render()` 必须接收显式临时根或已经分配的任务临时目录；CLI、launcher 和向导都从同一 `WorkspaceRuntime` 快照传入。临时目录需要任务隔离并在 `finally` 中清理，不能修改 `TMP/TEMP` 或依赖 `tempfile` 的系统默认位置。
 
 ### 8.4 验证与提交
 
