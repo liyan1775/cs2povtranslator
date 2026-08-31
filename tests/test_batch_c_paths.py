@@ -127,6 +127,63 @@ def test_launcher_empty_job_path_reports_workspace_error_without_fake_path(monke
         launcher.ask_job_path()
 
 
+def test_launcher_write_menu_workspace_error_has_stable_message(monkeypatch, capsys):
+    from cs2pov.cli import launcher
+    from cs2pov.application.workspace_runtime import WorkspaceRuntimeError
+
+    monkeypatch.setattr(launcher, "print_banner", lambda: None)
+    monkeypatch.setattr(launcher, "print_menu", lambda: None)
+    monkeypatch.setattr("builtins.input", lambda prompt: "6")
+    monkeypatch.setattr(launcher, "run_tools_menu", lambda: (_ for _ in ()).throw(
+        WorkspaceRuntimeError("workspace_unhealthy", "工作区不可写", "请修复工作区")
+    ))
+
+    assert launcher.main(["--once"]) == 0
+    output = capsys.readouterr().out
+    assert "错误[workspace_unhealthy]：工作区不可写" in output
+    assert "建议：请修复工作区" in output
+    assert "操作失败：WorkspaceRuntimeError" not in output
+
+
+def _benchmark_args(output: str | None, *, cache_dir: str | None = None) -> argparse.Namespace:
+    return argparse.Namespace(
+        demo="demo.dem", output=output, models="tiny", team_number=None, max_rounds=1,
+        device=None, compute_type=None, language="auto", cache_dir=cache_dir, json=False,
+    )
+
+
+@pytest.mark.parametrize("output", ["", "bad\x00path"])
+def test_benchmark_invalid_explicit_output_is_stable_and_does_not_write(tmp_path, monkeypatch, output):
+    from cs2pov.application.job_runtime import JobRuntimeError
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("cs2pov.storage.jsonl.write_json", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("report write")))
+    with pytest.raises(JobRuntimeError) as caught:
+        commands.run_asr_benchmark(_benchmark_args(output), runtime=_runtime(tmp_path))
+    assert caught.value.code == "job_path_escape"
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_empty_deprecated_cache_overrides_are_rejected_without_writes(tmp_path, monkeypatch, capsys):
+    from cs2pov.application.job_runtime import JobRuntimeError
+
+    monkeypatch.setattr(commands, "test_model_load", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("model load")))
+    monkeypatch.setattr("cs2pov.application.workspace_runtime.WorkspaceRuntimeResolver", lambda *args, **kwargs: type("R", (), {
+        "resolve_for_write": lambda self: _runtime(tmp_path),
+        "resolve_selected": lambda self: _runtime(tmp_path),
+    })())
+    assert commands.main(["models", "test", "--cache-dir", "", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["error"]["code"] == "legacy_model_cache_override_rejected"
+
+    with pytest.raises(JobRuntimeError) as caught:
+        commands.run_asr_benchmark(_benchmark_args(None, cache_dir=""), runtime=_runtime(tmp_path))
+    assert caught.value.code == "legacy_model_cache_override_rejected"
+
+    monkeypatch.setattr(commands, "save_config", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("config write")))
+    assert commands.main(["config", "set", "--whisper-cache-dir", ""]) == 1
+    assert "模型缓存跟随当前工作区" in capsys.readouterr().out
+
+
 def test_comms_render_passes_runtime_env_and_cleans_on_ffmpeg_failure(tmp_path, monkeypatch):
     from cs2pov.services import comms_service
 

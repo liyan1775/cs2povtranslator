@@ -151,8 +151,8 @@ class CommsService:
         normalized_formats = tuple(_normalize_formats(formats))
         outputs: dict[str, str] = {}
         # Rendering must never inherit the machine's system temp directory.
-        # The CLI supplies runtime.paths.temp_dir; the job-local fallback keeps
-        # direct service callers isolated without changing global environment.
+        # The runtime owns the temporary root; direct callers may override it
+        # explicitly without changing the process environment.
         temp_base = Path(temp_root) if temp_root is not None else runtime.paths.temp_dir
         task_dir = temp_base / f"comms_{uuid.uuid4().hex}"
         task_dir.mkdir(parents=True, exist_ok=False)

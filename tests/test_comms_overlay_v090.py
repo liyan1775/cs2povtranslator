@@ -86,7 +86,8 @@ def test_comms_cli_build_review_json(tmp_path: Path, capsys, monkeypatch):
 
     assert code == 0
     captured = capsys.readouterr()
-    assert "comms_feed_json" in captured.out
+    payload = __import__("json").loads(captured.out)
+    assert "comms_feed_json" in payload
     assert captured.err.count("警告：正在原位置修改外部旧 Job") == 1
     assert (store.review_dir / "comms_rounds" / "round_01.yaml").exists()
 

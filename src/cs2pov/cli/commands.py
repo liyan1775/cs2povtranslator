@@ -188,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
 
     feedback = sub.add_parser("feedback", help="打包一个不含大音频/密钥的反馈包，便于发给开发者")
     feedback.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
-    feedback.add_argument("--out", help="输出 zip 路径；默认放在当前目录")
+    feedback.add_argument("--out", help="输出 zip 路径；默认放在目标 Job 的 debug/feedback 目录")
 
     inspect = sub.add_parser("inspect-job", help="查看 Job 状态、阶段、产物和推荐下一步")
     inspect.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则自动选择最新 Job")
@@ -586,7 +586,7 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         model = str(profile_values.get("whisper_model") or cfg.get("whisper_model") or "base")
         device = str(profile_values.get("whisper_device") or cfg.get("whisper_device") or "cpu")
         compute_type = str(profile_values.get("whisper_compute_type") or cfg.get("whisper_compute_type") or "int8")
-        if args.cache_dir:
+        if args.cache_dir is not None:
             result = {"ok": False, "command": "models.test", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "--cache-dir 已弃用，请使用当前工作区缓存。", "suggestion_zh": "请移除该参数并使用当前工作区缓存。"}}
         else:
             result = test_model_load(
@@ -635,15 +635,21 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
     models = [m.strip() for m in str(args.models).split(",") if m.strip()]
     if not models:
         raise ValueError("--models 至少需要一个模型名，例如 base,small")
-    if runtime is not None and args.cache_dir:
+    if args.cache_dir is not None:
         raise JobRuntimeError(
             "legacy_model_cache_override_rejected",
             "--cache-dir 已弃用，benchmark 模型缓存固定使用当前工作区。",
             "请移除 --cache-dir，模型缓存将写入当前工作区 cache/whisper。",
         )
     explicit_output = args.output is not None
-    output_root = Path(args.output).expanduser().resolve() if explicit_output else runtime.paths.jobs_dir
-    output_root.mkdir(parents=True, exist_ok=True)
+    path_policy = JobRuntime.from_config(runtime, PipelineConfig(), output_root=args.output)
+    output_root = path_policy.output_root
+    try:
+        output_root.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise JobRuntimeError(
+            "job_path_escape", "Job 输出目录路径无效。", "请提供可访问的输出目录后重试。"
+        ) from exc
     benchmark_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     def emit(*values: object) -> None:
         print(*values, file=sys.stderr if getattr(args, "json", False) else sys.stdout)
@@ -698,7 +704,7 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
         job_dir = None
         coverage = {}
         try:
-            policy = JobRuntime.from_config(runtime, config, output_root=args.output)
+            policy = JobRuntime(runtime, output_root, config, path_policy.legacy_external_output)
             engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
             engine.run(Path(args.demo))
             job_dir = str(engine.store.job_dir)
@@ -748,7 +754,7 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print("\n提示：API key 已隐藏。确需查看可用 cs2pov config show --show-secrets。")
         return 0
     if args.config_cmd == "set":
-        if getattr(args, "whisper_cache_dir", None):
+        if getattr(args, "whisper_cache_dir", None) is not None:
             payload = {"ok": False, "command": "config.set", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "whisper-cache-dir 已弃用，配置未修改。", "suggestion_zh": "模型缓存跟随当前工作区，请使用 workspace init/use。"}}
             print(json.dumps(payload, ensure_ascii=False) if getattr(args, "json", False) else payload["error"]["message_zh"] + "\n" + payload["error"]["suggestion_zh"])
             return 1

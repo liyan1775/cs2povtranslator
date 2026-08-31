@@ -9,6 +9,7 @@ from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary, run_mode
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.domain.models import StageName
+from cs2pov.application.job_runtime import JobRuntimeError
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
@@ -63,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.once:
                 return 0
             continue
+        except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+            print(f"\n错误[{exc.code}]：{exc.message_zh}")
+            print(f"建议：{exc.suggestion_zh}")
         except Exception as exc:
             print(f"\n操作失败：{type(exc).__name__}: {exc}")
             print("建议：先选择 3 查看工程状态，或选择 4 打包反馈包发给开发者。")
