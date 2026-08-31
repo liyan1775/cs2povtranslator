@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import wave
 from pathlib import Path
 
 import pytest
 
-from cs2pov.application.job_runtime import JobRuntimeError
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
 from cs2pov.application.workspace import WorkspaceSelection
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeResolver
 from cs2pov.cli import commands
@@ -127,12 +128,58 @@ def test_renaming_job_with_collision_uses_final_job_id_for_audio_cache(tmp_path:
     assert (renamed.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
 
 
+def test_renaming_job_audio_copy_failure_keeps_job_and_audio_consistent(tmp_path: Path, monkeypatch):
+    cache_root = tmp_path / "workspace" / "cache" / "audio"
+    store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
+    store.temp_audio_dir.mkdir(parents=True)
+    (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
+    original_job_dir = store.job_dir
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("synthetic audio move failure")
+
+    monkeypatch.setattr(ArtifactStore, "_copy_temp_audio", fail_copy)
+    with pytest.raises(OSError, match="synthetic audio move failure"):
+        store.rename_suffix("de_mirage")
+
+    assert original_job_dir.exists()
+    assert (store.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
+    assert not any(p.name.endswith("_de_mirage") for p in original_job_dir.parent.iterdir())
+
+
 def test_pipeline_new_job_requires_explicit_runtime(tmp_path: Path):
     with pytest.raises(JobRuntimeError) as caught:
         PipelineEngine(PipelineConfig(output_root=str(tmp_path / "old-output")))
 
     assert caught.value.code == "workspace_runtime_required"
     assert not (tmp_path / "old-output").exists()
+
+
+def test_pipeline_existing_store_requires_runtime_before_manifest_rewrite(tmp_path: Path):
+    job_dir = tmp_path / "old-job"
+    store = ArtifactStore.create(job_dir.parent, job_id=job_dir.name)
+    store.manifest_path.write_bytes(b"{\"legacy\":true}")
+    before = store.manifest_path.read_bytes()
+
+    with pytest.raises(JobRuntimeError) as caught:
+        PipelineEngine(PipelineConfig(), store=store)
+
+    assert caught.value.code == "workspace_runtime_required"
+    assert store.manifest_path.read_bytes() == before
+
+
+def test_pipeline_rejects_job_runtime_from_different_workspace(tmp_path: Path):
+    runtime_a = _runtime(tmp_path / "a")
+    runtime_b = _runtime(tmp_path / "b")
+    config = PipelineConfig()
+    policy_b = JobRuntime.from_config(runtime_b, config)
+
+    with pytest.raises(JobRuntimeError) as caught:
+        PipelineEngine(config, runtime=runtime_a, job_runtime=policy_b)
+
+    assert caught.value.code == "workspace_runtime_mismatch"
+    assert not runtime_a.paths.jobs_dir.exists() or not list(runtime_a.paths.jobs_dir.iterdir())
+    assert not runtime_b.paths.jobs_dir.exists() or not list(runtime_b.paths.jobs_dir.iterdir())
 
 
 def test_pipeline_runtime_adapts_new_job_to_workspace_paths(tmp_path: Path):
@@ -158,6 +205,15 @@ class _CopyingDemoAdapter:
         return output_path
 
 
+class _RecordingDemoAdapter(_CopyingDemoAdapter):
+    def __init__(self):
+        self.calls = []
+
+    def decompress_if_needed(self, input_path: Path, output_path: Path) -> Path:
+        self.calls.append((input_path, output_path))
+        return super().decompress_if_needed(input_path, output_path)
+
+
 def test_demo_prepare_copies_external_dem_into_job_input_only(tmp_path: Path):
     source = tmp_path / "outside" / "match.dem"
     source.parent.mkdir()
@@ -170,6 +226,69 @@ def test_demo_prepare_copies_external_dem_into_job_input_only(tmp_path: Path):
     assert target.read_bytes() == b"demo-content"
     assert source.read_bytes() == b"demo-content"
     assert list(source.parent.iterdir()) == [source]
+
+
+def test_demo_prepare_is_idempotent_when_source_is_already_job_input(tmp_path: Path):
+    store = ArtifactStore.create(tmp_path / "jobs", job_id="job-1")
+    source = store.input_dir / "match.dem"
+    source.write_bytes(b"demo-content")
+
+    target = DemoService(_CopyingDemoAdapter()).prepare_input(source, store)
+
+    assert target == source
+    assert target.read_bytes() == b"demo-content"
+
+
+def test_demo_prepare_zst_writes_only_dem_into_job_input(tmp_path: Path):
+    source = tmp_path / "outside" / "match.dem.zst"
+    source.parent.mkdir()
+    source.write_bytes(b"compressed-content")
+    store = ArtifactStore.create(tmp_path / "jobs", job_id="job-1")
+    adapter = _RecordingDemoAdapter()
+
+    target = DemoService(adapter).prepare_input(source, store)
+
+    assert target == store.input_dir / "match.dem"
+    assert target.exists() and target.suffix == ".dem"
+    assert adapter.calls == [(source.resolve(), target)]
+    assert list(source.parent.iterdir()) == [source]
+
+
+def test_engine_writes_external_manifest_policy_without_absolute_roots(tmp_path: Path):
+    runtime = _runtime(tmp_path)
+    config = PipelineConfig()
+    external = tmp_path / "legacy-output"
+    policy = JobRuntime.from_config(runtime, config, output_root=external)
+    engine = PipelineEngine(policy.adapt_config(config), runtime=runtime, job_runtime=policy)
+
+    raw = json.loads(engine.store.manifest_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(raw, ensure_ascii=False)
+    assert raw["path_policy_version"] == 1
+    assert raw["legacy_external_output"] is True
+    assert str(runtime.root) not in serialized
+    assert str(external) not in serialized
+
+
+def test_engine_default_manifest_is_workspace_managed_without_legacy_warning(tmp_path: Path, capsys):
+    runtime = _runtime(tmp_path)
+    engine = PipelineEngine(PipelineConfig(), runtime=runtime)
+
+    raw = json.loads(engine.store.manifest_path.read_text(encoding="utf-8"))
+    assert raw["path_policy_version"] == 1
+    assert raw["legacy_external_output"] is False
+    assert "旧版外部输出" not in capsys.readouterr().out
+
+
+def test_main_path_error_returns_one_without_traceback(monkeypatch, capsys):
+    def fail():
+        raise JobRuntimeError("workspace_not_writable", "工作区不可写。", "请修复权限后重试。")
+
+    monkeypatch.setattr(commands, "_resolve_write_runtime", fail)
+
+    assert commands.main(["run", "demo.dem"]) == 1
+    output = capsys.readouterr().out
+    assert "workspace_not_writable" in output
+    assert "Traceback" not in output
 
 
 def _voice_store(tmp_path: Path, *, keep_temp_audio: bool = False, audio_cache_root: Path | None = None) -> ArtifactStore:

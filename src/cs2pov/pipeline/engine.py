@@ -29,11 +29,17 @@ class PipelineEngine:
         runtime: WorkspaceRuntime | None = None,
         job_runtime: JobRuntime | None = None,
     ):
-        if store is None and runtime is None:
+        if runtime is None:
             raise JobRuntimeError(
                 "workspace_runtime_required",
-                "创建新 Job 前必须显式解析当前工作区。",
+                "创建或恢复 Job 前必须显式解析当前工作区。",
                 "请先选择健康工作区，再运行任务。",
+            )
+        if job_runtime is not None and job_runtime.runtime != runtime:
+            raise JobRuntimeError(
+                "workspace_runtime_mismatch",
+                "Job 路径与临时资源不属于同一个工作区运行时。",
+                "请使用同一份 WorkspaceRuntime 解析 Job 路径和缓存目录。",
             )
         policy = job_runtime
         if runtime is not None and policy is None:
