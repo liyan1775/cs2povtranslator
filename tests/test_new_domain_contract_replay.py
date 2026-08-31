@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 import pytest
 
+import scripts.check_new_domain_contract as replay
 from scripts.check_new_domain_contract import ContractValidationError, validate_contract
 
 
@@ -140,6 +141,26 @@ def test_completion_order_is_metadata_only(tmp_path: Path) -> None:
     )
 
     validate_contract(reordered)
+
+
+def test_contract_validation_normalizes_expected_value_errors(monkeypatch) -> None:
+    def raise_expected_error(payload: dict[str, Any]) -> None:
+        raise ValueError("malformed input")
+
+    monkeypatch.setattr(replay, "_validate_payload", raise_expected_error)
+
+    with pytest.raises(ContractValidationError):
+        validate_contract(FIXTURE)
+
+
+def test_contract_validation_does_not_swallow_unexpected_runtime_errors(monkeypatch) -> None:
+    def raise_programming_error(payload: dict[str, Any]) -> None:
+        raise RuntimeError("programming defect")
+
+    monkeypatch.setattr(replay, "_validate_payload", raise_programming_error)
+
+    with pytest.raises(RuntimeError, match="programming defect"):
+        validate_contract(FIXTURE)
 
 
 def test_cli_normalizes_contract_errors_without_traceback(tmp_path: Path) -> None:

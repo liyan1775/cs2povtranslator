@@ -9,6 +9,7 @@ from typing import Any, Callable, TypeVar
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.domain.invocation import ModelConfigurationSnapshot, ModelInvocationRecord
 from cs2pov.domain.review import (
     DraftCommsTimeline,
@@ -92,7 +93,7 @@ def _load_payload(path: Path) -> dict[str, Any]:
         raise ValueError("transport keys are not exact")
     if type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
         raise ValueError("unsupported transport schema")
-    if not isinstance(payload["fixture_id"], str) or not payload["fixture_id"]:
+    if payload["fixture_id"] != "new-domain-three-round-v1":
         raise ValueError("fixture ID is invalid")
     return payload
 
@@ -214,6 +215,11 @@ def _validate_payload(payload: dict[str, Any]) -> None:
         raise ValueError("unassigned cue appears in a round document")
 
     stored_draft = DraftCommsTimeline.from_dict(payload["draft_timeline"])
+    expected_draft = compose_draft_timeline(
+        timeline, transcripts, documents, configurations, invocations
+    )
+    if stored_draft != expected_draft:
+        raise ValueError("stored draft does not match recomposed draft")
     validate_draft_timeline_graph(
         stored_draft, timeline, transcripts, documents, configurations, invocations
     )
@@ -272,7 +278,16 @@ def validate_contract(path: Path) -> None:
         _validate_payload(payload)
     except ContractValidationError:
         raise
-    except Exception as exc:
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        DomainSchemaError,
+        ValueError,
+        TypeError,
+        KeyError,
+        IndexError,
+    ) as exc:
         raise ContractValidationError("new domain contract is invalid") from exc
 
 
