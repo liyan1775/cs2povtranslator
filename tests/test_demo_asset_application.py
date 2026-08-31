@@ -102,6 +102,8 @@ def test_constructor_requires_exactly_one_of_resolver_or_runtime(tmp_path):
         DemoAssetApplicationService()
     with pytest.raises(TypeError, match="runtime_resolver 或 runtime"):
         DemoAssetApplicationService(FakeResolver(runtime), runtime=runtime)
+    with pytest.raises(TypeError, match="WorkspaceRuntime"):
+        DemoAssetApplicationService.for_runtime(object())
 
 
 def test_resolver_mode_remains_unbound(tmp_path):

@@ -11,6 +11,10 @@ from cs2pov.storage.jsonl import read_json, write_json
 
 REDACTED_SECRET = "[已配置-已隐藏]"
 
+_DEMO_ASSET_IDENTITY_KEYS = {"asset_id", "asset_manifest", "display_name"}
+_DEMO_ASSET_METADATA_KEYS = {"map_name", "server_name", "players"}
+_DEMO_ASSET_ALLOWED_KEYS = {"input_mode"} | _DEMO_ASSET_IDENTITY_KEYS | _DEMO_ASSET_METADATA_KEYS
+
 
 @dataclass(slots=True)
 class PipelineManifest:
@@ -64,10 +68,20 @@ class PipelineManifest:
         if not isinstance(ref, DemoAssetRef):
             raise TypeError("ref 必须是 DemoAssetRef。")
         validate_display_name(display_name)
+        input_mode = self.demo.get("input_mode")
+        if input_mode == "legacy_job_copy":
+            raise ValueError("legacy_job_copy 输入不能重新绑定为 demo_asset。")
+        if input_mode not in {None, "demo_asset"}:
+            raise ValueError("demo.input_mode 不受支持。")
+        if input_mode == "demo_asset":
+            current_ref = self.demo_asset_ref()
+            current_display_name = self.demo_asset_display_name()
+            if current_ref != ref or current_display_name != display_name:
+                raise ValueError("已有 demo_asset 引用不能被静默替换。")
         metadata = {
             key: value
             for key, value in self.demo.items()
-            if key not in {"input_mode", "asset_id", "asset_manifest", "display_name"}
+            if key in _DEMO_ASSET_METADATA_KEYS
         }
         self.demo = {
             **metadata,
@@ -79,6 +93,13 @@ class PipelineManifest:
         self.updated_at = datetime.now().isoformat(timespec="seconds")
 
     def mark_legacy_demo_input(self) -> None:
+        input_mode = self.demo.get("input_mode")
+        if input_mode == "demo_asset":
+            raise ValueError("demo_asset 输入不能重新标记为 legacy_job_copy。")
+        if input_mode not in {None, "legacy_job_copy"}:
+            raise ValueError("demo.input_mode 不受支持。")
+        if input_mode == "legacy_job_copy":
+            self.demo_asset_ref()
         self.demo = {
             key: value
             for key, value in self.demo.items()
@@ -92,9 +113,15 @@ class PipelineManifest:
         if input_mode is None:
             return None
         if input_mode == "legacy_job_copy":
+            conflicting = _DEMO_ASSET_IDENTITY_KEYS & self.demo.keys()
+            if conflicting:
+                raise ValueError("legacy_job_copy 不能包含 demo_asset 引用字段。")
             return None
         if input_mode != "demo_asset":
             raise ValueError("demo.input_mode 不受支持。")
+        unknown = set(self.demo) - _DEMO_ASSET_ALLOWED_KEYS
+        if unknown:
+            raise ValueError(f"demo_asset 包含不受支持的字段：{', '.join(sorted(unknown))}。")
         try:
             return DemoAssetRef.from_dict(
                 {
@@ -148,6 +175,9 @@ class PipelineManifest:
         API keys even though the in-memory PipelineConfig still needs the key
         while the process is running.
         """
+        demo_ref = self.demo_asset_ref()
+        if demo_ref is not None:
+            self.demo_asset_display_name()
         data = {
             "schema_version": self.schema_version,
             "job_id": self.job_id,
@@ -202,7 +232,7 @@ class PipelineManifest:
         allowed = set(PipelineConfig.__dataclass_fields__.keys())
         cfg_data = {k: v for k, v in cfg_data.items() if k in allowed}
         config = PipelineConfig(**cfg_data)
-        return cls(
+        manifest = cls(
             schema_version=int(data["schema_version"]),
             job_id=str(data["job_id"]),
             created_at=str(data["created_at"]),
@@ -215,3 +245,7 @@ class PipelineManifest:
             demo=dict(data.get("demo", {})),
             notes=list(data.get("notes", [])),
         )
+        demo_ref = manifest.demo_asset_ref()
+        if demo_ref is not None:
+            manifest.demo_asset_display_name()
+        return manifest

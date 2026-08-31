@@ -80,6 +80,62 @@ def test_mark_legacy_demo_input_only_sets_legacy_mode():
     assert manifest.demo == {"input_mode": "legacy_job_copy"}
 
 
+def test_demo_input_modes_cannot_silently_reclassify_each_other():
+    managed = make_manifest()
+    managed.bind_demo_asset(make_ref(), "match.dem")
+    managed_before = dict(managed.demo)
+
+    with pytest.raises(ValueError, match="demo_asset"):
+        managed.mark_legacy_demo_input()
+    assert managed.demo == managed_before
+
+    legacy = make_manifest()
+    legacy.mark_legacy_demo_input()
+    legacy_before = dict(legacy.demo)
+
+    with pytest.raises(ValueError, match="legacy"):
+        legacy.bind_demo_asset(make_ref(), "match.dem")
+    assert legacy.demo == legacy_before
+
+
+def test_managed_demo_rejects_unknown_or_ambiguous_fields_before_publish_and_load(tmp_path):
+    manifest = make_manifest()
+    manifest.bind_demo_asset(make_ref(), "match.dem")
+    manifest.demo["source_path"] = "D:/private/source.dem"
+
+    with pytest.raises(ValueError, match="字段"):
+        manifest.demo_asset_ref()
+    with pytest.raises(ValueError, match="字段"):
+        manifest.to_public_dict()
+
+    raw = {
+        "schema_version": 1,
+        "job_id": "job-demo-asset",
+        "created_at": manifest.created_at,
+        "updated_at": manifest.updated_at,
+        "config": PipelineManifest.create("other", PipelineConfig()).to_public_dict()["config"],
+        "stages": {},
+        "artifacts": {},
+        "demo": dict(manifest.demo),
+        "notes": [],
+    }
+    path = tmp_path / "invalid-manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="字段"):
+        PipelineManifest.load(path)
+
+
+def test_legacy_mode_rejects_managed_identity_fields_instead_of_ignoring_them():
+    manifest = make_manifest()
+    manifest.mark_legacy_demo_input()
+    manifest.demo["asset_id"] = "a" * 64
+
+    with pytest.raises(ValueError, match="legacy"):
+        manifest.demo_asset_ref()
+    with pytest.raises(ValueError, match="legacy"):
+        manifest.to_public_dict()
+
+
 def test_old_manifest_without_input_mode_remains_readable_and_is_not_rewritten(tmp_path):
     manifest = make_manifest()
     path = tmp_path / "manifest.json"

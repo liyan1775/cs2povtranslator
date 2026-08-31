@@ -36,6 +36,8 @@ class DemoAssetApplicationService:
     ) -> None:
         if (runtime_resolver is None) == (runtime is None):
             raise TypeError("必须提供 runtime_resolver 或 runtime，且只能提供一个。")
+        if runtime is not None and not isinstance(runtime, WorkspaceRuntime):
+            raise TypeError("runtime 必须是 WorkspaceRuntime。")
         if not callable(repository_factory):
             raise TypeError("repository_factory 必须可调用。")
         self.runtime_resolver = runtime_resolver
