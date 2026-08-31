@@ -140,6 +140,16 @@ def _path_resolves_within(path: Path, boundary: Path) -> bool:
         return False
 
 
+def _is_directory_link(path: Path) -> bool:
+    if path.is_symlink():
+        return True
+    is_junction = getattr(path, "is_junction", None)
+    if callable(is_junction) and is_junction():
+        return True
+    file_attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+    return bool(file_attributes & 0x0400)  # Windows FILE_ATTRIBUTE_REPARSE_POINT
+
+
 def _managed_cache_tree_is_safe(cache: Path, workspace_root: Path) -> bool:
     if not cache.is_dir() or not _path_resolves_within(cache, workspace_root):
         return False
@@ -154,7 +164,18 @@ def _managed_cache_tree_is_safe(cache: Path, workspace_root: Path) -> bool:
         current_path = Path(current)
         if not _path_resolves_within(current_path, resolved_cache):
             return False
-        for name in (*directories, *files):
+        safe_directories: list[str] = []
+        for name in directories:
+            child = current_path / name
+            if not _path_resolves_within(child, resolved_cache):
+                return False
+            try:
+                if not _is_directory_link(child):
+                    safe_directories.append(name)
+            except OSError:
+                return False
+        directories[:] = safe_directories
+        for name in files:
             if not _path_resolves_within(current_path / name, resolved_cache):
                 return False
     return not walk_errors

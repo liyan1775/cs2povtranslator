@@ -34,6 +34,13 @@ def _create_directory_link_or_skip(link: Path, target: Path) -> None:
         pytest.skip(f"当前平台不能创建目录符号链接：{exc}")
 
 
+def _remove_directory_link(link: Path) -> None:
+    if link.is_symlink():
+        link.unlink()
+    else:
+        link.rmdir()
+
+
 def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
     runtime = _runtime(tmp_path / "workspace")
     whisper = runtime.paths.whisper_cache_dir
@@ -181,6 +188,20 @@ def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path)
     assert [(r["name"], r["source"]) for r in rows] == [("small", "workspace_whisper"), ("base", "workspace_huggingface_hub")]
 
 
+def test_directory_link_detection_handles_symlink_or_windows_junction(tmp_path):
+    from cs2pov.cli import model_manager
+
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    _create_directory_link_or_skip(link, target)
+
+    try:
+        assert model_manager._is_directory_link(link) is True
+    finally:
+        _remove_directory_link(link)
+
+
 def test_current_scanner_rejects_model_directory_link_outside_managed_cache(tmp_path):
     from cs2pov.cli import model_manager
 
@@ -196,7 +217,7 @@ def test_current_scanner_rejects_model_directory_link_outside_managed_cache(tmp_
     try:
         assert model_manager.scan_current_models(runtime) == []
     finally:
-        linked_model.rmdir()
+        _remove_directory_link(linked_model)
 
 
 def test_current_scanner_rejects_nested_link_outside_managed_cache(tmp_path):
@@ -214,7 +235,7 @@ def test_current_scanner_rejects_nested_link_outside_managed_cache(tmp_path):
     try:
         assert model_manager.scan_current_models(runtime) == []
     finally:
-        linked_snapshot.rmdir()
+        _remove_directory_link(linked_snapshot)
 
 
 def test_model_load_rejects_external_cache_link_before_model_import(monkeypatch, tmp_path):
@@ -244,7 +265,7 @@ def test_model_load_rejects_external_cache_link_before_model_import(monkeypatch,
             workspace_root=str(runtime.root),
         )
     finally:
-        linked_model.rmdir()
+        _remove_directory_link(linked_model)
 
     assert result["ok"] is False
     assert result["code"] == "model_cache_boundary_invalid"
@@ -279,7 +300,7 @@ def test_internal_cache_link_remains_managed_and_loadable(monkeypatch, tmp_path)
             workspace_root=str(runtime.root),
         )
     finally:
-        linked_model.rmdir()
+        _remove_directory_link(linked_model)
 
     assert [(row["name"], row["managed"]) for row in rows] == [("base", True)]
     assert result["ok"] is True
