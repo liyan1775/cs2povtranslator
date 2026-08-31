@@ -24,6 +24,11 @@ _ASSET_KEYS = frozenset(
     }
 )
 _CACHE_STATUSES = frozenset({"not_applicable", "missing", "valid", "corrupt"})
+_PERSISTENT_SOURCE_ISSUES = frozenset({
+    "demo_asset_integrity_failed",
+    "demo_asset_manifest_invalid",
+    "demo_asset_path_escape",
+})
 
 
 def _validate_hash(value: object, field: str) -> str:
@@ -223,8 +228,17 @@ class DemoAssetInspection:
             raise ValueError("source_ok 必须是布尔值。")
         if self.cache_status not in _CACHE_STATUSES:
             raise ValueError("cache_status 不符合固定集合。")
+        if self.asset.source_format == "dem" and self.cache_status != "not_applicable":
+            raise ValueError("未压缩 Demo 的 cache_status 必须为 not_applicable。")
+        if self.asset.source_format == "dem.zst" and self.cache_status == "not_applicable":
+            raise ValueError("压缩 Demo 必须报告解压缓存状态。")
         if not isinstance(self.issues, tuple) or not all(isinstance(issue, str) and issue for issue in self.issues):
             raise ValueError("issues 必须是非空字符串元组。")
+        has_persistent_issue = any(issue in _PERSISTENT_SOURCE_ISSUES for issue in self.issues)
+        if self.source_ok and has_persistent_issue:
+            raise ValueError("source_ok 为真时不能带持久源错误。")
+        if not self.source_ok and not has_persistent_issue:
+            raise ValueError("source_ok 为假时必须带持久源错误。")
 
     @property
     def ok(self) -> bool:

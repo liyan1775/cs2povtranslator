@@ -30,6 +30,13 @@ def valid_asset() -> DemoAsset:
     )
 
 
+def valid_zst_asset() -> DemoAsset:
+    asset = valid_asset().to_dict()
+    asset["source_format"] = "dem.zst"
+    asset["source_relative_path"] = f"library/demos/{asset['asset_id']}/source.dem.zst"
+    return DemoAsset(**asset)
+
+
 def test_demo_asset_round_trips_exact_schema():
     asset = valid_asset()
 
@@ -61,21 +68,22 @@ def test_demo_asset_ref_has_exact_stable_schema():
 
 def test_all_dtos_are_json_serializable_and_inspection_cache_missing_is_ok():
     asset = valid_asset()
+    compressed_asset = valid_zst_asset()
     values = [
         asset.to_dict(),
         asset.to_ref().to_dict(),
         DemoImportResult(asset, "imported", 128).to_dict(),
         DemoAssetSummary(asset.asset_id, asset.display_name, "dem", 14, 14, asset.imported_at, True, None).to_dict(),
-        DemoAssetInspection(asset, True, "missing", ()).to_dict(),
+        DemoAssetInspection(compressed_asset, True, "missing", ()).to_dict(),
     ]
 
     for value in values:
         json.dumps(value, ensure_ascii=False)
-    inspection = DemoAssetInspection(asset, True, "missing", ())
+    inspection = DemoAssetInspection(compressed_asset, True, "missing", ())
     assert inspection.ok is True
     assert inspection.to_dict()["ok"] is True
-    assert DemoAssetInspection(asset, False, "missing", ()).ok is False
-    assert DemoAssetInspection(asset, True, "valid", ("demo_asset_integrity_failed",)).ok is True
+    assert DemoAssetInspection(asset, False, "not_applicable", ("demo_asset_integrity_failed",)).ok is False
+    assert DemoAssetInspection(compressed_asset, True, "corrupt", ("demo_cache_rebuild_required",)).ok is True
 
 
 @pytest.mark.parametrize(
@@ -162,10 +170,30 @@ def test_asset_summary_requires_consistent_health_and_issue(healthy, issue_code)
 @pytest.mark.parametrize("cache_status", ["", "missing-cache", "corrupted"])
 def test_inspection_rejects_unknown_cache_status(cache_status):
     with pytest.raises(ValueError):
-        DemoAssetInspection(valid_asset(), True, cache_status, ())
+        DemoAssetInspection(valid_zst_asset(), True, cache_status, ())
 
 
 def test_corrupt_cache_does_not_make_persistent_asset_unhealthy():
-    inspection = DemoAssetInspection(valid_asset(), True, "corrupt", ("demo_cache_rebuild_required",))
+    inspection = DemoAssetInspection(valid_zst_asset(), True, "corrupt", ("demo_cache_rebuild_required",))
 
     assert inspection.ok is True
+
+
+def test_persistent_integrity_issue_cannot_be_hidden_by_source_ok():
+    with pytest.raises(ValueError):
+        DemoAssetInspection(valid_zst_asset(), True, "valid", ("demo_asset_integrity_failed",))
+
+
+@pytest.mark.parametrize(
+    "asset,cache_status",
+    [(valid_asset(), "missing"), (valid_asset(), "corrupt"), (valid_zst_asset(), "not_applicable")],
+)
+def test_inspection_rejects_incompatible_source_format_and_cache_status(asset, cache_status):
+    with pytest.raises(ValueError):
+        DemoAssetInspection(asset, True, cache_status, ())
+
+
+@pytest.mark.parametrize("issues", [(), ("demo_cache_rebuild_required",)])
+def test_source_not_ok_requires_a_persistent_source_issue(issues):
+    with pytest.raises(ValueError):
+        DemoAssetInspection(valid_asset(), False, "not_applicable", issues)

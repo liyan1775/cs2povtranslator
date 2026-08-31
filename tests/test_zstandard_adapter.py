@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import tracemalloc
 
 import pytest
 import zstandard
@@ -30,6 +31,44 @@ def test_iter_decompressed_handles_complete_unknown_content_size_frame():
     assert b"".join(chunks) == original
 
 
+def test_iter_decompressed_handles_concatenated_frames():
+    compressor = zstandard.ZstdCompressor(write_content_size=False)
+    first = b"first-anonymous-frame" * 32
+    second = b"second-anonymous-frame" * 32
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressor.compress(first) + compressor.compress(second)), chunk_size=64))
+
+    assert b"".join(chunks) == first + second
+
+
+def test_iter_decompressed_handles_skippable_frame_before_data():
+    skipped = b"metadata intentionally skipped"
+    original = b"anonymous-frame-after-skippable"
+    skippable = bytes([0x50, 0x2A, 0x4D, 0x18]) + len(skipped).to_bytes(4, "little") + skipped
+    compressed = skippable + zstandard.ZstdCompressor().compress(original)
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=32))
+
+    assert b"".join(chunks) == original
+
+
+@pytest.mark.parametrize("trailer", [b"junk", b"\x28"])
+def test_iter_decompressed_rejects_trailing_partial_or_invalid_frame(trailer):
+    compressed = zstandard.ZstdCompressor().compress(b"anonymous-demo") + trailer
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=32))
+
+
+def test_iter_decompressed_accepts_unused_frame_header_bit():
+    compressed = bytearray(zstandard.ZstdCompressor().compress(b"anonymous-demo"))
+    compressed[4] |= 0x10
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(bytes(compressed)), chunk_size=32))
+
+    assert b"".join(chunks) == b"anonymous-demo"
+
+
 @pytest.mark.parametrize("trim", [1, 3, 10])
 def test_iter_decompressed_rejects_any_truncated_unknown_content_size_frame(trim):
     compressed = zstandard.ZstdCompressor(write_content_size=False).compress(b"anonymous-demo" * 256)
@@ -55,6 +94,25 @@ def test_iter_decompressed_never_requests_unbounded_source_reads():
 
     assert b"".join(chunks) == original
     assert source.requests
+
+
+def test_iter_decompressed_memory_peak_does_not_scale_with_compressed_logical_size():
+    original = b"x" * (16 * 1024 * 1024)
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(original)
+    assert len(compressed) < 4096
+
+    tracemalloc.start()
+    try:
+        decompressed_size = sum(
+            len(chunk)
+            for chunk in ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=64 * 1024)
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert decompressed_size == len(original)
+    assert peak < 4 * 1024 * 1024
 
 
 def test_iter_decompressed_accepts_a_valid_empty_frame():
