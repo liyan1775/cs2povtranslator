@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from datetime import datetime
+from contextlib import contextmanager
 import re
+import os
+import time
 
 from cs2pov.application.job_runtime import JobRuntimeError
 
 
 def safe_name(text: str, max_len: int = 80) -> str:
     cleaned = re.sub(r"[^\w.\-]+", "_", text, flags=re.UNICODE).strip("_")
+    cleaned = cleaned.rstrip(". ")
     return (cleaned or "unnamed")[:max_len]
 
 
@@ -73,15 +77,24 @@ class ArtifactStore:
         target = self.job_dir.with_name(new_name)
         base = target
         idx = 2
-        while True:
-            _reject_escaped_candidate(target, self.job_dir.parent.resolve())
-            try:
-                # rename itself is the atomic collision check.
-                self.job_dir.rename(target)
-                break
-            except FileExistsError:
-                target = base.with_name(f"{base.name}_{idx}")
-                idx += 1
+        with _rename_claim(self.job_dir.parent, self.job_dir.name):
+            while True:
+                _reject_escaped_candidate(target, self.job_dir.parent.resolve())
+                # The cooperative claim makes this check and rename one
+                # critical section for all ArtifactStore writers.  A target
+                # is never replaced, including an empty directory.
+                if target.exists() or target.is_symlink():
+                    target = base.with_name(f"{base.name}_{idx}")
+                    idx += 1
+                    continue
+                try:
+                    self.job_dir.rename(target)
+                    break
+                except FileExistsError:
+                    # A non-cooperating creator won the race.  Never retry
+                    # the same target, since POSIX rename can replace dirs.
+                    target = base.with_name(f"{base.name}_{idx}")
+                    idx += 1
         store = ArtifactStore(target)
         store.ensure_dirs()
         return store
@@ -169,6 +182,8 @@ _WINDOWS_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in rang
 def _validate_job_id(job_id: str) -> None:
     if not isinstance(job_id, str) or not job_id or job_id != job_id.strip():
         raise JobRuntimeError("job_id_invalid", "Job ID 不能为空且不能包含首尾空白。", "请使用字母、数字、中文、连字符或下划线。")
+    if len(job_id) > 80:
+        raise JobRuntimeError("job_id_invalid", "Job ID 过长，无法作为跨平台目录名。", "请将 Job ID 缩短到 80 个字符以内。")
     if job_id in {".", ".."} or "/" in job_id or "\\" in job_id or "\x00" in job_id:
         raise JobRuntimeError("job_id_invalid", "Job ID 不能是路径或包含目录分隔符。", "请提供单段 Job ID，不要使用绝对路径或 ..。")
     # pathlib on POSIX does not recognize a Windows drive, so check it explicitly.
@@ -200,3 +215,48 @@ def _reject_escaped_candidate(candidate: Path, root: Path) -> None:
         candidate.resolve(strict=False).relative_to(root.resolve())
     except (OSError, RuntimeError, ValueError) as exc:
         raise JobRuntimeError("job_path_escape", "Job 路径超出输出根目录。", "请改用工作区 jobs 或明确的输出目录。") from exc
+
+
+@contextmanager
+def _rename_claim(parent: Path, source_name: str):
+    """Acquire a cooperative, observable claim for a rename operation.
+
+    ``rename`` has no portable no-replace mode: on POSIX it can replace an
+    existing empty directory.  A mkdir-based claim serializes all cooperating
+    ArtifactStore renames, while the stale claim error makes a crash residue
+    visible instead of silently deleting or taking it over.
+    """
+    claim = parent / f".{source_name}.rename.claim"
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            claim.mkdir()
+            owner = claim / "owner"
+            owner.write_text(f"pid={os.getpid()}\n", encoding="ascii")
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - claim.stat().st_mtime
+            except OSError as exc:
+                raise JobRuntimeError("job_path_claim_busy", "Job 重命名正在被其他任务占用。", "请稍后重试。") from exc
+            if age > 30.0:
+                raise JobRuntimeError(
+                    "job_path_claim_stale",
+                    f"检测到未清理的 Job 重命名 claim：{claim.name}。",
+                    "请确认没有运行中的任务后手动移除该 claim，再重试。",
+                )
+            if time.monotonic() >= deadline:
+                raise JobRuntimeError("job_path_claim_busy", "Job 重命名正在被其他任务占用。", "请稍后重试。")
+            time.sleep(0.01)
+        except OSError as exc:
+            raise JobRuntimeError("job_path_claim_failed", "无法取得 Job 重命名 claim。", "请检查 Job 根目录权限后重试。") from exc
+    try:
+        yield
+    finally:
+        try:
+            (claim / "owner").unlink()
+            claim.rmdir()
+        except OSError:
+            # A crash leaves the claim observable for the next invocation;
+            # cleanup failures must not cause an unsafe fallback rename.
+            pass

@@ -154,11 +154,47 @@ def test_rename_suffix_avoids_race_and_preserves_job_contents(tmp_path: Path):
     (store.input_dir / "demo.dem").write_bytes(b"demo")
     occupied = store.job_dir.with_name(store.job_dir.name.replace("unknown_map", "de_mirage"))
     occupied.mkdir()
+    (occupied / "must-survive.txt").write_text("old", encoding="utf-8")
 
     renamed = store.rename_suffix("de_mirage")
 
     assert renamed.job_dir.name.endswith("_de_mirage_2")
     assert (renamed.input_dir / "demo.dem").read_bytes() == b"demo"
+    assert (occupied / "must-survive.txt").read_text(encoding="utf-8") == "old"
+
+
+def test_rename_suffix_preserves_existing_empty_directory(tmp_path: Path):
+    store = ArtifactStore.create(tmp_path, map_name=None)
+    occupied = store.job_dir.with_name(store.job_dir.name.replace("unknown_map", "de_mirage"))
+    occupied.mkdir()
+
+    renamed = store.rename_suffix("de_mirage")
+
+    assert renamed.job_dir.name.endswith("_de_mirage_2")
+    assert occupied.is_dir()
+
+
+def test_concurrent_rename_claims_never_replace_existing_target(tmp_path: Path):
+    source = ArtifactStore.create(tmp_path, job_id="same_unknown_map")
+    competing_view = ArtifactStore(source.job_dir)
+    occupied = source.job_dir.with_name("same_de_mirage")
+    occupied.mkdir()
+    (occupied / "old.txt").write_text("old", encoding="utf-8")
+
+    def rename(store: ArtifactStore):
+        try:
+            return store.rename_suffix("de_mirage").job_dir
+        except Exception as exc:  # the losing view has no source after claim
+            return exc
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(rename, [source, competing_view]))
+
+    assert sum(isinstance(outcome, Path) for outcome in outcomes) == 1
+    assert any(isinstance(outcome, FileNotFoundError) for outcome in outcomes)
+    assert (occupied / "old.txt").read_text(encoding="utf-8") == "old"
+    assert (tmp_path / "same_de_mirage_2").is_dir()
 
 
 def test_resolve_job_dir_breaks_equal_mtime_by_canonical_name(tmp_path: Path):
@@ -200,8 +236,13 @@ def test_old_manifest_without_new_fields_loads_with_compatible_defaults(tmp_path
 
     loaded = PipelineManifest.load(path)
 
-    assert loaded.path_policy_version == 1
-    assert loaded.legacy_external_output is False
+    assert loaded.path_policy_version is None
+    assert loaded.legacy_external_output is None
+    loaded.save(path)
+    round_tripped = json.loads(path.read_text(encoding="utf-8"))
+    assert "path_policy_version" not in round_tripped
+    assert "legacy_external_output" not in round_tripped
+    assert round_tripped["config"]["output_root"] == "[legacy-unmanaged]"
 
 
 def test_public_manifest_hides_runtime_and_external_absolute_paths(tmp_path: Path):
@@ -230,3 +271,18 @@ def test_failed_runtime_adaptation_creates_no_output_directories(tmp_path: Path)
         JobRuntime.from_config(runtime, config, output_root=Path("bad\x00root"))
 
     assert not (tmp_path / "badroot").exists()
+
+
+@pytest.mark.parametrize("map_name, expected", [("de_mirage.", "de_mirage"), (".", "unnamed"), ("   .  ", "unnamed")])
+def test_automatic_job_names_are_safe_windows_components(tmp_path: Path, map_name: str, expected: str):
+    store = ArtifactStore.create(tmp_path, map_name=map_name)
+
+    assert store.job_dir.name.endswith(f"_{expected}")
+    assert not store.job_dir.name.endswith((".", " "))
+
+
+def test_explicit_job_id_has_stable_component_length_error(tmp_path: Path):
+    with pytest.raises(JobRuntimeError) as caught:
+        ArtifactStore.create(tmp_path, job_id="x" * 256)
+
+    assert caught.value.code == "job_id_invalid"
