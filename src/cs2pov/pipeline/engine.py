@@ -14,6 +14,8 @@ from cs2pov.services.voice_service import VoiceService
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_json, write_json
 from cs2pov.services.player_alias_service import save_player_aliases
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 
 class PipelineEngine:
@@ -23,12 +25,41 @@ class PipelineEngine:
         store: ArtifactStore | None = None,
         progress: ProgressSink | None = None,
         manifest: PipelineManifest | None = None,
+        *,
+        runtime: WorkspaceRuntime | None = None,
+        job_runtime: JobRuntime | None = None,
     ):
-        self.config = config
-        self.store = store or ArtifactStore.create(Path(config.output_root), config.map_name, config.job_id)
+        if runtime is None:
+            raise JobRuntimeError(
+                "workspace_runtime_required",
+                "创建或恢复 Job 前必须显式解析当前工作区。",
+                "请先选择健康工作区，再运行任务。",
+            )
+        if job_runtime is not None and job_runtime.runtime != runtime:
+            raise JobRuntimeError(
+                "workspace_runtime_mismatch",
+                "Job 路径与临时资源不属于同一个工作区运行时。",
+                "请使用同一份 WorkspaceRuntime 解析 Job 路径和缓存目录。",
+            )
+        policy = job_runtime
+        if runtime is not None and policy is None:
+            policy = JobRuntime.from_config(runtime, config)
+        self.config = policy.adapt_config(config) if policy is not None else config
+        if store is not None and runtime is not None:
+            # Existing Job data stays in place, while new model/audio scratch
+            # follows the current immutable workspace runtime.
+            store = ArtifactStore(
+                store.job_dir,
+                audio_cache_root=runtime.paths.audio_cache_dir,
+                keep_temp_audio=self.config.keep_temp_audio,
+            )
+        self.store = store or policy.create_store(self.config)  # type: ignore[union-attr]
         self.progress = progress or ProgressSink(self.store.progress_log_path, verbose=True)
-        self.manifest = manifest or PipelineManifest.create(self.store.job_dir.name, config)
-        self.manifest.config = config
+        self.manifest = manifest or (
+            policy.create_manifest(self.store.job_dir.name, self.config) if policy is not None
+            else PipelineManifest.create(self.store.job_dir.name, self.config)
+        )
+        self.manifest.config = self.config
         self.manifest.job_id = self.store.job_dir.name
         self.manifest.save(self.store.manifest_path)
         self.demo_service = DemoService()

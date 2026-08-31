@@ -403,7 +403,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
             self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
 
     class DummyEngine:
-        def __init__(self, config):
+        def __init__(self, config, runtime=None, job_runtime=None):
             self.config = config
             self.store = DummyStore(Path(config.output_root) / "20260101_000000_de_mirage")
 
@@ -412,6 +412,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
             self.store.transcription_coverage_path.write_text('{"postprocessed_transcript_segments": 1}', encoding="utf-8")
 
     monkeypatch.setattr(commands, "PipelineEngine", DummyEngine)
+    monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
     monkeypatch.chdir(tmp_path)
     args = Namespace(
         demo="D:\\agent_workspace\\cs2demos\\match.dem.zst",
@@ -426,7 +427,55 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
         json=False,
     )
     assert commands.run_asr_benchmark(args) == 0
-    report = (tmp_path / "bench_out" / "asr_benchmark.json").read_text(encoding="utf-8")
+    report = next((tmp_path / "bench_out").glob("asr_benchmark_*.json")).read_text(encoding="utf-8")
     assert "agent_workspace" not in report
     assert "D:" not in report
     assert "match.dem.zst" in report
+
+
+def test_benchmark_json_keeps_engine_progress_out_of_stdout(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+    import json
+    import cs2pov.cli.commands as commands
+    from cs2pov.pipeline.progress import ProgressSink
+
+    class DummyStore:
+        def __init__(self, job_dir):
+            self.job_dir = job_dir
+            self.progress_log_path = job_dir / "progress.log"
+            self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
+
+    class DummyEngine:
+        def __init__(self, config, runtime=None, job_runtime=None):
+            self.config = config
+            self.store = DummyStore(Path(config.output_root) / "20260101_000000_de_mirage")
+            self.progress = ProgressSink(self.store.progress_log_path, verbose=True)
+
+        def run(self, demo):
+            self.progress.emit("prepare_input", "真实引擎进度")
+            self.store.transcription_coverage_path.parent.mkdir(parents=True, exist_ok=True)
+            self.store.transcription_coverage_path.write_text('{"postprocessed_transcript_segments": 1}', encoding="utf-8")
+
+    monkeypatch.setattr(commands, "PipelineEngine", DummyEngine)
+    monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
+    monkeypatch.chdir(tmp_path)
+    args = Namespace(
+        demo="D:\\agent_workspace\\cs2demos\\match.dem.zst",
+        output="bench_out",
+        models="base",
+        team_number=2,
+        max_rounds=1,
+        device="cpu",
+        compute_type="int8",
+        language="auto",
+        cache_dir=None,
+        json=True,
+    )
+
+    assert commands.run_asr_benchmark(args) == 0
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report["runs"][0]["ok"] is True
+    assert "真实引擎进度" not in captured.out
+    progress_path = tmp_path / "bench_out" / "20260101_000000_de_mirage" / "progress.log"
+    assert "真实引擎进度" in progress_path.read_text(encoding="utf-8")

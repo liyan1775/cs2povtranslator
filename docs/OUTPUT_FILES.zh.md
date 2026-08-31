@@ -3,7 +3,7 @@
 每次处理 demo 都会生成一个 Job 目录，例如：
 
 ```text
-output/20260610_141449_de_mirage/
+jobs/20260610_141449_de_mirage/
 ```
 
 v0.9.0 以后，最常用的文件仍在 `final/`，默认推荐双语字幕；如果要做 POV 通讯增强视频，还会使用 `review/comms_rounds/` 和 `final/comms_overlay/`。
@@ -24,15 +24,15 @@ v0.9.0 以后，最常用的文件仍在 `final/`，默认推荐双语字幕；�
 推荐命令：
 
 ```powershell
-cs2pov export output --preset editing
+cs2pov export --preset editing
 ```
 
 Comms Overlay 工作流：
 
 ```powershell
-cs2pov comms build-review output --rounds 1-3
+cs2pov comms build-review --rounds 1-3
 # 人工修改 review/comms_rounds/round_XX.yaml
-cs2pov comms render output --rounds 1-3 --formats preview,green
+cs2pov comms render --rounds 1-3 --formats preview,green
 ```
 
 ## review/
@@ -46,7 +46,7 @@ cs2pov comms render output --rounds 1-3 --formats preview,green
 推荐命令：
 
 ```powershell
-cs2pov export output --preset review
+cs2pov export --preset review
 ```
 
 ## debug/
@@ -59,7 +59,7 @@ cs2pov export output --preset review
 推荐命令：
 
 ```powershell
-cs2pov export output --preset debug
+cs2pov export --preset debug
 ```
 
 ## artifacts/
@@ -74,5 +74,5 @@ cs2pov export output --preset debug
 也可以运行：
 
 ```powershell
-cs2pov explain-output output
+cs2pov explain-output
 ```

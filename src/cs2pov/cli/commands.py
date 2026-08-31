@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,13 @@ from cs2pov.cli.job_ops import (
     resolve_job_dir,
     resume_job,
     retranslate_job,
+    warn_external_job,
+    resolve_write_runtime,
+    require_write_job,
 )
 from cs2pov.domain.models import PipelineConfig, StageName
 from cs2pov.pipeline.engine import PipelineEngine
+from cs2pov.pipeline.progress import ProgressSink
 from cs2pov.storage.config_store import load_config, save_config, mask_config_for_display, llm_model_warning
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
@@ -35,6 +40,10 @@ from cs2pov.cli.player_ops import (
     print_players_report,
     set_player_alias,
 )
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
+from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -46,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
 
     run = sub.add_parser("run", help="专家模式：直接运行 pipeline")
     run.add_argument("demo")
-    run.add_argument("--output", default="output")
+    run.add_argument("--output", default=None)
     run.add_argument("--map", dest="map_name")
     run.add_argument("--pov-steamid")
     run.add_argument("--team", type=int, dest="team_number")
@@ -114,23 +123,23 @@ def main(argv: list[str] | None = None) -> int:
     glossary_list.add_argument("--scope", choices=["all", "global", "map"], default="all", help="词典范围：all=通用+地图，global=通用术语，map=当前地图报点。")
     glossary_list.add_argument("--json", action="store_true", help="输出 JSON")
     glossary_check = glossary_sub.add_parser("check", help="查看已有 Job 的 glossary_used / glossary_warnings")
-    glossary_check.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    glossary_check.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     glossary_check.add_argument("--json", action="store_true", help="输出 JSON")
 
 
     players = sub.add_parser("players", help="玩家识别与字幕显示名：查看 K-D-A/语音时长，并设置 Ebule -> donk 这类别名")
     players_sub = players.add_subparsers(dest="players_cmd")
     players_list = players_sub.add_parser("list", help="列出 Job 中有语音的玩家、K-D-A 和字幕显示名")
-    players_list.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_list.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     players_list.add_argument("--json", action="store_true")
     players_alias = players_sub.add_parser("alias", help="设置字幕显示名。设置后重新 export 即可生效，不需要重跑 Whisper/LLM")
-    players_alias.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_alias.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     players_alias.add_argument("--steamid", help="推荐：用 SteamID 精确指定玩家")
     players_alias.add_argument("--name", help="用 demo 昵称匹配玩家；若重名请改用 --steamid")
     players_alias.add_argument("--as", dest="display_name", required=True, help="字幕中显示的名字，例如 donk")
     players_alias.add_argument("--json", action="store_true")
     players_clear = players_sub.add_parser("clear-alias", help="清除字幕显示名映射")
-    players_clear.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    players_clear.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     players_clear.add_argument("--steamid")
     players_clear.add_argument("--name")
     players_clear.add_argument("--all", action="store_true", help="清除全部别名")
@@ -162,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
 
     bench = sub.add_parser("benchmark-asr", help="对同一 demo 的前 N 个回合跑多个 Whisper 模型，生成耗时/片段数对比")
     bench.add_argument("demo")
-    bench.add_argument("--output", default="output_asr_benchmark")
+    bench.add_argument("--output", default=None, help="旧版外部输出根目录（显式提供时启用兼容警告）")
     bench.add_argument("--models", default="tiny,base,small", help="逗号分隔，例如 base,small,medium")
     bench.add_argument("--team", type=int, dest="team_number")
     bench.add_argument("--max-rounds", type=int, default=3)
@@ -173,25 +182,25 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--json", action="store_true")
 
     clean = sub.add_parser("clean", help="清理 job 中体积较大的中间产物，默认只预览不删除")
-    clean.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    clean.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     clean.add_argument("--yes", action="store_true", help="确认删除。没有 --yes 时只显示可释放空间。")
     clean.add_argument("--voice", action=argparse.BooleanOptionalAction, default=True, help="删除 artifacts/voice 中的 compact WAV/packet 缓存，默认 true。")
     clean.add_argument("--temp", action=argparse.BooleanOptionalAction, default=True, help="删除 artifacts/temp_audio 临时切片，默认 true。")
 
     feedback = sub.add_parser("feedback", help="打包一个不含大音频/密钥的反馈包，便于发给开发者")
-    feedback.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
-    feedback.add_argument("--out", help="输出 zip 路径；默认放在当前目录")
+    feedback.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
+    feedback.add_argument("--out", help="输出 zip 路径；默认放在目标 Job 的 debug/feedback 目录")
 
     inspect = sub.add_parser("inspect-job", help="查看 Job 状态、阶段、产物和推荐下一步")
-    inspect.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output，会自动选择最新 job")
+    inspect.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则自动选择最新 Job")
     inspect.add_argument("--json", action="store_true", help="输出 JSON，便于本地 agent 或脚本读取")
 
     explain = sub.add_parser("explain-output", help="解释已有 Job 的 final/review/debug/artifacts 文件分别做什么")
-    explain.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    explain.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     explain.add_argument("--json", action="store_true", help="输出 JSON，便于本地 agent 读取")
 
     export = sub.add_parser("export", help="基于已有 Job 重新导出字幕，不重新转录/翻译")
-    export.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    export.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     export.add_argument("--format", choices=["all", "bilingual", "compact", "zh", "zh_clean", "original", "debug", "voice"], default="all", help="导出格式。all 会同时生成双语/中文/紧凑/调试/语音活动。")
     export.add_argument("--team", type=int, dest="team_number", help="覆盖 Job 中保存的队伍编号")
     export.add_argument("--pov-steamid", help="覆盖 Job 中保存的 POV 玩家 SteamID")
@@ -203,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
     export.add_argument("--min-duration", type=float, help="覆盖最短显示时间，单位秒")
 
     retranslate = sub.add_parser("retranslate", help="基于已有 round_contexts 重新翻译，并重新导出字幕")
-    retranslate.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    retranslate.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     retranslate.add_argument("--dry-run", action="store_true", help="不调用 LLM，用 [演示翻译] 生成字幕")
     retranslate.add_argument("--skip-translation", action="store_true", help="跳过翻译，生成未翻译占位")
     retranslate.add_argument("--model", help="临时指定 LLM model，不写入全局配置")
@@ -211,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     retranslate.add_argument("--no-export", action="store_true", help="只生成 translated_segments.jsonl，不重新导出 SRT")
 
     resume = sub.add_parser("resume", help="从已有 Job 的某个阶段恢复执行")
-    resume.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    resume.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     resume.add_argument("--from-stage", required=True, choices=[s.value for s in StageName], help="从哪个阶段继续，例如 translate/export_subtitles")
     resume.add_argument("--to-stage", choices=[s.value for s in StageName], help="可选：跑到哪个阶段停止")
     resume.add_argument("--demo", help="如果 Job input/ 里没有 demo，可手动指定原始 .dem/.dem.zst")
@@ -219,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
     comms = sub.add_parser("comms", help="v0.9.8：按回合生成可人工校对的双语通讯流和剪映 overlay 素材；默认画面不显示不可靠倒计时")
     comms_sub = comms.add_subparsers(dest="comms_cmd")
     comms_build = comms_sub.add_parser("build-review", help="从已有翻译结果生成 final/comms_feed 与 review/comms_rounds/round_XX.yaml")
-    comms_build.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    comms_build.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     comms_build.add_argument("--team", type=int, dest="team_number", help="覆盖 Job 中保存的队伍编号")
     comms_build.add_argument("--pov-steamid", help="覆盖 Job 中保存的 POV 玩家 SteamID")
     comms_build.add_argument("--export-scope", choices=["pov_team", "pov_player", "all"], help="覆盖导出范围")
@@ -231,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     comms_build.add_argument("--json", action="store_true", help="输出 JSON，便于本地 agent 读取")
 
     comms_render = comms_sub.add_parser("render", help="从 review/comms_rounds/round_XX.yaml 渲染每回合半透明/绿幕/预览 overlay")
-    comms_render.add_argument("path", nargs="?", default="output", help="job 目录或 output 根目录，默认 output")
+    comms_render.add_argument("path", nargs="?", default=None, help="job 目录或工作区 jobs 根目录，省略则使用当前工作区")
     comms_render.add_argument("--rounds", help="只渲染指定回合，例如 1、1-3、1,3,5-7")
     comms_render.add_argument("--formats", default="preview,green", help="输出格式：preview,green,alpha,png，可逗号分隔。默认 preview,green")
     comms_render.add_argument("--width", type=int, default=1920)
@@ -256,13 +265,24 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return dispatch(args, parser)
+    except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+        payload = {"ok": False, "error": {"code": exc.code, "message_zh": exc.message_zh, "suggestion_zh": exc.suggestion_zh}}
+        if getattr(args, "json", False):
+            print(json.dumps(payload, ensure_ascii=False))
+        else:
+            print(f"错误[{exc.code}]：{exc.message_zh}")
+            print(f"建议：{exc.suggestion_zh}")
+        return 1
     except FileNotFoundError as exc:
-        print(f"错误：{exc}")
-        print("提示：可以先运行 cs2pov inspect-job output 查看最新 Job，或用 cs2pov-wizard 新建任务。")
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": False, "error": {"code": "job_not_found", "message_zh": str(exc), "suggestion_zh": "请检查 Job 路径，或先创建一个工作区 Job。"}}, ensure_ascii=False))
+        else:
+            print(f"错误：{exc}")
+            print("提示：可以先运行 cs2pov inspect-job 查看当前工作区 jobs，或用 cs2pov-wizard 新建任务。")
         return 1
     except Exception as exc:
         print(f"处理失败：{type(exc).__name__}: {exc}")
-        print("建议运行：cs2pov feedback output，把生成的 zip 发给开发者。")
+        print("建议运行：cs2pov feedback，把生成的 zip 发给开发者。")
         raise
 
 
@@ -284,25 +304,34 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return run_config(args, parser)
 
     if args.cmd == "glossary":
+        if args.glossary_cmd == "check":
+            args.path = _resolve_job_argument(args.path, write=False)
         return run_glossary(args, parser)
 
     if args.cmd == "players":
-        return run_players(args, parser)
+        writing = args.players_cmd in {"alias", "clear-alias"}
+        runtime = _resolve_write_runtime() if writing else (_resolve_read_runtime() if args.path is None else None)
+        args.path = _resolve_job_argument(args.path, write=writing, runtime=runtime)
+        return run_players(args, parser, runtime=runtime)
 
     if args.cmd == "models":
         return run_models(args, parser)
 
     if args.cmd == "benchmark-asr":
-        return run_asr_benchmark(args)
+        return run_asr_benchmark(args, runtime=_resolve_write_runtime())
 
     if args.cmd == "clean":
-        return run_clean(Path(args.path), delete=args.yes, clean_voice=args.voice, clean_temp=args.temp)
+        runtime = _resolve_write_runtime() if args.yes else (_resolve_read_runtime() if args.path is None else None)
+        args.path = _resolve_job_argument(args.path, write=args.yes, runtime=runtime)
+        return run_clean(args.path, delete=args.yes, clean_voice=args.voice, clean_temp=args.temp, runtime=runtime)
 
     if args.cmd == "feedback":
-        return run_feedback(Path(args.path), out=Path(args.out) if args.out else None)
+        runtime = _resolve_write_runtime()
+        args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
+        return run_feedback(args.path, out=Path(args.out) if args.out else None, runtime=runtime)
 
     if args.cmd == "inspect-job":
-        summary = inspect_job(Path(args.path))
+        summary = inspect_job(_resolve_job_argument(args.path, write=False))
         if args.json:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
         else:
@@ -310,7 +339,7 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     if args.cmd == "explain-output":
-        report = build_output_explanation(Path(args.path))
+        report = build_output_explanation(_resolve_job_argument(args.path, write=False))
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -318,10 +347,13 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     if args.cmd == "export":
+        runtime = _resolve_write_runtime()
+        args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
         outputs = export_job(
-            Path(args.path), fmt=args.format, team_number=args.team_number, pov_steamid=args.pov_steamid,
+            args.path, fmt=args.format, team_number=args.team_number, pov_steamid=args.pov_steamid,
             export_scope=args.export_scope, bilingual_format=args.bilingual_format, preset=args.preset,
             overlap_policy=args.overlap_policy, max_duration_seconds=args.max_duration, min_duration_seconds=args.min_duration,
+            runtime=runtime,
         )
         print("导出完成：")
         for key, value in outputs.items():
@@ -330,7 +362,9 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     if args.cmd == "retranslate":
-        outputs = retranslate_job(Path(args.path), dry_run=args.dry_run, skip_translation=args.skip_translation, model=args.model, base_url=args.base_url, export_after=not args.no_export)
+        runtime = _resolve_write_runtime()
+        args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
+        outputs = retranslate_job(args.path, dry_run=args.dry_run, skip_translation=args.skip_translation, model=args.model, base_url=args.base_url, export_after=not args.no_export, runtime=runtime)
         print("重新翻译完成：")
         for key, value in outputs.items():
             print(f"  {key}: {value}")
@@ -338,7 +372,9 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     if args.cmd == "resume":
-        job = resume_job(Path(args.path), from_stage=StageName(args.from_stage), to_stage=StageName(args.to_stage) if args.to_stage else None, demo_path=Path(args.demo) if args.demo else None)
+        runtime = _resolve_write_runtime()
+        args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
+        job = resume_job(args.path, from_stage=StageName(args.from_stage), to_stage=StageName(args.to_stage) if args.to_stage else None, demo_path=Path(args.demo) if args.demo else None, runtime=runtime)
         print(f"恢复执行完成：{job}")
         print("你可以运行 cs2pov inspect-job 查看最新状态，或 cs2pov export 重新导出字幕。")
         return 0
@@ -353,6 +389,20 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     return 2
 
 
+def _resolve_read_runtime() -> WorkspaceRuntime:
+    return WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_selected()
+
+
+def _resolve_write_runtime() -> WorkspaceRuntime:
+    return WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
+
+
+def _resolve_job_argument(path: str | Path | None, *, write: bool, runtime: WorkspaceRuntime | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    runtime = runtime or (_resolve_write_runtime() if write else _resolve_read_runtime())
+    return runtime.paths.jobs_dir
+
 
 def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from cs2pov.cli.job_ops import _load_job_config_with_runtime_secrets, _require_job, _update_manifest_config_and_artifacts
@@ -362,7 +412,9 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.comms_cmd is None:
         parser.error("comms 需要 build-review 或 render")
         return 2
-    job_dir = _require_job(Path(args.path))
+    runtime = _resolve_write_runtime()
+    path = _resolve_job_argument(args.path, write=True, runtime=runtime)
+    job_dir = _require_job(path)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
     rounds = _parse_rounds_arg(getattr(args, "rounds", None))
@@ -384,6 +436,8 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             round_clock_end=args.round_clock_end,
             freeze_seconds=args.freeze_seconds,
             time_display=args.time_display.replace("-", "_"),
+            runtime=runtime,
+            warning_stream=sys.stderr if getattr(args, "json", False) else None,
         )
         _update_manifest_config_and_artifacts(store, cfg, outputs)
         if args.json:
@@ -412,7 +466,12 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             freeze_seconds=args.freeze_seconds,
             time_display=args.time_display.replace("-", "_"),
         )
-        outputs = CommsService().render(store, rounds=rounds, formats=args.formats.split(","), options=options)
+        outputs = CommsService().render(
+            store, rounds=rounds, formats=args.formats.split(","), options=options,
+            temp_root=runtime.paths.temp_dir, runtime=runtime,
+            subprocess_env=runtime.subprocess_environment(),
+            warning_stream=sys.stderr if getattr(args, "json", False) else None,
+        )
         _update_manifest_config_and_artifacts(store, cfg, outputs)
         if args.json:
             print(json.dumps(outputs, ensure_ascii=False, indent=2))
@@ -446,7 +505,7 @@ def _parse_rounds_arg(value: str | None) -> set[int] | None:
     return out or None
 
 
-def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser, *, runtime: WorkspaceRuntime | None = None) -> int:
     if args.players_cmd == "list":
         report = build_players_report(Path(args.path))
         if args.json:
@@ -459,7 +518,9 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
             print(f"  cs2pov export \"{args.path}\" --preset editing")
         return 0
     if args.players_cmd == "alias":
-        report = set_player_alias(Path(args.path), steamid=args.steamid, name=args.name, display_name=args.display_name)
+        runtime = runtime or _resolve_write_runtime()
+        report = set_player_alias(Path(args.path), steamid=args.steamid, name=args.name, display_name=args.display_name,
+                                  runtime=runtime, warning_stream=sys.stderr if getattr(args, "json", False) else None)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -468,7 +529,9 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser) -> in
             print_players_report(report)
         return 0
     if args.players_cmd == "clear-alias":
-        report = clear_player_alias(Path(args.path), steamid=args.steamid, name=args.name, all_aliases=args.all)
+        runtime = runtime or _resolve_write_runtime()
+        report = clear_player_alias(Path(args.path), steamid=args.steamid, name=args.name, all_aliases=args.all,
+                                    runtime=runtime, warning_stream=sys.stderr if getattr(args, "json", False) else None)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -524,7 +587,7 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         model = str(profile_values.get("whisper_model") or cfg.get("whisper_model") or "base")
         device = str(profile_values.get("whisper_device") or cfg.get("whisper_device") or "cpu")
         compute_type = str(profile_values.get("whisper_compute_type") or cfg.get("whisper_compute_type") or "int8")
-        if args.cache_dir:
+        if args.cache_dir is not None:
             result = {"ok": False, "command": "models.test", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "--cache-dir 已弃用，请使用当前工作区缓存。", "suggestion_zh": "请移除该参数并使用当前工作区缓存。"}}
         else:
             result = test_model_load(
@@ -562,17 +625,37 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
     return 2
 
 
-def run_asr_benchmark(args: argparse.Namespace) -> int:
+def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | None = None) -> int:
     import time
+    import sys
     from datetime import datetime
     from cs2pov.storage.jsonl import read_json, write_json
 
+    runtime = runtime or _resolve_write_runtime()
     cfg = load_config()
     models = [m.strip() for m in str(args.models).split(",") if m.strip()]
     if not models:
         raise ValueError("--models 至少需要一个模型名，例如 base,small")
-    output_root = Path(args.output)
-    output_root.mkdir(parents=True, exist_ok=True)
+    if args.cache_dir is not None:
+        raise JobRuntimeError(
+            "legacy_model_cache_override_rejected",
+            "--cache-dir 已弃用，benchmark 模型缓存固定使用当前工作区。",
+            "请移除 --cache-dir，模型缓存将写入当前工作区 cache/whisper。",
+        )
+    explicit_output = args.output is not None
+    path_policy = JobRuntime.from_config(runtime, PipelineConfig(), output_root=args.output)
+    output_root = path_policy.output_root
+    try:
+        output_root.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise JobRuntimeError(
+            "job_path_escape", "Job 输出目录路径无效。", "请提供可访问的输出目录后重试。"
+        ) from exc
+    benchmark_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    def emit(*values: object) -> None:
+        print(*values, file=sys.stderr if getattr(args, "json", False) else sys.stdout)
+    if explicit_output:
+        emit("警告：正在使用旧版外部输出兼容模式（旧版外部输出），benchmark Job 和报告将写入显式 --output 目录。")
     demo_display = str(args.demo).replace("\\", "/").rsplit("/", 1)[-1]
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -585,15 +668,17 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
         "runs": [],
         "note": "benchmark-asr 会重复运行小范围 pipeline，适合用前 3 回合比较 tiny/base/small/medium 在本机的耗时和字幕质量。",
     }
-    print("ASR 模型对比实验")
-    print("=" * 72)
-    print(f"demo={args.demo}")
-    print(f"models={', '.join(models)} team={args.team_number or '[自动/全部]'} max_rounds={args.max_rounds}")
+    emit("ASR 模型对比实验")
+    emit("=" * 72)
+    emit(f"demo={args.demo}")
+    emit(f"models={', '.join(models)} team={args.team_number or '[自动/全部]'} max_rounds={args.max_rounds}")
     for model in models:
-        safe_model_name = model.replace("/", "_").replace("\\\\", "_")
-        run_output = output_root / f"bench_{safe_model_name}"
+        from cs2pov.storage.artifact_store import safe_name
+        safe_model_name = safe_name(model.replace("/", "_").replace("\\\\", "_"), 50)
+        job_id = f"{benchmark_stamp}_benchmark_{safe_model_name}"
         config = PipelineConfig(
-            output_root=str(run_output),
+            output_root=str(output_root),
+            job_id=job_id,
             selected_team_number=args.team_number,
             export_scope="pov_team",
             asr_language=args.language,
@@ -601,7 +686,7 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
             whisper_model=model,
             whisper_device=args.device or cfg.get("whisper_device") or "cpu",
             whisper_compute_type=args.compute_type or cfg.get("whisper_compute_type") or "int8",
-            whisper_cache_dir=args.cache_dir or cfg.get("whisper_cache_dir"),
+            whisper_cache_dir=str(runtime.paths.whisper_cache_dir),
             whisper_vad_filter=bool(cfg.get("whisper_vad_filter", True)),
             transcription_mode=cfg.get("transcription_mode") or "round",
             dry_run_translation=True,
@@ -613,14 +698,17 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
             max_subtitle_segment_seconds=float(cfg.get("max_subtitle_segment_seconds", 10.0)),
             subtitle_min_duration_seconds=float(cfg.get("subtitle_min_duration_seconds", 0.7)),
         )
-        print(f"\n--- benchmark: {model} ---")
+        emit(f"\n--- benchmark: {model} ---")
         started = time.perf_counter()
         ok = True
         error = None
         job_dir = None
         coverage = {}
         try:
-            engine = PipelineEngine(config)
+            policy = JobRuntime(runtime, output_root, config, path_policy.legacy_external_output)
+            engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
+            if args.json:
+                engine.progress = ProgressSink(engine.store.progress_log_path, verbose=False)
             engine.run(Path(args.demo))
             job_dir = str(engine.store.job_dir)
             if engine.store.transcription_coverage_path.exists():
@@ -628,7 +716,7 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
         except Exception as exc:  # pragma: no cover - depends on real demo/env
             ok = False
             error = f"{type(exc).__name__}: {exc}"
-            print(f"FAILED: {error}")
+            emit(f"FAILED: {error}")
         elapsed = round(time.perf_counter() - started, 3)
         item = {
             "model": model,
@@ -643,15 +731,17 @@ def run_asr_benchmark(args: argparse.Namespace) -> int:
             "filtered_hallucination_segments": coverage.get("filtered_hallucination_segments"),
         }
         report["runs"].append(item)
-        print(f"result: ok={ok} elapsed={elapsed}s segments={item['transcript_segments']} longest={item['longest_transcript_segment_seconds']}")
-    report_path = output_root / "asr_benchmark.json"
+        emit(f"result: ok={ok} elapsed={elapsed}s segments={item['transcript_segments']} longest={item['longest_transcript_segment_seconds']}")
+    report_path = output_root / f"asr_benchmark_{benchmark_stamp}.json"
     write_json(report_path, report)
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        print("\nBenchmark 报告已生成：")
-        print(report_path)
-        print("建议：不要只看耗时，也要打开各 run 的 final/*.srt 比较字幕质量。")
+        emit("\nBenchmark 报告已生成：")
+        emit(report_path)
+        emit("建议：不要只看耗时，也要打开各 run 的 final/*.srt 比较字幕质量。")
+    if explicit_output:
+        emit("警告：旧版外部输出 benchmark 已完成；请检查并迁移该 Job。")
     return 0 if all(run.get("ok") for run in report["runs"]) else 1
 
 def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
@@ -667,7 +757,7 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
             print("\n提示：API key 已隐藏。确需查看可用 cs2pov config show --show-secrets。")
         return 0
     if args.config_cmd == "set":
-        if getattr(args, "whisper_cache_dir", None):
+        if getattr(args, "whisper_cache_dir", None) is not None:
             payload = {"ok": False, "command": "config.set", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "whisper-cache-dir 已弃用，配置未修改。", "suggestion_zh": "模型缓存跟随当前工作区，请使用 workspace init/use。"}}
             print(json.dumps(payload, ensure_ascii=False) if getattr(args, "json", False) else payload["error"]["message_zh"] + "\n" + payload["error"]["suggestion_zh"])
             return 1
@@ -709,6 +799,13 @@ def run_config(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
 
 
 def run_pipeline(args: argparse.Namespace) -> int:
+    runtime = _resolve_write_runtime()
+    if args.whisper_cache_dir is not None:
+        raise JobRuntimeError(
+            "legacy_model_cache_override_rejected",
+            "--whisper-cache-dir 已弃用，不能覆盖当前工作区模型缓存。",
+            "请移除该参数；模型缓存固定使用当前工作区 cache/whisper。",
+        )
     defaults = load_config()
     explicit_whisper_override = any([args.whisper_model, args.whisper_device, args.whisper_compute_type])
     profile_id = args.transcription_profile or (None if explicit_whisper_override else defaults.get("transcription_profile"))
@@ -727,7 +824,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
             whisper_compute_type=args.whisper_compute_type,
         )
     config = PipelineConfig(
-        output_root=args.output,
+        output_root=args.output or str(runtime.paths.jobs_dir),
         map_name=args.map_name,
         selected_pov_steamid=args.pov_steamid,
         selected_team_number=args.team_number,
@@ -737,7 +834,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         whisper_model=str(resolved_profile.get("whisper_model") or defaults.get("whisper_model") or "base"),
         whisper_device=str(resolved_profile.get("whisper_device") or defaults.get("whisper_device") or "cpu"),
         whisper_compute_type=str(resolved_profile.get("whisper_compute_type") or defaults.get("whisper_compute_type") or "int8"),
-        whisper_cache_dir=args.whisper_cache_dir or defaults.get("whisper_cache_dir"),
+        whisper_cache_dir=str(runtime.paths.whisper_cache_dir),
         whisper_vad_filter=bool(defaults.get("whisper_vad_filter", True)) if args.whisper_vad is None else bool(args.whisper_vad),
         transcription_mode=args.transcription_mode or defaults.get("transcription_mode") or "round",
         activity_padding_seconds=args.activity_padding,
@@ -761,10 +858,16 @@ def run_pipeline(args: argparse.Namespace) -> int:
         glossary_enabled=bool(defaults.get("glossary_enabled", True)) if args.glossary is None else bool(args.glossary),
         player_aliases=_parse_player_alias_args(args.player_alias),
     )
-    engine = PipelineEngine(config)
+    policy = JobRuntime.from_config(runtime, config, output_root=args.output)
+    config = policy.adapt_config(config)
+    if policy.legacy_external_output:
+        print("警告：正在使用旧版外部输出兼容模式（旧版外部输出），Job 将写入显式 --output 目录。")
+    engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
     engine.run(Path(args.demo), from_stage=from_stage, to_stage=to_stage)
+    if policy.legacy_external_output:
+        print("警告：旧版外部输出任务已完成；请检查并迁移该 Job。")
     return 0
 
 
@@ -895,10 +998,12 @@ def run_glossary(args: argparse.Namespace, parser: argparse.ArgumentParser) -> i
     parser.error("glossary 需要 list 或 check")
     return 2
 
-def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bool = True) -> int:
+def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bool = True, runtime: WorkspaceRuntime | None = None) -> int:
     import shutil
     from cs2pov.storage.artifact_store import directory_size_bytes
 
+    if delete:
+        runtime = resolve_write_runtime(runtime)
     targets: list[Path] = []
     path = Path(path)
     if not path.exists():
@@ -907,10 +1012,21 @@ def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bo
 
     candidate_jobs = [path] if (path / "manifest.json").exists() else [p for p in path.iterdir() if p.is_dir() and (p / "manifest.json").exists()]
     for job in candidate_jobs:
+        if delete:
+            warn_external_job(job, runtime)
         if clean_voice:
             targets.append(job / "artifacts" / "voice")
         if clean_temp:
             targets.append(job / "artifacts" / "temp_audio")
+            targets.append(job / "debug" / "temp_audio")
+            if runtime is not None:
+                try:
+                    job.resolve().relative_to(runtime.paths.jobs_dir.resolve())
+                except ValueError:
+                    pass
+                else:
+                    # Cache cleanup is intentionally limited to this Job ID.
+                    targets.append(runtime.paths.audio_cache_dir / job.name)
 
     existing = [t for t in targets if t.exists()]
     total = sum(directory_size_bytes(t) for t in existing)
@@ -927,23 +1043,21 @@ def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bo
         print("当前为预览模式；确认删除请追加 --yes。")
         return 0
     for t in existing:
-        shutil.rmtree(t, ignore_errors=True)
+        if t.is_symlink():
+            t.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(t, ignore_errors=True)
     print("清理完成。注意：删除 voice 缓存后，如需重新转录必须重新 extract_voice。")
     return 0
 
 
-def run_feedback(path: Path, out: Path | None = None) -> int:
+def run_feedback(path: Path | None, out: Path | None = None, *, runtime: WorkspaceRuntime | None = None) -> int:
     import zipfile
     from datetime import datetime
 
-    job_dir = resolve_job_dir(Path(path))
-    if job_dir is None:
-        print(f"找不到 Job 目录：{path}")
-        print("请传入包含 manifest.json 的 job 目录，或包含多个 job 的 output 根目录。")
-        return 1
-
+    job_dir, runtime = require_write_job(path, runtime)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_path = out or Path.cwd() / f"cs2pov_feedback_{job_dir.name}_{stamp}.zip"
+    out_path = out or job_dir / "debug" / "feedback" / f"cs2pov_feedback_{job_dir.name}_{stamp}.zip"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     included = _feedback_files(job_dir)

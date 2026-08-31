@@ -3,6 +3,7 @@ import zipfile
 from pathlib import Path
 
 from cs2pov.cli.commands import run_feedback
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 
 def test_feedback_pack_excludes_large_audio_dirs(tmp_path, monkeypatch):
@@ -19,7 +20,7 @@ def test_feedback_pack_excludes_large_audio_dirs(tmp_path, monkeypatch):
     (job / "final" / "team_2.bilingual.srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nhi", encoding="utf-8")
 
     out = tmp_path / "feedback.zip"
-    assert run_feedback(job, out=out) == 0
+    assert run_feedback(job, out=out, runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1)) == 0
     with zipfile.ZipFile(out) as zf:
         names = set(zf.namelist())
     assert "manifest.json" in names
@@ -49,7 +50,7 @@ def test_feedback_pack_sanitizes_local_absolute_paths(tmp_path):
     (job / "final" / "team_2.bilingual.srt").write_text("srt", encoding="utf-8")
 
     out = tmp_path / "feedback.zip"
-    assert run_feedback(job, out=out) == 0
+    assert run_feedback(job, out=out, runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1)) == 0
     with zipfile.ZipFile(out) as zf:
         manifest_text = zf.read("manifest.json").decode("utf-8")
         demo_text = zf.read("artifacts/demo_info.json").decode("utf-8")
@@ -79,7 +80,7 @@ def test_feedback_pack_sanitizes_progress_log_paths(tmp_path):
     (job / "final" / "team_2.bilingual.srt").write_text("srt", encoding="utf-8")
 
     out = tmp_path / "feedback.zip"
-    assert run_feedback(job, out=out) == 0
+    assert run_feedback(job, out=out, runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1)) == 0
     with zipfile.ZipFile(out) as zf:
         progress = zf.read("progress.log").decode("utf-8")
 

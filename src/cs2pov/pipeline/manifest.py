@@ -18,13 +18,24 @@ class PipelineManifest:
     created_at: str
     updated_at: str
     config: PipelineConfig
+    # None means this is an old manifest that predates the workspace policy.
+    # Keep that distinction when an old Job is read and saved again.
+    path_policy_version: int | None = None
+    legacy_external_output: bool | None = None
     stages: dict[str, str] = field(default_factory=dict)
     artifacts: dict[str, str] = field(default_factory=dict)
     demo: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     @classmethod
-    def create(cls, job_id: str, config: PipelineConfig) -> "PipelineManifest":
+    def create(
+        cls,
+        job_id: str,
+        config: PipelineConfig,
+        *,
+        path_policy_version: int | None = None,
+        legacy_external_output: bool | None = None,
+    ) -> "PipelineManifest":
         now = datetime.now().isoformat(timespec="seconds")
         return cls(
             schema_version=1,
@@ -32,6 +43,8 @@ class PipelineManifest:
             created_at=now,
             updated_at=now,
             config=config,
+            path_policy_version=path_policy_version,
+            legacy_external_output=legacy_external_output,
             stages={stage.value: StageStatus.PENDING.value for stage in STAGE_ORDER},
         )
 
@@ -66,6 +79,11 @@ class PipelineManifest:
         marker_no_lead = f"{self.job_id}/"
         if marker_no_lead in text:
             return text.split(marker_no_lead, 1)[1]
+        # An absolute path that is not recognizably inside this Job must not
+        # leak a workspace, legacy output, or user directory into a shareable
+        # manifest.  Relative artifact names remain useful as-is.
+        if text.startswith("/") or (len(text) >= 3 and text[1] == ":" and text[2] == "/"):
+            return "[artifact-path]"
         return text
 
     def to_public_dict(self) -> dict[str, Any]:
@@ -86,6 +104,10 @@ class PipelineManifest:
             "demo": dict(self.demo),
             "notes": list(self.notes),
         }
+        if self.path_policy_version is not None:
+            data["path_policy_version"] = self.path_policy_version
+        if self.legacy_external_output is not None:
+            data["legacy_external_output"] = self.legacy_external_output
         cfg = dict(data["config"])
         api_key = cfg.get("llm_api_key")
         cfg["llm_api_key_configured"] = bool(api_key)
@@ -94,7 +116,13 @@ class PipelineManifest:
         cache_dir = cfg.get("whisper_cache_dir")
         cfg["whisper_cache_dir_configured"] = bool(cache_dir)
         if cache_dir:
-            cfg["whisper_cache_dir"] = "[已配置-已隐藏]"
+            cfg["whisper_cache_dir"] = "[workspace-managed]" if self.path_policy_version is not None else "[legacy-unmanaged]"
+        if self.legacy_external_output is True:
+            cfg["output_root"] = "[legacy-external-output]"
+        elif self.path_policy_version is not None:
+            cfg["output_root"] = "[workspace-managed]"
+        else:
+            cfg["output_root"] = "[legacy-unmanaged]"
         data["config"] = cfg
         return data
 
@@ -112,6 +140,10 @@ class PipelineManifest:
             cfg_data["llm_api_key"] = None
         if cfg_data.get("whisper_cache_dir") == "[已配置-已隐藏]":
             cfg_data["whisper_cache_dir"] = None
+        if cfg_data.get("whisper_cache_dir") in {"[workspace-managed]", "[legacy-unmanaged]"}:
+            cfg_data["whisper_cache_dir"] = None
+        if cfg_data.get("output_root") in {"[workspace-managed]", "[legacy-external-output]", "[legacy-unmanaged]"}:
+            cfg_data["output_root"] = "output"
         allowed = set(PipelineConfig.__dataclass_fields__.keys())
         cfg_data = {k: v for k, v in cfg_data.items() if k in allowed}
         config = PipelineConfig(**cfg_data)
@@ -121,6 +153,8 @@ class PipelineManifest:
             created_at=str(data["created_at"]),
             updated_at=str(data["updated_at"]),
             config=config,
+            path_policy_version=(int(data["path_policy_version"]) if data.get("path_policy_version") is not None else None),
+            legacy_external_output=(bool(data["legacy_external_output"]) if data.get("legacy_external_output") is not None else None),
             stages=dict(data.get("stages", {})),
             artifacts=dict(data.get("artifacts", {})),
             demo=dict(data.get("demo", {})),

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from cs2pov.cli.job_ops import export_job, inspect_job, resolve_job_dir
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 from cs2pov.domain.models import PipelineConfig, StageName, StageStatus, TranscriptSegment, TranslationSegment, VoiceActivityCue
 from cs2pov.pipeline.manifest import PipelineManifest
 from cs2pov.storage.artifact_store import ArtifactStore
@@ -49,7 +50,7 @@ def test_inspect_job_reports_counts_without_leaking_secret(tmp_path: Path):
 
 def test_export_job_can_generate_zh_only_final_srt(tmp_path: Path):
     store = _make_job(tmp_path)
-    outputs = export_job(store.job_dir, fmt="zh")
+    outputs = export_job(store.job_dir, fmt="zh", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     zh_path = Path(outputs["zh_srt"])
     assert zh_path.exists()
     assert zh_path.name == "team_2.zh.srt"

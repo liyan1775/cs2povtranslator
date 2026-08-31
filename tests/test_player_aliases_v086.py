@@ -3,6 +3,7 @@ from pathlib import Path
 
 from cs2pov.adapters.demoparser_adapter import _first_steamid, _normalize_steamid
 from cs2pov.cli.player_ops import build_players_report, set_player_alias
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 from cs2pov.domain.models import TranslationSegment
 from cs2pov.services.player_alias_service import apply_player_aliases, save_player_aliases
 from cs2pov.services.subtitle_service import SubtitleService
@@ -35,7 +36,7 @@ def test_players_alias_command_resolves_name_and_reports_kda(tmp_path: Path):
         {"steamid": "765", "name": "Ebule", "team_number": 2, "voice_packets": 10, "compact_wav_seconds": 1.5, "kills": 30, "deaths": 11, "assists": 4}
     ]})
 
-    report = set_player_alias(store.job_dir, name="Ebule", display_name="donk")
+    report = set_player_alias(store.job_dir, name="Ebule", display_name="donk", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
 
     assert report["players"][0]["display_name"] == "donk"
     assert report["players"][0]["kda"] == "30-11-4"

@@ -47,9 +47,12 @@ python scripts/check_release_version.py "vX.Y.Z" --root .
 
 ## 真实 demo smoke
 
+先初始化/选择工作区；默认 Job 写入当前工作区 `jobs/`。`--output` 仅应在
+专门验证旧版外部输出兼容分支时显式使用，并确认警告与 manifest 标志。
+
 ```powershell
+cs2pov workspace init "D:\cs2pov-workspace"
 cs2pov run "D:\demos\match.dem.zst" `
-  --output output_release_smoke `
   --whisper-model tiny `
   --team 2 `
   --max-rounds 3 `
@@ -61,7 +64,7 @@ cs2pov run "D:\demos\match.dem.zst" `
 - `final/*.bilingual.srt` 存在。
 - `progress.log` 完整。
 - `manifest.json` 无 `sk-`。
-- `cs2pov feedback output_release_smoke` 生成反馈包。
+- `cs2pov feedback` 生成反馈包。
 - 反馈包不包含 demo/WAV/API key/绝对路径。
 
 ## 压缩包检查
@@ -70,6 +73,7 @@ cs2pov run "D:\demos\match.dem.zst" `
 
 - `.venv/`
 - `output/`
+- `jobs/`
 - `*.dem` / `*.dem.zst`
 - `*.wav`
 - `cs2pov_feedback_*.zip`

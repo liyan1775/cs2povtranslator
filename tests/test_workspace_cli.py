@@ -53,7 +53,7 @@ def test_launcher_once_exposes_workspace_management_menu(tmp_path):
     result = subprocess.run([sys.executable, "-m", "cs2pov.cli.launcher", "--once"], input="6\n10\n0\n", capture_output=True, text=True, encoding="utf-8", env=env)
     assert result.returncode == 0
     assert "工作区管理" in result.stdout
-    assert "当前步骤只设置新版本数据目录" in result.stdout
+    assert "当前工作区统一承载模型缓存、Job 和临时文件" in result.stdout
 
 
 def test_launcher_homepage_reports_workspace_status_without_creating_state(tmp_path):

@@ -75,5 +75,9 @@ class WorkspaceRuntimeResolver:
     def resolve_selected(self) -> WorkspaceRuntime:
         return self._resolve(False)
 
+    def resolve_for_read(self) -> WorkspaceRuntime:
+        """Resolve a readable snapshot without requiring write health."""
+        return self._resolve(False)
+
     def resolve_for_write(self) -> WorkspaceRuntime:
         return self._resolve(True)

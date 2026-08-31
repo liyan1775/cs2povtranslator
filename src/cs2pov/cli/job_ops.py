@@ -13,10 +13,15 @@ from cs2pov.services.translation_service import TranslationService
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.config_store import load_config, mask_config_for_display
 from cs2pov.storage.jsonl import read_json, read_jsonl, write_json
+from cs2pov.application.workspace_runtime import WorkspaceRuntime, WorkspaceRuntimeError, WorkspaceRuntimeResolver
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 
-def resolve_job_dir(path: Path) -> Path | None:
+def resolve_job_dir(path: Path | None) -> Path | None:
     """Resolve either a job directory or an output root to the latest job."""
+    if path is None:
+        runtime = WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_selected()
+        path = runtime.paths.jobs_dir
     path = path.expanduser().resolve()
     if (path / "manifest.json").exists():
         return path
@@ -25,7 +30,36 @@ def resolve_job_dir(path: Path) -> Path | None:
     jobs = [p for p in path.iterdir() if p.is_dir() and (p / "manifest.json").exists()]
     if not jobs:
         return None
-    return max(jobs, key=lambda p: p.stat().st_mtime)
+    # Directory mtimes can be equal on coarse filesystems.  The canonical
+    # name tie-breaker keeps read-only "latest job" selection deterministic.
+    return max(jobs, key=lambda p: (p.stat().st_mtime_ns, p.name.casefold(), p.name))
+
+
+def is_external_job(job_dir: Path, runtime: WorkspaceRuntime) -> bool:
+    """Whether a job is outside the active workspace's managed jobs root."""
+    try:
+        job_dir.resolve().relative_to(runtime.paths.jobs_dir.resolve())
+        return False
+    except ValueError:
+        return True
+
+
+def warn_external_job(job_dir: Path, runtime: WorkspaceRuntime, *, stream=None) -> None:
+    if is_external_job(job_dir, runtime):
+        import sys
+        print("警告：正在原位置修改外部旧 Job；不会自动迁移 Job 路径。", file=stream if stream is not None else sys.stdout)
+
+
+def resolve_write_runtime(runtime: WorkspaceRuntime | None = None) -> WorkspaceRuntime:
+    """Return a healthy immutable write snapshot before touching a Job."""
+    return runtime or WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
+
+
+def require_write_job(path: Path | None, runtime: WorkspaceRuntime | None = None, *, warning_stream=None) -> tuple[Path, WorkspaceRuntime]:
+    runtime = resolve_write_runtime(runtime)
+    job_dir = _require_job(runtime.paths.jobs_dir if path is None else path)
+    warn_external_job(job_dir, runtime, stream=warning_stream)
+    return job_dir, runtime
 
 
 def inspect_job(path: Path) -> dict[str, Any]:
@@ -169,8 +203,10 @@ def export_job(
     overlap_policy: str | None = None,
     max_duration_seconds: float | None = None,
     min_duration_seconds: float | None = None,
+    runtime: WorkspaceRuntime | None = None,
+    warning_stream=None,
 ) -> dict[str, str]:
-    job_dir = _require_job(path)
+    job_dir, runtime = require_write_job(path, runtime, warning_stream=warning_stream)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
     if team_number is not None:
@@ -226,14 +262,16 @@ def retranslate_job(
     model: str | None = None,
     base_url: str | None = None,
     export_after: bool = True,
+    runtime: WorkspaceRuntime | None = None,
+    warning_stream=None,
 ) -> dict[str, str]:
-    job_dir = _require_job(path)
+    job_dir, runtime = require_write_job(path, runtime, warning_stream=warning_stream)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
-    runtime = load_config()
-    cfg.llm_base_url = base_url or runtime.get("llm_base_url") or cfg.llm_base_url
-    cfg.llm_api_key = runtime.get("llm_api_key") or cfg.llm_api_key
-    cfg.llm_model = model or runtime.get("llm_model") or cfg.llm_model
+    runtime_config = load_config()
+    cfg.llm_base_url = base_url or runtime_config.get("llm_base_url") or cfg.llm_base_url
+    cfg.llm_api_key = runtime_config.get("llm_api_key") or cfg.llm_api_key
+    cfg.llm_model = model or runtime_config.get("llm_model") or cfg.llm_model
     cfg.dry_run_translation = dry_run
     cfg.skip_translation = skip_translation
     TranslationService().translate_rounds(
@@ -258,15 +296,19 @@ def retranslate_job(
     return outputs
 
 
-def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = None, demo_path: Path | None = None) -> Path:
-    job_dir = _require_job(path)
+def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = None, demo_path: Path | None = None, *, runtime: WorkspaceRuntime | None = None) -> Path:
+    job_dir, runtime = require_write_job(path, runtime)
     store = ArtifactStore(job_dir)
     manifest = PipelineManifest.load(store.manifest_path)
     cfg = _merge_runtime_config(manifest.config)
     cfg.output_root = str(job_dir.parent)
     cfg.job_id = job_dir.name
     manifest.config = cfg
-    engine = PipelineEngine(cfg, store=store, manifest=manifest)
+    # Keep the historical Job in place, but bind model/audio scratch to the
+    # active workspace. Do not infer a legacy-output warning here.
+    from cs2pov.application.job_runtime import JobRuntime
+    policy = JobRuntime(runtime, job_dir.parent.resolve(), cfg, legacy_external_output=False)
+    engine = PipelineEngine(cfg, store=store, manifest=manifest, runtime=runtime, job_runtime=policy)
     engine.demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage)
     input_path = engine.demo_path or Path(".")
     engine.run(input_path, from_stage=from_stage, to_stage=to_stage)

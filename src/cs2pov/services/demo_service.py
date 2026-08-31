@@ -19,6 +19,8 @@ class DemoService:
         target = store.input_dir / (input_path.name[:-4] if input_path.name.lower().endswith(".zst") else input_path.name)
         if target.suffix.lower() != ".dem":
             target = target.with_suffix(".dem")
+        if input_path == target.resolve():
+            return target
         return self.adapter.decompress_if_needed(input_path, target)
 
     def inspect(self, demo_path: Path, original_input: Path, store: ArtifactStore) -> DemoInfo:

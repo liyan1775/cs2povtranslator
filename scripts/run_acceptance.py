@@ -5,12 +5,15 @@ from pathlib import Path
 
 from cs2pov.domain.models import PipelineConfig
 from cs2pov.pipeline.engine import PipelineEngine
+from cs2pov.application.job_runtime import JobRuntime
+from cs2pov.application.workspace_runtime import WorkspaceRuntimeResolver
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run a real-demo smoke acceptance test.")
     parser.add_argument("--demo", required=True)
-    parser.add_argument("--output", default="acceptance_output")
+    parser.add_argument("--output", default=None, help="旧版外部输出根目录；省略则使用当前工作区 jobs")
     parser.add_argument("--whisper-model", default="tiny")
     parser.add_argument("--team", type=int)
     parser.add_argument("--skip-translation", action="store_true")
@@ -42,8 +45,10 @@ def main() -> int:
     if args.skip_translation:
         print("[ACCEPTANCE] 已启用 --skip-translation：不会调用 LLM，中文字幕会使用原文占位。")
 
+    runtime = WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
+    output_root = args.output or str(runtime.paths.jobs_dir)
     cfg = PipelineConfig(
-        output_root=args.output,
+        output_root=output_root,
         whisper_model=args.whisper_model,
         selected_team_number=args.team,
         export_scope="pov_team" if args.team else "all",
@@ -60,7 +65,12 @@ def main() -> int:
         max_subtitle_segment_seconds=args.max_subtitle_segment_seconds,
         voice_cluster_gap_seconds=args.voice_cluster_gap,
     )
-    store = PipelineEngine(cfg).run(Path(args.demo))
+    policy = JobRuntime.from_config(runtime, cfg, output_root=args.output)
+    if args.output is not None:
+        print("[ACCEPTANCE] 警告：正在使用旧版外部输出兼容模式；Job 将写入显式 --output 目录。")
+    store = PipelineEngine(cfg, runtime=runtime, job_runtime=policy).run(Path(args.demo))
+    if args.output is not None:
+        print("[ACCEPTANCE] 警告：旧版外部输出兼容模式运行成功；请检查并迁移该 Job。")
     print(f"ACCEPTANCE_JOB={store.job_dir}")
     return 0
 

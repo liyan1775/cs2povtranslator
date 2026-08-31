@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from cs2pov.cli.job_ops import export_job
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 from cs2pov.domain.models import PipelineConfig, StageName, StageStatus, TranscriptSegment, TranslationSegment, VoiceActivityCue
 from cs2pov.domain.subtitle import SubtitlePolicy, apply_subtitle_policy, policy_from_preset
 from cs2pov.pipeline.manifest import PipelineManifest
@@ -42,7 +43,7 @@ def _make_job(tmp_path: Path) -> ArtifactStore:
 
 def test_export_editing_preset_generates_compact_and_zh(tmp_path: Path):
     store = _make_job(tmp_path)
-    outputs = export_job(store.job_dir, preset="editing")
+    outputs = export_job(store.job_dir, preset="editing", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     assert "compact_srt" in outputs
     assert "zh_srt" in outputs
     assert Path(outputs["compact_srt"]).exists()
@@ -51,14 +52,14 @@ def test_export_editing_preset_generates_compact_and_zh(tmp_path: Path):
 
 def test_export_debug_format_contains_round_and_team(tmp_path: Path):
     store = _make_job(tmp_path)
-    outputs = export_job(store.job_dir, fmt="debug")
+    outputs = export_job(store.job_dir, fmt="debug", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     text = Path(outputs["debug_srt"]).read_text(encoding="utf-8")
     assert "[R1][T2][p1]" in text
 
 
 def test_export_zh_clean_omits_player_name(tmp_path: Path):
     store = _make_job(tmp_path)
-    outputs = export_job(store.job_dir, fmt="zh_clean")
+    outputs = export_job(store.job_dir, fmt="zh_clean", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     text = Path(outputs["zh_clean_srt"]).read_text(encoding="utf-8")
     assert "长椅一个" in text
     assert "[p1]" not in text
@@ -77,7 +78,7 @@ def test_default_subtitle_config_is_bilingual_editing_first():
 
 def test_editing_preset_keeps_bilingual_as_first_class_output(tmp_path: Path):
     store = _make_job(tmp_path)
-    outputs = export_job(store.job_dir, preset="editing")
+    outputs = export_job(store.job_dir, preset="editing", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     assert "bilingual_srt" in outputs
     assert "compact_srt" in outputs
     text = Path(outputs["bilingual_srt"]).read_text(encoding="utf-8")
@@ -91,7 +92,7 @@ def test_export_single_bilingual_format_uses_default_stack_policy(tmp_path: Path
         TranslationSegment("seg1", "s1", "p1", 2, 1.0, 3.0, "one bench", "沙发一个", round_number=1),
         TranslationSegment("seg2", "s2", "p2", 2, 2.0, 4.0, "flash out", "给闪出去", round_number=1),
     ])
-    outputs = export_job(store.job_dir, fmt="bilingual")
+    outputs = export_job(store.job_dir, fmt="bilingual", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
     text = Path(outputs["bilingual_srt"]).read_text(encoding="utf-8")
     assert "1\n00:00:01,000 --> 00:00:02,000" in text
     assert "2\n00:00:02,000 --> 00:00:03,000" in text

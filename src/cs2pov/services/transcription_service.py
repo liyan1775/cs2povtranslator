@@ -40,6 +40,53 @@ class TranscriptionService:
         voice_cluster_gap_seconds: float = 1.0,
         progress_callback=None,
     ) -> list[TranscriptSegment]:
+        """Transcribe with task-scoped scratch cleanup on every exit path."""
+        try:
+            return self._transcribe_all_impl(
+                store=store,
+                model_name=model_name,
+                device=device,
+                compute_type=compute_type,
+                cache_dir=cache_dir,
+                language=language,
+                selected_team_number=selected_team_number,
+                vad_filter=vad_filter,
+                include_unrecognized_voice=include_unrecognized_voice,
+                unrecognized_min_duration_seconds=unrecognized_min_duration_seconds,
+                transcription_mode=transcription_mode,
+                max_rounds=max_rounds,
+                activity_padding_seconds=activity_padding_seconds,
+                keep_temp_audio=keep_temp_audio,
+                filter_hallucinations=filter_hallucinations,
+                max_subtitle_segment_seconds=max_subtitle_segment_seconds,
+                voice_cluster_gap_seconds=voice_cluster_gap_seconds,
+                progress_callback=progress_callback,
+            )
+        finally:
+            if not keep_temp_audio:
+                _cleanup_temp_audio(store)
+
+    def _transcribe_all_impl(
+        self,
+        store: ArtifactStore,
+        model_name: str,
+        device: str = "cpu",
+        compute_type: str = "int8",
+        cache_dir: str | None = None,
+        language: str = "auto",
+        selected_team_number: int | None = None,
+        vad_filter: bool = True,
+        include_unrecognized_voice: bool = False,
+        unrecognized_min_duration_seconds: float = 0.35,
+        transcription_mode: str = "round",
+        max_rounds: int | None = None,
+        activity_padding_seconds: float = 0.06,
+        keep_temp_audio: bool = False,
+        filter_hallucinations: bool = True,
+        max_subtitle_segment_seconds: float = 10.0,
+        voice_cluster_gap_seconds: float = 1.0,
+        progress_callback=None,
+    ) -> list[TranscriptSegment]:
         manifest = read_json(store.voice_manifest_path)
         adapter = self.adapter_factory(
             model_name=model_name,
@@ -151,8 +198,6 @@ class TranscriptionService:
         segments.sort(key=lambda s: (s.start_time, s.end_time, s.player_name, s.id))
         write_jsonl(store.transcripts_path, segments)
         write_json(store.transcription_coverage_path, coverage)
-        if not keep_temp_audio:
-            _cleanup_temp_audio(store)
         return segments
 
     def _transcribe_player_wavs(self, players: list[dict[str, Any]], adapter: Any) -> list[TranscriptSegment]:
@@ -688,11 +733,13 @@ def _map_wav_offset_to_demo_time(offset: float, packets: list[dict[str, Any]]) -
 def _cleanup_temp_audio(store: ArtifactStore) -> None:
     if not store.temp_audio_dir.exists():
         return
-    for path in sorted(store.temp_audio_dir.rglob("*"), reverse=True):
-        try:
-            if path.is_file():
-                path.unlink()
-            elif path.is_dir():
-                path.rmdir()
-        except Exception:
-            pass
+    try:
+        # The store owns exactly one task directory.  Removing that directory
+        # (instead of its parent) cannot affect another Job's cache.
+        import shutil
+        if store.temp_audio_dir.is_symlink() or store.temp_audio_dir.is_file():
+            store.temp_audio_dir.unlink(missing_ok=True)
+        else:
+            shutil.rmtree(store.temp_audio_dir, ignore_errors=True)
+    except Exception:
+        pass

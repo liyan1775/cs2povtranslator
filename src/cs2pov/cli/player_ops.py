@@ -5,7 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from cs2pov.adapters.demoparser_adapter import _safe_int
-from cs2pov.cli.job_ops import resolve_job_dir
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
+from cs2pov.cli.job_ops import require_write_job, resolve_job_dir
 from cs2pov.services.player_alias_service import load_player_aliases, merge_player_aliases, remove_player_alias, save_player_aliases
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_json
@@ -65,8 +66,10 @@ def print_players_report(report: dict[str, Any]) -> None:
     print("\n说明：带 * 的行已经设置字幕显示名。K-D-A 只用于帮助识别谁是谁；如果 demo 事件解析失败，会显示 ?-?-?。")
 
 
-def set_player_alias(path: Path, *, steamid: str | None = None, name: str | None = None, display_name: str) -> dict[str, Any]:
-    job_dir, rows, aliases = load_player_rows(path)
+def set_player_alias(path: Path, *, steamid: str | None = None, name: str | None = None, display_name: str,
+                     runtime: WorkspaceRuntime | None = None, warning_stream=None) -> dict[str, Any]:
+    job_dir, runtime = require_write_job(path, runtime, warning_stream=warning_stream)
+    _, rows, aliases = load_player_rows(job_dir)
     store = ArtifactStore(job_dir)
     sid = steamid or _resolve_name_to_steamid(rows, name)
     if not sid:
@@ -76,8 +79,10 @@ def set_player_alias(path: Path, *, steamid: str | None = None, name: str | None
     return build_players_report(job_dir)
 
 
-def clear_player_alias(path: Path, *, steamid: str | None = None, name: str | None = None, all_aliases: bool = False) -> dict[str, Any]:
-    job_dir, rows, aliases = load_player_rows(path)
+def clear_player_alias(path: Path, *, steamid: str | None = None, name: str | None = None, all_aliases: bool = False,
+                       runtime: WorkspaceRuntime | None = None, warning_stream=None) -> dict[str, Any]:
+    job_dir, runtime = require_write_job(path, runtime, warning_stream=warning_stream)
+    _, rows, aliases = load_player_rows(job_dir)
     store = ArtifactStore(job_dir)
     if all_aliases:
         save_player_aliases(store, {}, source="manual")

@@ -37,10 +37,12 @@
 
 ### 1. 用 small CPU 档生成字幕
 
+先初始化并选择工作区；后续命令省略路径时，会使用该工作区的默认 Job：
+
 ```powershell
+cs2pov workspace init "D:\cs2pov-workspace"
 cs2pov config set --transcription-profile quality
 cs2pov run "D:\demos\sample.dem.zst" `
-  --output output_showcase `
   --map de_anubis `
   --team 2 `
   --max-rounds 3
@@ -59,13 +61,13 @@ medium 目前只适合实验，不建议普通 CPU 用户日常使用。
 如果 demo 里显示的是临时昵称，例如 `Ebule`，先用 K-D-A 和语音时长确认谁是谁：
 
 ```powershell
-cs2pov players list output_showcase
+cs2pov players list
 ```
 
 确认 `Ebule = donk` 后设置字幕显示名：
 
 ```powershell
-cs2pov players alias output_showcase --name Ebule --as donk
+cs2pov players alias --name Ebule --as donk
 ```
 
 这样最终字幕会显示 `[donk]`，而不是 `[Ebule]`。重新导出即可生效，不需要重跑 Whisper/LLM。
@@ -73,7 +75,7 @@ cs2pov players alias output_showcase --name Ebule --as donk
 ### 3. 导出剪辑友好字幕
 
 ```powershell
-cs2pov export output_showcase --preset editing
+cs2pov export --preset editing
 ```
 
 优先使用：

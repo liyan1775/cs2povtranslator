@@ -9,6 +9,9 @@ from cs2pov.cli.commands import run_doctor, run_feedback, run_glossary, run_mode
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.domain.models import StageName
+from cs2pov.application.job_runtime import JobRuntimeError
+from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 
 class ReturnToMainMenu(Exception):
@@ -43,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
                 run_project_menu()
             elif choice == "4":
                 job = ask_job_path()
-                run_feedback(job)
+                runtime = _resolve_write_runtime()
+                run_feedback(job, runtime=runtime)
             elif choice == "5":
                 print_setup_report(build_setup_report(Path.cwd()))
             elif choice == "6":
@@ -60,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
             if args.once:
                 return 0
             continue
+        except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+            print(f"\n错误[{exc.code}]：{exc.message_zh}")
+            print(f"建议：{exc.suggestion_zh}")
         except Exception as exc:
             print(f"\n操作失败：{type(exc).__name__}: {exc}")
             print("建议：先选择 3 查看工程状态，或选择 4 打包反馈包发给开发者。")
@@ -112,11 +119,23 @@ def _read_choice(prompt: str = "> ", default: str = "") -> str:
 
 
 def ask_job_path() -> Path:
-    print("请输入 Job 目录或 output 根目录。")
-    print("直接回车 = output，并自动选择最新 Job。")
+    print("请输入 Job 目录或工作区 jobs 根目录。")
+    print("直接回车 = 当前工作区 jobs，并自动选择最新 Job。")
     print("输入 0 / q / back = 返回主菜单。")
-    value = _read_choice("> ", default="output").strip().strip('"')
-    return Path(value or "output")
+    value = _read_choice("> ", default="").strip().strip('"')
+    if value:
+        return Path(value)
+    try:
+        from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
+        return WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_read().paths.jobs_dir
+    except WorkspaceRuntimeError as exc:
+        print(f"工作区错误[{exc.code}]：{exc.message_zh}")
+        print(f"建议：{exc.suggestion_zh}")
+        raise ReturnToMainMenu() from exc
+
+
+def _resolve_write_runtime():
+    return WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
 
 
 
@@ -181,7 +200,7 @@ def run_workspace_menu() -> None:
     from cs2pov.cli.workspace_commands import run_workspace
     import argparse
     print("\n工作区管理")
-    print("当前步骤只设置新版本数据目录；模型和任务接入将在下一阶段完成。")
+    print("当前工作区统一承载模型缓存、Job 和临时文件。")
     print("1. 初始化并设为当前工作区")
     print("2. 使用已有工作区")
     print("3. 查看当前工作区")
@@ -229,7 +248,8 @@ def run_export_menu() -> None:
     print("0. 返回主菜单")
     overlap_choice = _read_choice("请选择 [1]\n> ", default="1")
     overlap = {"2": "allow", "3": "shift", "4": "compact", "5": "stack", "6": "merge"}.get(overlap_choice)
-    outputs = export_job(job, fmt=fmt, bilingual_format=bfmt, preset=preset, overlap_policy=overlap)
+    runtime = _resolve_write_runtime()
+    outputs = export_job(job, fmt=fmt, bilingual_format=bfmt, preset=preset, overlap_policy=overlap, runtime=runtime)
     print("\n导出完成：")
     for k, v in outputs.items():
         print(f"  {k}: {v}")
@@ -252,7 +272,8 @@ def run_retranslate_menu() -> None:
     print("临时指定模型名，可直接回车使用全局配置。")
     print("输入 0 / q / back 可返回主菜单。")
     model = _read_choice("> ", default="").strip() or None
-    outputs = retranslate_job(job, dry_run=dry, skip_translation=skip, model=model, export_after=True)
+    runtime = _resolve_write_runtime()
+    outputs = retranslate_job(job, dry_run=dry, skip_translation=skip, model=model, export_after=True, runtime=runtime)
     print("\n重新翻译完成：")
     for k, v in outputs.items():
         print(f"  {k}: {v}")
@@ -279,7 +300,8 @@ def run_resume_menu() -> None:
         print("输入 0 / q / back 可返回主菜单。")
         val = _read_choice("> ", default="").strip().strip('"')
         demo = Path(val) if val else None
-    out = resume_job(job, from_stage=from_stage, demo_path=demo)
+    runtime = _resolve_write_runtime()
+    out = resume_job(job, from_stage=from_stage, demo_path=demo, runtime=runtime)
     print(f"恢复完成：{out}")
 
 
@@ -434,6 +456,7 @@ def _launcher_build_comms_review(job: Path, rounds: set[int] | None) -> None:
     from cs2pov.services.comms_service import CommsService
     from cs2pov.storage.artifact_store import ArtifactStore
 
+    runtime = _resolve_write_runtime()
     job_dir = _require_job(job)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
@@ -456,6 +479,7 @@ def _launcher_build_comms_review(job: Path, rounds: set[int] | None) -> None:
         selected_pov_steamid=cfg.selected_pov_steamid,
         export_scope=cfg.export_scope,
         rounds=rounds,
+        runtime=runtime,
     )
     _update_manifest_config_and_artifacts(store, cfg, outputs)
     print("\nComms Feed 校对产物已生成：")
@@ -470,6 +494,7 @@ def _launcher_render_comms(job: Path, rounds: set[int] | None) -> None:
     from cs2pov.services.comms_service import CommsRenderOptions, CommsService
     from cs2pov.storage.artifact_store import ArtifactStore
 
+    runtime = _resolve_write_runtime()
     job_dir = _require_job(job)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
@@ -479,7 +504,11 @@ def _launcher_render_comms(job: Path, rounds: set[int] | None) -> None:
     print("3. preview,green,alpha（额外尝试透明 mov，文件较大）")
     fmt_choice = _read_choice("请选择 [1]\n> ", default="1")
     formats = {"1": "preview,green", "2": "png", "3": "preview,green,alpha"}.get(fmt_choice, "preview,green")
-    outputs = CommsService().render(store, rounds=rounds, formats=formats.split(","), options=CommsRenderOptions())
+    outputs = CommsService().render(
+        store, rounds=rounds, formats=formats.split(","), options=CommsRenderOptions(),
+        temp_root=runtime.paths.temp_dir, runtime=runtime,
+        subprocess_env=runtime.subprocess_environment(),
+    )
     _update_manifest_config_and_artifacts(store, cfg, outputs)
     print("\nComms Overlay 已渲染：")
     for k, v in outputs.items():
@@ -516,18 +545,19 @@ def run_help_page() -> None:
     print("7. 子菜单中输 0、q、back 或 返回：不执行当前操作，回到主菜单。")
     print("\n对应专家命令：")
     print("  cs2pov setup-check")
-    print("  cs2pov inspect-job output")
-    print("  cs2pov explain-output output")
-    print("  cs2pov comms build-review output --rounds 1-3  # 主功能：生成通讯流校对文件")
-    print("  cs2pov comms render output --rounds 1-3 --formats preview,green")
-    print("  cs2pov export output --preset editing   # 可选：重新导出 SRT 字幕")
-    print("  cs2pov retranslate output")
-    print("  cs2pov resume output --from-stage translate")
-    print("  cs2pov feedback output")
+    print("  cs2pov inspect-job")
+    print("  cs2pov explain-output")
+    print("  cs2pov comms build-review --rounds 1-3  # 主功能：生成通讯流校对文件")
+    print("  cs2pov comms render --rounds 1-3 --formats preview,green")
+    print("  cs2pov export --preset editing   # 可选：重新导出 SRT 字幕")
+    print("  cs2pov retranslate")
+    print("  cs2pov resume --from-stage translate")
+    print("  cs2pov feedback")
     print("  cs2pov glossary list --map de_mirage")
-    print("  cs2pov glossary check output")
-    print("  cs2pov players list output")
-    print("  cs2pov players alias output --name Ebule --as donk")
+    print("  cs2pov glossary check")
+    print("  cs2pov players list")
+    print("  cs2pov players alias --name Ebule --as donk")
+    print("  （也可显式传入旧 Job 路径以原地读取/修改）")
 
 
 if __name__ == "__main__":
