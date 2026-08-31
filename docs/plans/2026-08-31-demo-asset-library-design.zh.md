@@ -38,6 +38,8 @@ Luna-01E 建立工作区级 `DemoAsset` 素材库。它按解压后的 Demo 内�
 - 多线程、多进程、Windows junction 与真实子进程 E2E；
 - 用户文档和 CI 门禁。
 
+因为 `.dem.zst` 导入属于素材库核心能力，`zstandard>=0.23` 从 `cs2` 可选组提升为基础运行依赖；`demoparser2`、语音解码、Whisper、GPU 和渲染依赖仍保持可选。
+
 01E-A 不改变 `run`、向导或 Pipeline。用户可以显式管理素材库，但现有任务仍按 01D 方式创建输入副本。
 
 ### 2.2 Luna-01E-B：自动导入和 Job 引用
@@ -228,7 +230,7 @@ CLI 文本模式据此显示“新导入”或“已复用”；JSON 模式直�
 
 ### 8.1 持久源验证
 
-仓储在导入碰到已有资产、显式 `inspect`、Job 首次解析资产时验证：
+仓储在导入碰到已有资产、显式 `inspect`、Job 首次解析资产时验证持久源：
 
 - manifest schema 和字段；
 - manifest 路径 containment；
@@ -251,6 +253,8 @@ CLI 文本模式据此显示“新导入”或“已复用”；JSON 模式直�
 4. 从持久 `source.dem.zst` 解压到同目录 staging；
 5. 验证逻辑大小和哈希后原子提交为正式缓存；
 6. 多进程同时重建时只接受一个完整胜出文件，其他进程验证后复用。
+
+`demos list` 和 `demos inspect` 是只读命令：它们可以验证并报告缓存缺失或损坏，但不得创建、替换或重建缓存。再次执行 `demos import`，或由未来 Pipeline 调用 `ResolveDemoAsset` 时，才允许按上述流程重建。
 
 缓存清理可以删除解压文件，但不得删除 `library/demos/` 内的源或 manifest。
 
@@ -283,7 +287,7 @@ cs2pov demos inspect <asset-id> [--json]
 
 - import 显示文件名、结果是“新导入”还是“已复用”、长期新增字节和下一步命令；
 - list 按导入时间和资产 ID 确定性排序，显示名称、格式、大小和健康摘要；
-- inspect 显示源是否完整、缓存是否存在及可执行建议；
+- inspect 只读显示源是否完整、缓存是否存在及可执行建议，不暗中重建缓存；
 - 不要求用户输入或复制完整工作区路径；
 - 不提供 delete、repair 或隐式覆盖选项。
 
@@ -359,6 +363,8 @@ manifest 不保存解析后的绝对资产路径或最初外部路径。Pipeline
 | `demo_source_not_found` | 源不存在 | 不写盘 |
 | `demo_source_not_file` | 源不是普通文件 | 不写盘 |
 | `demo_source_format_unsupported` | 不是 `.dem`/`.dem.zst` | 不写盘 |
+| `demo_source_empty` | 源或解压后的 Demo 为空 | 不提交资产 |
+| `demo_source_unreadable` | 无法读取源文件 | 不提交资产 |
 | `demo_source_changed` | 导入期间源发生变化 | 不提交资产 |
 | `demo_decompression_failed` | zstd 源损坏或解压失败 | 不提交资产 |
 | `demo_import_space_insufficient` | 工作区空间不足 | 不提交资产 |
@@ -415,7 +421,7 @@ manifest 不保存解析后的绝对资产路径或最初外部路径。Pipeline
 2. 生成匿名合成 `.dem` 字节和对应 `.dem.zst`；
 3. 分别导入不同文件名和两种格式；
 4. 断言输出均指向同一 `asset_id`，持久资产目录只有一个；
-5. 断言压缩首源保存、缓存可删除并由 inspect/resolve 重建；
+5. 断言压缩首源保存；删除缓存后 inspect 只报告缺失，再次 import 同一 `.dem.zst` 时重建；
 6. 并发启动多个真实子进程导入同一内容，最终仍只有一个完整资产；
 7. 预置遗留 staging，断言 list 不显示且新导入可成功；
 8. 篡改源或 manifest，断言稳定失败且没有覆盖；
