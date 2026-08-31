@@ -79,11 +79,17 @@ class PipelineEngine:
                     raise JobRuntimeError(
                         "demo_asset_manifest_invalid", "Job 的 DemoAsset 引用无效。", "请检查 Job manifest 后重试。"
                     ) from exc
-                if existing_ref is not None and existing_ref != demo_asset_ref:
+                if existing_ref is None:
+                    raise JobRuntimeError(
+                        "demo_asset_mode_mismatch",
+                        "旧 Job 不能自动迁移为 DemoAsset 模式。",
+                        "请继续按旧输入方式恢复，或创建一个新的托管素材 Job。",
+                    )
+                if existing_ref != demo_asset_ref:
                     raise JobRuntimeError(
                         "demo_asset_ref_mismatch", "Job 的 DemoAsset 引用与恢复参数不一致。", "请使用创建该 Job 时的素材引用。"
                     )
-                if existing_ref is not None and existing_display_name != demo_asset_display_name:
+                if existing_display_name != demo_asset_display_name:
                     raise JobRuntimeError(
                         "demo_asset_display_name_mismatch", "Job 的 Demo 显示名称与恢复参数不一致。", "请使用创建该 Job 时的显示名称。"
                     )
@@ -111,6 +117,7 @@ class PipelineEngine:
         if runtime is not None and policy is None:
             policy = JobRuntime.from_config(runtime, config)
         self.config = policy.adapt_config(config) if policy is not None else config
+        self.runtime = runtime
         if store is not None and runtime is not None:
             # Existing Job data stays in place, while new model/audio scratch
             # follows the current immutable workspace runtime.
@@ -154,7 +161,8 @@ class PipelineEngine:
         stages = _slice_stages(from_stage, to_stage)
         for stage in stages:
             self._run_stage(stage, Path(input_path) if input_path is not None else None)
-        self.progress.emit("done", f"任务完成。Job 目录：{self.store.job_dir}")
+        job_display = self.store.job_dir.name if self._managed_demo else str(self.store.job_dir)
+        self.progress.emit("done", f"任务完成。Job：{job_display}")
         return self.store
 
     def _run_stage(self, stage: StageName, input_path: Path | None) -> None:
@@ -299,14 +307,22 @@ class PipelineEngine:
                 )
                 for key, value in outputs.items():
                     self.manifest.set_artifact(key, Path(value))
-                    self.progress.emit(stage, f"输出 {key}: {value}")
+                    output_display = Path(value).name if self._managed_demo else value
+                    self.progress.emit(stage, f"输出 {key}: {output_display}")
             self.manifest.config = self.config
             self.manifest.set_stage(stage, StageStatus.COMPLETED)
             self.manifest.save(self.store.manifest_path)
         except Exception as exc:
             self.manifest.set_stage(stage, StageStatus.FAILED)
             self.manifest.save(self.store.manifest_path)
-            self.progress.exception(stage, exc, self.store.error_log_path)
+            redactions: tuple[str, ...] = ()
+            if self._managed_demo:
+                redactions = tuple(
+                    str(path)
+                    for path in (self.runtime.root, self.store.job_dir, self.demo_path)
+                    if path is not None
+                )
+            self.progress.exception(stage, exc, self.store.error_log_path, redact_values=redactions)
             raise
 
     def _rename_auto_job_dir(self, map_name: str) -> None:
@@ -337,6 +353,8 @@ class PipelineEngine:
 
     def _require_demo_path(self) -> Path:
         if self._managed_demo:
+            if self.demo_path is not None and self.demo_path.exists():
+                return self.demo_path
             return self._resolve_managed_demo()
         if self.demo_path and self.demo_path.exists():
             return self.demo_path

@@ -173,6 +173,11 @@ class InspectAdapter:
         return DemoInfo(input_path=str(original_input), demo_path=str(demo_path), map_name="de_mirage")
 
 
+class FailingInspectAdapter:
+    def inspect(self, demo_path, original_input):
+        raise RuntimeError(f"cannot inspect {demo_path}")
+
+
 def runtime_for(tmp_path):
     root = tmp_path / "workspace"
     return WorkspaceRuntime(root, "workspace", 1, 1)
@@ -180,7 +185,7 @@ def runtime_for(tmp_path):
 
 def managed_engine(tmp_path, *, resolved=None, manifest=None, ref=None, display_name="match.dem"):
     runtime = runtime_for(tmp_path)
-    store = ArtifactStore.create(tmp_path / "jobs", job_id="job-1")
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="job-1")
     ref = ref or make_ref()
     asset_service = RecordingAssetService(runtime, resolved or (tmp_path / "workspace" / "library" / "demos" / "demo.dem"))
     engine = PipelineEngine(
@@ -234,7 +239,7 @@ def test_managed_inspect_persists_only_display_name_and_asset_token(tmp_path):
     resolved = tmp_path / "workspace" / "library" / "demos" / "source.dem"
     resolved.parent.mkdir(parents=True)
     resolved.write_bytes(b"demo")
-    engine, _, ref = managed_engine(tmp_path, resolved=resolved, display_name="safe.dem")
+    engine, service, ref = managed_engine(tmp_path, resolved=resolved, display_name="safe.dem")
     engine.demo_service = DemoService(InspectAdapter())
 
     engine.run(None, to_stage=StageName.INSPECT_DEMO)
@@ -244,6 +249,7 @@ def test_managed_inspect_persists_only_display_name_and_asset_token(tmp_path):
     assert f"demo-asset:{ref.asset_id}" in text
     assert str(tmp_path) not in text
     assert "demo_path" not in engine.manifest.artifacts
+    assert service.calls == [ref]
 
 
 def test_managed_auto_rename_keeps_resolved_asset_path_and_no_job_copy(tmp_path):
@@ -310,3 +316,49 @@ def test_managed_run_rejects_path_and_legacy_run_requires_path(tmp_path):
     legacy = PipelineEngine(PipelineConfig(), store=legacy_store, runtime=runtime_for(tmp_path / "legacy"))
     with pytest.raises(JobRuntimeError, match="input_path"):
         legacy.run(None, to_stage=StageName.PREPARE_INPUT)
+
+
+def test_managed_engine_refuses_to_implicitly_migrate_old_manifest(tmp_path):
+    runtime = runtime_for(tmp_path)
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="old-job")
+    old_manifest = PipelineManifest.create("old-job", PipelineConfig())
+    service = RecordingAssetService(runtime, runtime.paths.demo_library_dir / "source.dem")
+
+    with pytest.raises(JobRuntimeError) as caught:
+        PipelineEngine(
+            PipelineConfig(),
+            store=store,
+            manifest=old_manifest,
+            runtime=runtime,
+            demo_asset_ref=make_ref(),
+            demo_asset_display_name="match.dem",
+            demo_assets=service,
+        )
+
+    assert caught.value.code == "demo_asset_mode_mismatch"
+    assert old_manifest.demo_asset_ref() is None
+    assert not store.manifest_path.exists()
+
+
+def test_managed_progress_and_error_logs_never_publish_workspace_asset_paths(tmp_path):
+    resolved = tmp_path / "workspace" / "library" / "demos" / "source.dem"
+    resolved.parent.mkdir(parents=True)
+    resolved.write_bytes(b"demo")
+    engine, _, _ = managed_engine(tmp_path, resolved=resolved, display_name="safe.dem")
+    engine.demo_service = DemoService(InspectAdapter())
+
+    engine.run(None, to_stage=StageName.INSPECT_DEMO)
+
+    progress_text = engine.store.progress_log_path.read_text(encoding="utf-8")
+    assert str(engine.store.job_dir) not in progress_text
+    assert str(resolved) not in progress_text
+
+    failing, _, _ = managed_engine(tmp_path / "failure", resolved=resolved, display_name="safe.dem")
+    failing.demo_service = DemoService(FailingInspectAdapter())
+    with pytest.raises(RuntimeError, match="cannot inspect"):
+        failing.run(None, to_stage=StageName.INSPECT_DEMO)
+
+    combined = failing.store.progress_log_path.read_text(encoding="utf-8")
+    combined += failing.store.error_log_path.read_text(encoding="utf-8")
+    assert str(failing.demo_assets.bound_runtime.root) not in combined
+    assert str(resolved) not in combined
