@@ -52,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd")
     from cs2pov.cli.workspace_commands import add_workspace_parser
     add_workspace_parser(sub)
+    from cs2pov.cli.demo_commands import add_demos_parser
+    add_demos_parser(sub)
 
     run = sub.add_parser("run", help="专家模式：直接运行 pipeline")
     run.add_argument("demo")
@@ -290,6 +292,9 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "workspace":
         from cs2pov.cli.workspace_commands import run_workspace
         return run_workspace(args)
+    if args.cmd == "demos":
+        from cs2pov.cli.demo_commands import run_demos
+        return run_demos(args)
     if args.cmd == "doctor":
         return run_doctor()
 

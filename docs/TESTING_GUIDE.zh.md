@@ -101,3 +101,16 @@ Job 落在工作区 `jobs/`、Demo 被复制到 Job/input、显式 `--output` �
 ```powershell
 python scripts/check_workspace_job_runtime_e2e.py
 ```
+
+# 工作区 DemoAsset 素材库 E2E
+
+使用真实 Python 子进程、匿名合成 `.dem/.dem.zst` 和隔离 HOME，验证跨格式内容
+去重、首源保持、只读 inspect、缓存重建、6 进程并发、损坏持久源拒绝覆盖，以及
+源码树/用户目录无旁路写入：
+
+```powershell
+python scripts/check_workspace_demo_asset_e2e.py
+```
+
+这个 E2E 不读取真实 Demo、GPU、CS2、模型或 API。它只验收 01E-A 显式素材库；
+Pipeline 自动导入和 Job `input/` 去重属于 01E-B。

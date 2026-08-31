@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+import io
+from pathlib import Path
+import tracemalloc
+
+import pytest
+import zstandard
+
+from cs2pov.adapters.demoparser_adapter import DemoparserAdapter
+from cs2pov.adapters.zstandard_adapter import DemoCompressionError, ZstandardDemoAdapter
+
+
+def test_iter_decompressed_yields_original_bytes_in_bounded_chunks():
+    original = (b"anonymous-cs2-demo" * 8192) + b"end"
+    compressed = zstandard.ZstdCompressor(level=3).compress(original)
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=4096))
+
+    assert b"".join(chunks) == original
+    assert chunks
+    assert all(0 < len(chunk) <= 4096 for chunk in chunks)
+
+
+def test_iter_decompressed_handles_complete_unknown_content_size_frame():
+    original = b"anonymous-unknown-size-demo" * 256
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(original)
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=4096))
+
+    assert b"".join(chunks) == original
+
+
+def test_iter_decompressed_handles_concatenated_frames():
+    compressor = zstandard.ZstdCompressor(write_content_size=False)
+    first = b"first-anonymous-frame" * 32
+    second = b"second-anonymous-frame" * 32
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressor.compress(first) + compressor.compress(second)), chunk_size=64))
+
+    assert b"".join(chunks) == first + second
+
+
+def test_iter_decompressed_handles_skippable_frame_before_data():
+    skipped = b"metadata intentionally skipped"
+    original = b"anonymous-frame-after-skippable"
+    skippable = bytes([0x50, 0x2A, 0x4D, 0x18]) + len(skipped).to_bytes(4, "little") + skipped
+    compressed = skippable + zstandard.ZstdCompressor().compress(original)
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=32))
+
+    assert b"".join(chunks) == original
+
+
+@pytest.mark.parametrize("trailer", [b"junk", b"\x28"])
+def test_iter_decompressed_rejects_trailing_partial_or_invalid_frame(trailer):
+    compressed = zstandard.ZstdCompressor().compress(b"anonymous-demo") + trailer
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=32))
+
+
+def test_iter_decompressed_accepts_unused_frame_header_bit():
+    compressed = bytearray(zstandard.ZstdCompressor().compress(b"anonymous-demo"))
+    compressed[4] |= 0x10
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(bytes(compressed)), chunk_size=32))
+
+    assert b"".join(chunks) == b"anonymous-demo"
+
+
+@pytest.mark.parametrize("trim", [1, 3, 10])
+def test_iter_decompressed_rejects_any_truncated_unknown_content_size_frame(trim):
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(b"anonymous-demo" * 256)
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed[:-trim]), chunk_size=4096))
+
+
+def test_iter_decompressed_never_requests_unbounded_source_reads():
+    original = b"anonymous-tracking-demo" * 1024
+    compressed = zstandard.ZstdCompressor().compress(original)
+
+    class TrackingReader(io.BytesIO):
+        requests: list[int] = []
+
+        def read(self, size=-1):
+            self.requests.append(size)
+            assert 0 <= size <= 256 * 1024
+            return super().read(size)
+
+    source = TrackingReader(compressed)
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(source, chunk_size=4096))
+
+    assert b"".join(chunks) == original
+    assert source.requests
+
+
+def test_iter_decompressed_memory_peak_does_not_scale_with_compressed_logical_size():
+    original = b"x" * (16 * 1024 * 1024)
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(original)
+    assert len(compressed) < 4096
+
+    tracemalloc.start()
+    try:
+        decompressed_size = sum(
+            len(chunk)
+            for chunk in ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=64 * 1024)
+        )
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert decompressed_size == len(original)
+    assert peak < 4 * 1024 * 1024
+
+
+def test_iter_decompressed_accepts_a_valid_empty_frame():
+    compressed = zstandard.ZstdCompressor().compress(b"")
+
+    assert list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=8)) == []
+
+
+@pytest.mark.parametrize("data", [b"not zstandard", b"\x00\x01\x02"])
+def test_iter_decompressed_maps_corrupt_stream_to_stable_error(data):
+    with pytest.raises(DemoCompressionError) as caught:
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(data), chunk_size=8))
+
+    assert "not zstandard" not in str(caught.value)
+    assert "\\" not in str(caught.value)
+
+
+def test_iter_decompressed_maps_truncated_stream_to_stable_error():
+    compressed = zstandard.ZstdCompressor().compress(b"anonymous-demo" * 100)
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed[:-1]), chunk_size=8))
+
+
+@pytest.mark.parametrize("chunk_size", [True, False, 0, -1])
+def test_iter_decompressed_rejects_invalid_chunk_size(chunk_size):
+    with pytest.raises(ValueError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(b""), chunk_size=chunk_size))
+
+
+def test_iter_decompressed_rejects_source_without_read_method():
+    class NoReader:
+        pass
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(NoReader(), chunk_size=8))
+
+
+def test_demoparser_adapter_keeps_zst_and_plain_copy_behavior(tmp_path: Path):
+    original = b"anonymous-demo" * 100
+    compressed_path = tmp_path / "source.dem.zst"
+    compressed_path.write_bytes(zstandard.ZstdCompressor().compress(original))
+    plain_path = tmp_path / "source.dem"
+    plain_path.write_bytes(original)
+
+    compressed_target = tmp_path / "decoded" / "compressed.dem"
+    plain_target = tmp_path / "decoded" / "plain.dem"
+    adapter = DemoparserAdapter()
+
+    assert adapter.decompress_if_needed(compressed_path, compressed_target) == compressed_target
+    assert compressed_target.read_bytes() == original
+    assert adapter.decompress_if_needed(plain_path, plain_target) == plain_target
+    assert plain_target.read_bytes() == original

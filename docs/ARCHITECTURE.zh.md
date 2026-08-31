@@ -19,12 +19,31 @@ CLI、`.bat`、未来 UI 都只是入口。核心是 PipelineEngine 与 Job arti
 ```text
 src/cs2pov/
   cli/          # 命令行、向导、菜单式启动器
+  application/  # 工作区 runtime、Job 与 DemoAsset 用例边界
   pipeline/     # PipelineEngine、Manifest、Progress
   domain/       # Player/Round/Segment/Subtitle 等核心模型
   services/     # 业务服务：demo、voice、transcription、translation、subtitle、dictionary
   adapters/     # 外部依赖适配：demoparser2、PyOgg、faster-whisper、LLM
-  storage/      # ArtifactStore、ConfigStore、JSONL 工具
+  storage/      # ArtifactStore、DemoAsset 仓储、ConfigStore、JSONL 工具
 ```
+
+## DemoAsset 素材库（01E-A）
+
+```text
+外部 .dem / .dem.zst（只读）
+  → 流式计算解压后 SHA-256
+  → library/demos/<asset_id>/asset.json + 首次持久源
+  → cache/decompressed_demos/<asset_id>.dem（仅压缩源、可重建）
+```
+
+`.dem` 与不同压缩参数的 `.dem.zst` 只要解压内容相同，就共享一个逻辑
+`asset_id`；第一个成功提交的持久源格式和字节不会被后续导入替换。导入采用
+工作区内 staging 和同文件系统原子提交，多进程竞争只接受完整赢家。`demos
+list/inspect` 是只读操作；缓存只能由 import 或内部 resolve 重建。
+
+01E-A 没有改变下方 Pipeline：`run`、向导和旧 Job 仍使用 Job 自己的 `input/`
+副本。01E-B 才会让 Pipeline/Job manifest 引用 `DemoAssetRef`，因此当前不能宣称
+已经消除 Job 输入重复文件。
 
 ## 核心原则
 
@@ -90,4 +109,4 @@ CS2 队内语音很短、碎、上下文强。逐句翻译容易误译；按回�
 
 # 工作区 runtime 与模型边界
 
-`WorkspaceRuntime` 已由 Luna-01D-A/01D-B 接入模型扫描、加载、run、Job、Demo、向导、输出和临时音频路径。默认 Job 使用当前工作区 `jobs/`，模型缓存与临时音频跟随工作区；旧配置与环境缓存仅作为只读迁移候选。显式 `--output` 是带警告的旧版兼容选项，旧 Job 可原地读取和修改，但写操作需要健康工作区。理解翻译、Web UI、录制和正式迁移不属于当前实现范围。
+`WorkspaceRuntime` 已由 01D-A/01D-B 接入模型扫描、加载、run、Job、Demo、向导、输出和临时音频路径；01E-A 又加入显式 DemoAsset 素材管理。默认 Job 使用当前工作区 `jobs/`，模型缓存与临时音频跟随工作区；旧配置与环境缓存仅作为只读迁移候选。显式 `--output` 是带警告的旧版兼容选项，旧 Job 可原地读取和修改，但写操作需要健康工作区。理解翻译、Web UI、录制、素材删除和正式迁移不属于当前实现范围。

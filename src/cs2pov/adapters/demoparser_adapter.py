@@ -10,6 +10,7 @@ import shutil
 import wave
 
 from cs2pov.adapters.opus_adapter import PyOggOpusDecoder
+from cs2pov.adapters.zstandard_adapter import DemoCompressionError, ZstandardDemoAdapter
 from cs2pov.domain.models import DemoInfo, Player, Round, VoicePacketInfo
 from cs2pov.storage.artifact_store import safe_name
 from cs2pov.storage.jsonl import write_json
@@ -46,12 +47,11 @@ class DemoparserAdapter:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if input_path.suffix.lower() == ".zst":
             try:
-                import zstandard as zstd  # type: ignore
-            except Exception as exc:  # pragma: no cover - optional dependency
-                raise DemoParserAdapterError("这是 .zst 压缩 demo，但缺少 zstandard。请运行：pip install zstandard") from exc
-            with input_path.open("rb") as src, output_path.open("wb") as dst:
-                dctx = zstd.ZstdDecompressor()
-                dctx.copy_stream(src, dst)
+                with input_path.open("rb") as src, output_path.open("wb") as dst:
+                    for chunk in ZstandardDemoAdapter().iter_decompressed(src):
+                        dst.write(chunk)
+            except DemoCompressionError as exc:
+                raise DemoParserAdapterError("无法解压 .zst demo。") from exc
             return output_path
         shutil.copy2(input_path, output_path)
         return output_path

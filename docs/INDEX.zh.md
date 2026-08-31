@@ -16,9 +16,12 @@
 - `../tests/golden/README.zh.md`：v0.9.8 金标准夹具、真实 Demo 隔离和重放方法
 - `plans/2026-08-30-understanding-translation-architecture-design.zh.md`：理解翻译与模块化重构的已确认架构设计
 - `plans/2026-08-30-understanding-translation-implementation-plan.zh.md`：分阶段实施、测试和回滚计划
+- `plans/2026-08-31-demo-asset-library-design.zh.md`：01E DemoAsset 素材库与 01E-B Pipeline 接入边界设计
+- `tasks/LUNA-01E-A-DEMO-ASSET-LIBRARY.zh.md`：01E-A 内容寻址素材库实施与验收计划
 - `DEVELOPMENT_WORKFLOW.zh.md`：开发工作流
 - `TESTING_GUIDE.zh.md`：测试指南
 - `../scripts/check_workspace_job_runtime_e2e.py`：工作区 Job 文件系统真实子进程 E2E
+- `../scripts/check_workspace_demo_asset_e2e.py`：工作区 DemoAsset 真实子进程、并发与路径隔离 E2E
 - `SECURITY_AND_PRIVACY.zh.md`：安全与隐私
 - `RELEASE_CHECKLIST.zh.md`：发布检查清单
 - `SHOWCASE.zh.md`：作品集展示说明
