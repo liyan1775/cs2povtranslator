@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from cs2pov.cli.model_manager import (
     TRANSCRIPTION_PROFILES,
     format_bytes,
@@ -88,7 +90,6 @@ def test_deprecated_set_cache_and_config_cache_are_zero_write(monkeypatch, tmp_p
 
 def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path):
     from cs2pov.cli import model_manager
-    import pytest
     with pytest.raises(TypeError): model_manager.cache_candidates()
     with pytest.raises(TypeError): model_manager.scan_downloaded_models()
     runtime = _runtime(tmp_path)
@@ -98,6 +99,70 @@ def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path)
         (folder / "x").write_bytes(b"1")
     rows = model_manager.scan_current_models(runtime)
     assert [(r["name"], r["source"]) for r in rows] == [("small", "workspace_whisper"), ("base", "workspace_huggingface_hub")]
+
+
+def test_legacy_runtime_inputs_are_explicit_deduplicated_and_read_only(tmp_path):
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    configured = tmp_path / "configured"
+    configured_hub = configured / "hub"
+    hf_home_hub = tmp_path / "hf-home" / "hub"
+    hf_hub = tmp_path / "hf-hub"
+    default_hub = tmp_path / "isolated-home" / ".cache" / "huggingface" / "hub"
+    for path in (configured, configured_hub, hf_home_hub, hf_hub, default_hub):
+        path.mkdir(parents=True)
+    missing = tmp_path / "missing"
+
+    rows = model_manager._legacy_candidates_for_runtime(
+        runtime,
+        config={"whisper_cache_dir": str(configured)},
+        environ={"HF_HOME": str(hf_home_hub.parent), "HF_HUB_CACHE": str(hf_hub)},
+        home=tmp_path / "isolated-home",
+    )
+
+    assert [(row["source"], Path(row["path"])) for row in rows] == [
+        ("configured", configured.resolve()),
+        ("configured", configured_hub.resolve()),
+        ("HF_HOME", hf_home_hub.resolve()),
+        ("HF_HUB_CACHE", hf_hub.resolve()),
+        ("platform_default", default_hub.resolve()),
+    ]
+    assert all(row["managed"] is False for row in rows)
+    assert not missing.exists()
+
+    excluded = model_manager._legacy_candidates_for_runtime(
+        runtime,
+        config={"whisper_cache_dir": str(runtime.root)},
+        environ={"HF_HOME": str(runtime.root), "HF_HUB_CACHE": str(runtime.paths.whisper_cache_dir)},
+        home=runtime.root,
+    )
+    assert excluded == []
+
+
+def test_text_model_list_shows_legacy_models_when_current_cache_is_empty(tmp_path, capsys):
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    legacy = tmp_path / "legacy"
+    model = legacy / "models--Systran--faster-whisper-base"
+    model.mkdir(parents=True)
+    (model / "model.bin").write_bytes(b"legacy")
+
+    result = model_manager.print_models_list(
+        runtime,
+        json_mode=False,
+        config={"whisper_cache_dir": str(legacy)},
+        environ={},
+        home=tmp_path / "isolated-home",
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "当前工作区没有发现" in output
+    assert "旧缓存模型" in output
+    assert "base" in output
+    assert str(model) in output
 
 
 def test_quality_profile_maps_to_small_cpu_int8():

@@ -182,14 +182,20 @@ def scan_legacy_candidates(*, configured_cache=None, hf_home=None, hf_hub_cache=
 
 
 def scan_legacy_models(candidates):
-    rows = []
+    rows, seen = [], set()
     for candidate in candidates:
         root = Path(candidate["path"])
         for item in sorted(root.glob("models--*--*")):
             if item.is_dir():
+                key = item.resolve()
+                if key in seen:
+                    continue
                 name = _display_model_name_from_cache_dir(item.name)
                 if _looks_like_whisper_model(name, item.name):
-                    rows.append({"name": name, "path": str(item), "cache_dir": str(root), "managed": False, "source": candidate["source"], "size_bytes": directory_size(item), "size_human": format_bytes(directory_size(item))})
+                    seen.add(key)
+                    size = directory_size(item)
+                    rows.append({"name": name, "path": str(item), "cache_dir": str(root), "managed": False,
+                                 "source": candidate["source"], "size_bytes": size, "size_human": format_bytes(size)})
     return rows
 
 
@@ -224,12 +230,12 @@ def _looks_like_whisper_model(display_name: str, dirname: str) -> bool:
     return "whisper" in text or display_name in {item.name for item in MODEL_CATALOG}
 
 
-def build_models_info(runtime: WorkspaceRuntime) -> dict[str, Any]:
-    cfg = load_config()
+def build_models_info(runtime: WorkspaceRuntime, *, config=None, environ=None, home=None) -> dict[str, Any]:
+    cfg = load_config() if config is None else config
     return {
         "workspace_cache": {"whisper": str(runtime.paths.whisper_cache_dir), "huggingface_hub": str(runtime.paths.huggingface_hub_cache_dir)},
         "deprecated_config": {"present": bool(cfg.get("whisper_cache_dir")), "deprecated": bool(cfg.get("whisper_cache_dir"))},
-        "legacy_candidates": _legacy_candidates_for_runtime(runtime),
+        "legacy_candidates": _legacy_candidates_for_runtime(runtime, config=cfg, environ=environ, home=home),
         "current_defaults": {
             "transcription_profile": cfg.get("transcription_profile") or "balanced",
             "whisper_model": cfg.get("whisper_model"),
@@ -239,8 +245,8 @@ def build_models_info(runtime: WorkspaceRuntime) -> dict[str, Any]:
     }
 
 
-def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
-    payload = build_models_info(runtime)
+def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False, *, config=None, environ=None, home=None) -> int:
+    payload = build_models_info(runtime, config=config, environ=environ, home=home)
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
@@ -260,10 +266,9 @@ def print_models_info(runtime: WorkspaceRuntime, json_mode: bool = False) -> int
     return 0
 
 
-def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int:
+def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False, *, config=None, environ=None, home=None) -> int:
     models = scan_current_models(runtime)
-    cfg = load_config()
-    candidates = _legacy_candidates_for_runtime(runtime)
+    candidates = _legacy_candidates_for_runtime(runtime, config=config, environ=environ, home=home)
     payload = {"model_count": len(models), "models": models, "legacy_candidates": candidates, "legacy_models": scan_legacy_models(candidates)}
     if json_mode:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -271,16 +276,19 @@ def print_models_list(runtime: WorkspaceRuntime, json_mode: bool = False) -> int
     print("已下载/已缓存的 Whisper 模型")
     print("=" * 72)
     if not models:
-        print("没有在候选缓存目录中发现 faster-whisper/whisper 模型。")
+        print("当前工作区没有发现 faster-whisper/whisper 模型。")
         print("可先运行 cs2pov models recommend 查看常用模型大小，再在向导或 run 中选择模型触发下载。")
-        return 0
-    for item in models:
-        print(f"- {item['name']:<16} {item['size_human']:<10} {item['status']}")
-        print(f"  path: {item['path']}")
+    else:
+        for item in models:
+            print(f"- {item['name']:<16} {item['size_human']:<10} {item['status']}")
+            print(f"  path: {item['path']}")
     legacy_models = payload["legacy_models"]
     print("\n旧缓存模型（仅只读迁移候选）：")
-    for item in legacy_models:
-        print(f"- {item['name']:<16} {item['path']}")
+    if not legacy_models:
+        print("未检测到旧缓存模型。")
+    else:
+        for item in legacy_models:
+            print(f"- {item['name']:<16} {item['path']}")
     return 0
 
 
