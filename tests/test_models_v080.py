@@ -395,6 +395,7 @@ def test_scan_downloaded_models_detects_hf_cache(monkeypatch, tmp_path):
 
 def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
     from argparse import Namespace
+    import json
     import cs2pov.cli.commands as commands
 
     class DummyStore:
@@ -403,15 +404,20 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
             self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
 
     class DummyEngine:
-        def __init__(self, config, runtime=None, job_runtime=None):
+        def __init__(self, config, runtime=None, job_runtime=None, **kwargs):
             self.config = config
             self.store = DummyStore(Path(config.output_root) / "20260101_000000_de_mirage")
 
-        def run(self, demo):
+        def run(self, demo=None, **kwargs):
             self.store.transcription_coverage_path.parent.mkdir(parents=True, exist_ok=True)
             self.store.transcription_coverage_path.write_text('{"postprocessed_transcript_segments": 1}', encoding="utf-8")
 
     monkeypatch.setattr(commands, "PipelineEngine", DummyEngine)
+    preparation = type("Preparation", (), {
+        "result": type("Result", (), {"disposition": "reused"})(),
+        "ref": type("Ref", (), {"asset_id": "a" * 64})(), "display_name": "match.dem.zst", "service": object(),
+    })()
+    monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
     monkeypatch.chdir(tmp_path)
     args = Namespace(
@@ -427,10 +433,13 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
         json=False,
     )
     assert commands.run_asr_benchmark(args) == 0
-    report = next((tmp_path / "bench_out").glob("asr_benchmark_*.json")).read_text(encoding="utf-8")
-    assert "agent_workspace" not in report
-    assert "D:" not in report
-    assert "match.dem.zst" in report
+    report_text = next((tmp_path / "bench_out").glob("asr_benchmark_*.json")).read_text(encoding="utf-8")
+    report = json.loads(report_text)
+    assert "agent_workspace" not in report_text
+    assert "D:" not in report_text
+    assert "match.dem.zst" in report_text
+    assert report["demo_asset_id"] == "a" * 64
+    assert report["demo_asset_disposition"] == "reused"
 
 
 def test_benchmark_json_keeps_engine_progress_out_of_stdout(monkeypatch, tmp_path, capsys):
@@ -446,17 +455,22 @@ def test_benchmark_json_keeps_engine_progress_out_of_stdout(monkeypatch, tmp_pat
             self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
 
     class DummyEngine:
-        def __init__(self, config, runtime=None, job_runtime=None):
+        def __init__(self, config, runtime=None, job_runtime=None, **kwargs):
             self.config = config
             self.store = DummyStore(Path(config.output_root) / "20260101_000000_de_mirage")
             self.progress = ProgressSink(self.store.progress_log_path, verbose=True)
 
-        def run(self, demo):
+        def run(self, demo=None, **kwargs):
             self.progress.emit("prepare_input", "真实引擎进度")
             self.store.transcription_coverage_path.parent.mkdir(parents=True, exist_ok=True)
             self.store.transcription_coverage_path.write_text('{"postprocessed_transcript_segments": 1}', encoding="utf-8")
 
     monkeypatch.setattr(commands, "PipelineEngine", DummyEngine)
+    preparation = type("Preparation", (), {
+        "result": type("Result", (), {"disposition": "reused"})(),
+        "ref": type("Ref", (), {"asset_id": "a" * 64})(), "display_name": "match.dem.zst", "service": object(),
+    })()
+    monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
     monkeypatch.chdir(tmp_path)
     args = Namespace(

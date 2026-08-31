@@ -318,6 +318,175 @@ def test_managed_run_rejects_path_and_legacy_run_requires_path(tmp_path):
         legacy.run(None, to_stage=StageName.PREPARE_INPUT)
 
 
+def test_pipeline_demo_helper_imports_and_preflights_once(tmp_path, monkeypatch):
+    from cs2pov.cli import pipeline_demo
+
+    runtime = runtime_for(tmp_path)
+    ref = make_ref()
+    result = type("Result", (), {"asset": type("Asset", (), {"to_ref": lambda self: ref, "display_name": "outside.dem"})(), "disposition": "imported"})()
+    calls = []
+
+    class Service:
+        bound_runtime = runtime
+
+        def import_demo(self, source):
+            calls.append(("import", source))
+            return result
+
+        def resolve_asset(self, value):
+            calls.append(("resolve", value))
+            return tmp_path / "workspace" / "library" / "demos" / "source.dem"
+
+    monkeypatch.setattr(pipeline_demo.DemoAssetApplicationService, "for_runtime", lambda value: calls.append(("bind", value)) or Service())
+
+    preparation = pipeline_demo.prepare_demo_asset(tmp_path / "outside.dem", runtime=runtime)
+
+    assert preparation.runtime is runtime
+    assert preparation.service.bound_runtime is runtime
+    assert preparation.ref == ref
+    assert preparation.display_name == "outside.dem"
+    assert [name for name, _ in calls] == ["bind", "import", "resolve"]
+
+
+def test_run_pipeline_passes_bound_asset_and_none_to_engine(monkeypatch, tmp_path, capsys):
+    from cs2pov.cli import commands, pipeline_demo
+
+    runtime = runtime_for(tmp_path)
+    ref = make_ref()
+    service = RecordingAssetService(runtime, tmp_path / "workspace" / "demo.dem")
+    preparation = type("Preparation", (), {
+        "runtime": runtime, "service": service, "ref": ref, "display_name": "match.dem",
+        "result": type("Result", (), {"disposition": "imported"})(),
+    })()
+    monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: runtime)
+    monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
+    seen = {}
+
+    class Engine:
+        def __init__(self, config, **kwargs):
+            seen["kwargs"] = kwargs
+        def run(self, value, **kwargs):
+            seen["run"] = (value, kwargs)
+
+    monkeypatch.setattr(commands, "PipelineEngine", Engine)
+    args = type("Args", (), {
+        "whisper_cache_dir": None, "transcription_profile": None, "whisper_model": None,
+        "whisper_device": None, "whisper_compute_type": None, "output": None, "map_name": None,
+        "pov_steamid": None, "team_number": None, "export_scope": "pov_team", "language": "auto",
+        "whisper_vad": None, "transcription_mode": None, "activity_padding": 0.06, "keep_temp_audio": False,
+        "llm_base_url": None, "llm_api_key": None, "llm_model": None, "skip_translation": False,
+        "dry_run_translation": False, "max_rounds": None, "min_round_duration": 10.0,
+        "include_unrecognized_voice": False, "unrecognized_min_duration": 0.35, "filter_hallucinations": None,
+        "max_subtitle_segment_seconds": None, "voice_cluster_gap": None, "bilingual_format": None,
+        "subtitle_preset": None, "overlap_policy": None, "min_subtitle_duration": None, "glossary": None,
+        "player_alias": [], "demo": "outside.dem", "from_stage": None, "to_stage": "prepare_input",
+    })()
+
+    assert commands.run_pipeline(args) == 0
+    assert seen["kwargs"]["demo_asset_ref"] == ref
+    assert seen["kwargs"]["demo_asset_display_name"] == "match.dem"
+    assert seen["kwargs"]["demo_assets"] is service
+    assert seen["run"] == (None, {"from_stage": None, "to_stage": StageName.PREPARE_INPUT})
+    assert "已导入到当前工作区素材库" in capsys.readouterr().out
+
+
+def test_main_renders_demo_asset_error_without_traceback(monkeypatch, tmp_path, capsys):
+    from cs2pov.cli import commands
+
+    runtime = runtime_for(tmp_path)
+    monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        commands,
+        "prepare_demo_asset",
+        lambda source, runtime: (_ for _ in ()).throw(
+            DemoAssetUseCaseError("demo_asset_not_found", "当前工作区找不到 Demo。", "请切回原工作区。")
+        ),
+    )
+
+    assert commands.main(["run", "outside.dem"]) == 1
+    output = capsys.readouterr().out
+    assert "demo_asset_not_found" in output
+    assert "请切回原工作区" in output
+    assert "Traceback" not in output
+
+
+def test_resume_managed_job_preflights_before_engine_creation(monkeypatch, tmp_path):
+    from cs2pov.cli import job_ops
+
+    runtime = runtime_for(tmp_path)
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="managed-resume")
+    manifest = PipelineManifest.create(store.job_dir.name, PipelineConfig())
+    ref = make_ref()
+    manifest.bind_demo_asset(ref, "match.dem")
+    manifest.save(store.manifest_path)
+    events = []
+
+    class Service:
+        bound_runtime = runtime
+        def resolve_asset(self, value):
+            events.append("resolve")
+            return tmp_path / "source.dem"
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            events.append("engine")
+            self.store = store
+        def run(self, value=None, **kwargs):
+            events.append(("run", value))
+
+    monkeypatch.setattr(job_ops.DemoAssetApplicationService, "for_runtime", lambda value: Service())
+    monkeypatch.setattr(job_ops, "PipelineEngine", Engine)
+    job_ops.resume_job(store.job_dir, StageName.PREPARE_INPUT, runtime=runtime)
+
+    assert events == ["resolve", "engine", ("run", None)]
+
+
+def test_resume_managed_late_stage_does_not_preflight_missing_asset(monkeypatch, tmp_path):
+    from cs2pov.cli import job_ops
+
+    runtime = runtime_for(tmp_path)
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="managed-late-resume")
+    manifest = PipelineManifest.create(store.job_dir.name, PipelineConfig())
+    manifest.bind_demo_asset(make_ref(), "match.dem")
+    manifest.save(store.manifest_path)
+    calls = []
+
+    class Service:
+        bound_runtime = runtime
+        def resolve_asset(self, value):
+            calls.append("resolve")
+            raise DemoAssetUseCaseError("demo_asset_not_found", "找不到", "切回")
+
+    class Engine:
+        def __init__(self, *args, **kwargs):
+            self.store = store
+        def run(self, value=None, **kwargs):
+            calls.append(("run", value))
+
+    monkeypatch.setattr(job_ops.DemoAssetApplicationService, "for_runtime", lambda value: Service())
+    monkeypatch.setattr(job_ops, "PipelineEngine", Engine)
+    job_ops.resume_job(store.job_dir, StageName.TRANSLATE, runtime=runtime)
+
+    assert calls == [("run", None)]
+
+
+def test_resume_invalid_demo_asset_manifest_uses_stable_error_before_engine(monkeypatch, tmp_path):
+    from cs2pov.cli import job_ops
+
+    runtime = runtime_for(tmp_path)
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="invalid-resume")
+    manifest = PipelineManifest.create(store.job_dir.name, PipelineConfig())
+    raw = manifest.to_public_dict()
+    raw["demo"] = {"input_mode": "demo_asset", "asset_id": "bad"}
+    store.manifest_path.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(job_ops, "PipelineEngine", lambda *args, **kwargs: pytest.fail("engine must not be created"))
+
+    with pytest.raises(JobRuntimeError) as caught:
+        job_ops.resume_job(store.job_dir, StageName.PREPARE_INPUT, runtime=runtime)
+
+    assert caught.value.code == "demo_asset_manifest_invalid"
+
+
 def test_managed_engine_refuses_to_implicitly_migrate_old_manifest(tmp_path):
     runtime = runtime_for(tmp_path)
     store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="old-job")

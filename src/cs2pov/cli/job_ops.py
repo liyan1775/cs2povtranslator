@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from cs2pov.domain.models import PipelineConfig, StageName, StageStatus
+from cs2pov.domain.models import PipelineConfig, StageName, StageStatus, STAGE_ORDER
 from cs2pov.domain.subtitle import policy_from_preset
 from cs2pov.pipeline.engine import PipelineEngine
 from cs2pov.pipeline.manifest import PipelineManifest, REDACTED_SECRET
@@ -14,7 +14,9 @@ from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.config_store import load_config, mask_config_for_display
 from cs2pov.storage.jsonl import read_json, read_jsonl, write_json
 from cs2pov.application.workspace_runtime import WorkspaceRuntime, WorkspaceRuntimeError, WorkspaceRuntimeResolver
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
+from cs2pov.application.demo_assets import DemoAssetApplicationService
 
 
 def resolve_job_dir(path: Path | None) -> Path | None:
@@ -299,19 +301,45 @@ def retranslate_job(
 def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = None, demo_path: Path | None = None, *, runtime: WorkspaceRuntime | None = None) -> Path:
     job_dir, runtime = require_write_job(path, runtime)
     store = ArtifactStore(job_dir)
-    manifest = PipelineManifest.load(store.manifest_path)
+    try:
+        manifest = PipelineManifest.load(store.manifest_path)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise JobRuntimeError(
+            "demo_asset_manifest_invalid",
+            "Job manifest 无效，无法恢复。",
+            "请检查 manifest.json 是否完整，或从旧 Job 输入重新开始。",
+        ) from exc
     cfg = _merge_runtime_config(manifest.config)
     cfg.output_root = str(job_dir.parent)
     cfg.job_id = job_dir.name
     manifest.config = cfg
     # Keep the historical Job in place, but bind model/audio scratch to the
     # active workspace. Do not infer a legacy-output warning here.
-    from cs2pov.application.job_runtime import JobRuntime
     policy = JobRuntime(runtime, job_dir.parent.resolve(), cfg, legacy_external_output=False)
-    engine = PipelineEngine(cfg, store=store, manifest=manifest, runtime=runtime, job_runtime=policy)
-    engine.demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage)
-    input_path = engine.demo_path or Path(".")
-    engine.run(input_path, from_stage=from_stage, to_stage=to_stage)
+    asset_ref = manifest.demo_asset_ref()
+    if asset_ref is not None:
+        if demo_path is not None:
+            print("提示：此 Job 已绑定工作区 DemoAsset，--demo 不会改变引用；如需替换请先显式导入相同素材。")
+        asset_display_name = manifest.demo_asset_display_name()
+        assets = DemoAssetApplicationService.for_runtime(runtime)
+        if _resume_requires_demo(from_stage, to_stage):
+            assets.resolve_asset(asset_ref)
+        engine = PipelineEngine(
+            cfg,
+            store=store,
+            manifest=manifest,
+            runtime=runtime,
+            job_runtime=policy,
+            demo_asset_ref=asset_ref,
+            demo_asset_display_name=asset_display_name,
+            demo_assets=assets,
+        )
+        engine.run(None, from_stage=from_stage, to_stage=to_stage)
+    else:
+        engine = PipelineEngine(cfg, store=store, manifest=manifest, runtime=runtime, job_runtime=policy)
+        engine.demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage, to_stage)
+        input_path = engine.demo_path or Path(".")
+        engine.run(input_path, from_stage=from_stage, to_stage=to_stage)
     return store.job_dir
 
 
@@ -339,7 +367,13 @@ def _merge_runtime_config(cfg: PipelineConfig) -> PipelineConfig:
     return cfg
 
 
-def _resolve_demo_for_resume(store: ArtifactStore, manifest: PipelineManifest, demo_path: Path | None, from_stage: StageName) -> Path | None:
+def _resolve_demo_for_resume(
+    store: ArtifactStore,
+    manifest: PipelineManifest,
+    demo_path: Path | None,
+    from_stage: StageName,
+    to_stage: StageName | None = None,
+) -> Path | None:
     if demo_path:
         return demo_path.expanduser().resolve()
     artifact = manifest.artifacts.get("demo_path")
@@ -354,9 +388,16 @@ def _resolve_demo_for_resume(store: ArtifactStore, manifest: PipelineManifest, d
     if candidates:
         return candidates[0]
     # Late stages do not need the demo file.
-    if from_stage in {StageName.TRANSLATE, StageName.EXPORT_SUBTITLES}:
+    if not _resume_requires_demo(from_stage, to_stage):
         return None
     raise FileNotFoundError("恢复到该阶段需要原始 .dem/.dem.zst，但 Job input/ 中没有找到；请用 --demo 指定。")
+
+
+def _resume_requires_demo(from_stage: StageName, to_stage: StageName | None = None) -> bool:
+    stages = STAGE_ORDER[STAGE_ORDER.index(from_stage):]
+    if to_stage is not None:
+        stages = stages[: stages.index(to_stage) + 1]
+    return any(stage in {StageName.PREPARE_INPUT, StageName.INSPECT_DEMO, StageName.EXTRACT_VOICE, StageName.PARSE_ROUNDS} for stage in stages)
 
 
 def _update_manifest_config_and_artifacts(store: ArtifactStore, cfg: PipelineConfig, outputs: dict[str, str]) -> None:
