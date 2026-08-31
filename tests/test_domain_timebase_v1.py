@@ -167,3 +167,26 @@ def test_canonical_json_rejects_non_string_keys():
 
     with pytest.raises(DomainSchemaError):
         canonical_json_bytes({1: "one", "1": "string"})
+
+
+def test_public_time_helpers_reject_bad_inputs_with_domain_error():
+    from cs2pov.domain.timebase import (
+        MappedTime,
+        validate_anchor_sequence,
+        to_export_milliseconds,
+    )
+
+    for call in (
+        lambda: MappedTime(123, (), 0),
+        lambda: validate_anchor_sequence(("bad",)),
+        lambda: to_export_milliseconds("bad"),
+    ):
+        with pytest.raises(DomainSchemaError):
+            call()
+
+
+def test_mapped_segments_must_be_ordered_and_exact_round_rejects_anchor_uncertainty():
+    from cs2pov.domain.timebase import MappedTime
+
+    with pytest.raises(DomainSchemaError):
+        MappedTime((TimeRange(2, 4), TimeRange(3, 5)), ("a", "b"), 0)

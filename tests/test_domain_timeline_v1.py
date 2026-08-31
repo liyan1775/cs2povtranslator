@@ -250,3 +250,15 @@ def test_direct_collections_are_defensively_tupled_and_types_validated():
     assert isinstance(d.players, tuple)
     with pytest.raises(DomainSchemaError):
         DemoDescriptor("a" * 64, "de_mirage", None, 64, 1, ["bad"])
+
+
+def test_non_array_public_inputs_raise_domain_error():
+    for call in (
+        lambda: DemoDescriptor.from_dict({"players": 123}),
+        lambda: RoundCollection.from_dict({"rounds": 123}),
+        lambda: DemoDescriptor("a" * 64, "de_mirage", None, 64, 1, 123),
+        lambda: RoundCollection(123),
+        lambda: DemoTimeline(_descriptor(), RoundCollection(()), 123),
+    ):
+        with pytest.raises(DomainSchemaError):
+            call()

@@ -2,7 +2,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from .errors import DomainSchemaError
-from .schema import *
+from .schema import (
+    MAX_COUNT,
+    MAX_DEMO_TIME_US,
+    MAX_SOURCE_POSITION,
+    require_current_schema,
+    require_exact_keys,
+    require_identifier,
+    require_int,
+    require_mapping,
+    require_optional_int,
+    require_optional_str,
+    require_sha256,
+    require_str,
+    reject_private_data,
+)
 from .timebase import (
     TimeRange,
     TimeAnchor,
@@ -76,6 +90,8 @@ class DemoDescriptor:
     players: tuple[PlayerSnapshot, ...]
 
     def __post_init__(self):
+        if not isinstance(self.players, (tuple, list)):
+            bad("domain_field_invalid")
         if not isinstance(self.players, tuple):
             object.__setattr__(self, "players", tuple(self.players))
         if any(not isinstance(p, PlayerSnapshot) for p in self.players):
@@ -245,6 +261,8 @@ class RoundCollection:
     rounds: tuple[Round, ...]
 
     def __post_init__(self):
+        if not isinstance(self.rounds, (tuple, list)):
+            bad("domain_field_invalid")
         if not isinstance(self.rounds, tuple):
             object.__setattr__(self, "rounds", tuple(self.rounds))
         if any(not isinstance(r, Round) for r in self.rounds):
@@ -287,6 +305,8 @@ class DemoTimeline:
             self.rounds, RoundCollection
         ):
             bad("domain_field_invalid")
+        if not isinstance(self.anchors, (tuple, list)):
+            bad("domain_field_invalid")
         if not isinstance(self.anchors, tuple):
             object.__setattr__(self, "anchors", tuple(self.anchors))
         if any(not isinstance(a, TimeAnchor) for a in self.anchors):
@@ -322,11 +342,14 @@ class DemoTimeline:
                 (mapped.segments[0].start_us, r.time_range.start_us),
                 (mapped.segments[-1].end_us, r.time_range.end_us),
             ):
-                if r.confidence is RoundBoundaryConfidence.EXACT and actual != declared:
+                if r.confidence is RoundBoundaryConfidence.EXACT and (
+                    mapped.uncertainty_us != 0 or actual != declared
+                ):
                     bad("round_reference_invalid")
                 if (
                     r.confidence is not RoundBoundaryConfidence.EXACT
-                    and abs(actual - declared) > r.boundary_uncertainty_us
+                    and abs(actual - declared) + mapped.uncertainty_us
+                    > r.boundary_uncertainty_us
                 ):
                     bad("round_reference_invalid")
 

@@ -3,7 +3,17 @@ from dataclasses import dataclass
 from enum import Enum
 from math import ceil
 from .errors import DomainSchemaError
-from .schema import *
+from .schema import (
+    MAX_DEMO_TIME_US,
+    MAX_SOURCE_POSITION,
+    require_identifier,
+    require_int,
+    require_mapping,
+    require_current_schema,
+    require_exact_keys,
+    require_str,
+    reject_private_data,
+)
 
 
 def _bad(code, path="time", msg="时间值无效。"):
@@ -158,8 +168,12 @@ class TimeAnchor:
 
 
 def validate_anchor_sequence(anchors):
+    if not isinstance(anchors, (tuple, list)):
+        _bad("domain_field_invalid")
     groups = {}
     for a in anchors:
+        if not isinstance(a, TimeAnchor):
+            _bad("domain_field_invalid")
         groups.setdefault((a.source_clock, a.source_stream_id), []).append(a)
     for group in groups.values():
         ordered = sorted(group, key=lambda a: a.source_start)
@@ -182,6 +196,10 @@ class MappedTime:
     uncertainty_us: int
 
     def __post_init__(self):
+        if not isinstance(self.segments, (tuple, list)) or not isinstance(
+            self.anchor_ids, (tuple, list)
+        ):
+            _bad("domain_field_invalid")
         if not isinstance(self.segments, tuple):
             object.__setattr__(self, "segments", tuple(self.segments))
         if not isinstance(self.anchor_ids, tuple):
@@ -189,6 +207,8 @@ class MappedTime:
         if not self.segments or len(self.segments) != len(self.anchor_ids):
             _bad("domain_field_invalid")
         if any(not isinstance(x, TimeRange) for x in self.segments):
+            _bad("domain_field_invalid")
+        if any(a.end_us > b.start_us for a, b in zip(self.segments, self.segments[1:])):
             _bad("domain_field_invalid")
         if any(not isinstance(x, str) for x in self.anchor_ids):
             _bad("domain_field_invalid")
@@ -261,4 +281,6 @@ def demo_to_round_local_us(demo_time_us, round_range):
 
 
 def to_export_milliseconds(time_range):
+    if not isinstance(time_range, TimeRange):
+        _bad("domain_field_invalid")
     return (time_range.start_us // 1000, _ceildiv(time_range.end_us, 1000))
