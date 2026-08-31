@@ -12,7 +12,7 @@ v0.8.6 新增玩家识别和字幕显示名功能，用来解决 CS2 POV demo �
 处理 demo 到生成 Job 后，先查看玩家列表：
 
 ```powershell
-cs2pov players list output
+cs2pov players list
 ```
 
 输出会展示：
@@ -35,13 +35,13 @@ Ebule = donk
 设置字幕显示名：
 
 ```powershell
-cs2pov players alias output --name Ebule --as donk
+cs2pov players alias --name Ebule --as donk
 ```
 
 重新导出字幕即可生效：
 
 ```powershell
-cs2pov export output --preset editing
+cs2pov export --preset editing
 ```
 
 不需要重跑 Whisper，也不需要重新调用 LLM。
@@ -51,7 +51,7 @@ cs2pov export output --preset editing
 如果 demo 里有重名，建议用 SteamID：
 
 ```powershell
-cs2pov players alias output --steamid 7656119xxxxxxxxxx --as donk
+cs2pov players alias --steamid 7656119xxxxxxxxxx --as donk
 ```
 
 ## 清除别名
@@ -59,13 +59,13 @@ cs2pov players alias output --steamid 7656119xxxxxxxxxx --as donk
 清除单个玩家：
 
 ```powershell
-cs2pov players clear-alias output --name Ebule
+cs2pov players clear-alias --name Ebule
 ```
 
 清除全部：
 
 ```powershell
-cs2pov players clear-alias output --all
+cs2pov players clear-alias --all
 ```
 
 ## 成片字幕效果

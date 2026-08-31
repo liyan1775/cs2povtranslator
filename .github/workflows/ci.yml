@@ -65,6 +65,9 @@ jobs:
       - name: Exercise workspace model runtime end to end
         run: python scripts/check_workspace_model_runtime_e2e.py
 
+      - name: Exercise workspace Job runtime end to end
+        run: python scripts/check_workspace_job_runtime_e2e.py
+
       - name: Compile Python sources
         run: python -m compileall -q src tests scripts
 

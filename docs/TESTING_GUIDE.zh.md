@@ -20,11 +20,11 @@ cs2pov config show
 
 ## 真实 demo smoke
 
-建议先只跑前 3 个含语音回合：
+先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：
 
 ```powershell
+cs2pov workspace init "D:\cs2pov-workspace"
 cs2pov run "D:\demos\match.dem.zst" `
-  --output output_smoke `
   --whisper-model tiny `
   --team 2 `
   --max-rounds 3 `
@@ -43,16 +43,16 @@ cs2pov run "D:\demos\match.dem.zst" `
 不需要重新跑 Whisper/LLM：
 
 ```powershell
-cs2pov export output_smoke --preset editing
-cs2pov export output_smoke --preset review
-cs2pov export output_smoke --format compact
-cs2pov export output_smoke --format zh_clean
+cs2pov export --preset editing
+cs2pov export --preset review
+cs2pov export --format compact
+cs2pov export --format zh_clean
 ```
 
 ## 反馈包
 
 ```powershell
-cs2pov feedback output_smoke
+cs2pov feedback
 ```
 
 反馈包应包含：
@@ -89,4 +89,15 @@ cs2pov feedback output_smoke
 
 ```powershell
 python scripts/check_workspace_model_runtime_e2e.py
+```
+
+# 工作区 Job runtime E2E
+
+使用真实 Python 子进程和合成 `.dem`（只运行到 `prepare_input`），验证默认
+Job 落在工作区 `jobs/`、Demo 被复制到 Job/input、显式 `--output` 的兼容
+警告与 manifest 标志，以及损坏工作区时在创建 Job/复制 Demo 前稳定失败且
+旁路目录和已有文件不变：
+
+```powershell
+python scripts/check_workspace_job_runtime_e2e.py
 ```

@@ -66,11 +66,23 @@ cs2pov setup-check
 cs2pov-wizard
 ```
 
+01D-A/01D-B 的工作区 runtime 已接入默认流程。先初始化或选择工作区，
+再运行 demo；正常 Job 自动写入当前工作区的 `jobs/`，模型缓存和临时音频
+也跟随该工作区：
+
+```powershell
+cs2pov workspace init "D:\cs2pov-workspace"
+cs2pov run "D:\demos\match.dem.zst"
+```
+
+普通用户不需要选择输出根。`--output` 只用于显式的旧版外部输出兼容模式，
+会显示警告；它不会自动迁移已有 Job。旧 Job 可以原地查看和修改，但任何
+写操作都要求当前工作区健康。
+
 处理一个 demo：
 
 ```powershell
 cs2pov run "D:\demos\match.dem.zst" `
-  --output output `
   --whisper-model tiny `
   --team 2 `
   --max-rounds 3 `
@@ -100,30 +112,30 @@ cs2pov doctor
 查看工程状态：
 
 ```powershell
-cs2pov inspect-job output
+cs2pov inspect-job
 ```
 
 解释输出文件：
 
 ```powershell
-cs2pov explain-output output
+cs2pov explain-output
 ```
 
 确认玩家身份并设置字幕显示名：
 
 ```powershell
-cs2pov players list output
-cs2pov players alias output --name Ebule --as donk
-cs2pov export output --preset editing
+cs2pov players list
+cs2pov players alias --name Ebule --as donk
+cs2pov export --preset editing
 ```
 
 重新导出字幕，不重新转录/翻译：
 
 ```powershell
-cs2pov export output --preset editing
-cs2pov export output --preset review
-cs2pov export output --format bilingual
-cs2pov export output --format zh_clean
+cs2pov export --preset editing
+cs2pov export --preset review
+cs2pov export --format bilingual
+cs2pov export --format zh_clean
 ```
 
 生成按回合 Comms Overlay 通讯流素材：
@@ -131,16 +143,16 @@ cs2pov export output --format zh_clean
 ```powershell
 # 1. 先从已有 Job 的翻译结果生成可编辑中间产物
 #    POV 通常只需要某一队 5 个人，建议显式写 --team 2/3。
-cs2pov comms build-review output --rounds 1-3 --team 2 --export-scope pov_team
+cs2pov comms build-review --rounds 1-3 --team 2 --export-scope pov_team
 
 # 2. 人工检查/修改 review/comms_rounds/round_XX.yaml
 
 # 3. 只渲染指定回合的剪映素材
 #    v0.9.8 默认：右侧贴边、无大面板、浮动消息卡片、轻量淡入。
-cs2pov comms render output --rounds 1-3 --formats preview,green
+cs2pov comms render --rounds 1-3 --formats preview,green
 
 # 可选：同时尝试透明通道 MOV，需本地测试剪映兼容性
-cs2pov comms render output --rounds 1 --formats preview,green,alpha
+cs2pov comms render --rounds 1 --formats preview,green,alpha
 
 # 如果想回到 v0.9.0 的大外层面板，可加：--classic-panel
 ```
@@ -148,21 +160,21 @@ cs2pov comms render output --rounds 1 --formats preview,green,alpha
 重新翻译，不重新跑 Whisper：
 
 ```powershell
-cs2pov retranslate output
-cs2pov retranslate output --dry-run
+cs2pov retranslate
+cs2pov retranslate --dry-run
 ```
 
 从失败阶段恢复：
 
 ```powershell
-cs2pov resume output --from-stage translate
-cs2pov resume output --from-stage export_subtitles
+cs2pov resume --from-stage translate
+cs2pov resume --from-stage export_subtitles
 ```
 
 打反馈包：
 
 ```powershell
-cs2pov feedback output
+cs2pov feedback
 ```
 
 查看词典：
@@ -170,12 +182,11 @@ cs2pov feedback output
 ```powershell
 cs2pov models recommend
 cs2pov models list
-cs2pov models set-cache "D:\AIModels\huggingface"
 
 cs2pov glossary list --map de_mirage --scope all
 cs2pov glossary list --map de_dust2 --scope all
 cs2pov glossary list --map de_anubis --scope all
-cs2pov glossary check output
+cs2pov glossary check
 ```
 
 ---
@@ -185,7 +196,7 @@ cs2pov glossary check output
 一个 Job 大致长这样：
 
 ```text
-output/
+jobs/
   20260610_161929_de_mirage/
     final/       # 最推荐给剪辑软件使用：SRT、Comms Feed、overlay 素材
     review/      # 校对 ASR / 翻译 / Comms YAML 用
@@ -257,6 +268,6 @@ v0.9.x  Comms Overlay：按回合通讯流、人工校对中间产物、剪映 o
 内部仍保留 `show_at_seconds`，用于控制每条通讯在 overlay 第几秒出现。需要实验显示时间时可以手动打开：
 
 ```powershell
-cs2pov comms render output --rounds 1 --time-display elapsed
-cs2pov comms render output --rounds 1 --time-display round-clock --freeze-seconds 5
+cs2pov comms render --rounds 1 --time-display elapsed
+cs2pov comms render --rounds 1 --time-display round-clock --freeze-seconds 5
 ```

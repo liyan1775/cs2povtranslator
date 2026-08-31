@@ -5,8 +5,8 @@ v0.8.0 新增 `benchmark-asr`，用于在同一个真实 demo 的前 N 个含语
 示例：
 
 ```powershell
+cs2pov workspace init "D:\cs2pov-workspace"
 cs2pov benchmark-asr "D:\demos\match.dem.zst" `
-  --output output_asr_benchmark `
   --team 2 `
   --max-rounds 3 `
   --models base,small,medium
@@ -15,8 +15,11 @@ cs2pov benchmark-asr "D:\demos\match.dem.zst" `
 输出：
 
 ```text
-output_asr_benchmark/asr_benchmark.json
+jobs/asr_benchmark_<timestamp>.json
 ```
+
+每个模型都是当前工作区 `jobs/` 下的顶层 Job。显式 `--output` 仅用于临时
+旧版外部输出兼容分支，会显示警告；模型缓存和临时音频仍跟随当前工作区。
 
 请不要只看耗时，也要打开各个 benchmark Job 的 `final/*.srt` 对比字幕质量、术语识别、幻觉过滤和时间轴。
 

@@ -31,4 +31,4 @@ cs2pov models test --model small --local-only
 旧版本缓存只读列为迁移候选，不会自动移动、复制或删除。可运行
 `python scripts/check_workspace_model_runtime_e2e.py` 验证隔离的真实子进程缓存绑定。
 
-`run`、Job、Demo、临时音频及向导的工作区迁移仍属于 Luna-01D-B，尚未完成。
+`run`、Job、Demo、临时音频及向导均已接入工作区 runtime；默认 Job 写入当前工作区 `jobs/`，旧 Job 可原地读取/修改但写操作需要健康工作区。

@@ -11,10 +11,10 @@
 - `team_2.bilingual.srt`：双语对照。
 - `team_2.zh.srt`：只中文字幕。
 
-也可以运行：
+也可以在已选择工作区后运行（路径可省略）：
 
 ```powershell
-cs2pov explain-output output
+cs2pov explain-output
 ```
 
 ## 程序失败了怎么办？
@@ -22,14 +22,14 @@ cs2pov explain-output output
 先运行：
 
 ```powershell
-cs2pov inspect-job output
+cs2pov inspect-job
 ```
 
 再根据提示选择：
 
 ```powershell
-cs2pov resume output --from-stage translate
-cs2pov feedback output
+cs2pov resume --from-stage translate
+cs2pov feedback
 ```
 
 ## 我担心 API key 泄露怎么办？

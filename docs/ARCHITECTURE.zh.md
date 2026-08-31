@@ -54,7 +54,7 @@ src/cs2pov/
 一个 Job 目录就是一个字幕工程。
 
 ```text
-output/20260610_161929_de_mirage/
+jobs/20260610_161929_de_mirage/
   input/                  # demo 副本或解压结果
   artifacts/              # 可复跑的中间产物
   final/                  # 最推荐给剪辑软件使用的字幕
@@ -90,4 +90,4 @@ CS2 队内语音很短、碎、上下文强。逐句翻译容易误译；按回�
 
 # 工作区 runtime 与模型边界
 
-已实现的 `WorkspaceRuntime` 为模型扫描、加载和 Hugging Face 环境覆盖提供不可变的工作区路径；旧配置与环境缓存仅作为只读迁移候选。run、Job、Demo、output、临时音频和向导迁移仍由 Luna-01D-B 接入，当前尚未完成。
+`WorkspaceRuntime` 已由 Luna-01D-A/01D-B 接入模型扫描、加载、run、Job、Demo、向导、输出和临时音频路径。默认 Job 使用当前工作区 `jobs/`，模型缓存与临时音频跟随工作区；旧配置与环境缓存仅作为只读迁移候选。显式 `--output` 是带警告的旧版兼容选项，旧 Job 可原地读取和修改，但写操作需要健康工作区。理解翻译、Web UI、录制和正式迁移不属于当前实现范围。
