@@ -19,7 +19,7 @@
 - Source clocks retain integer ticks/samples/frames and map to Demo time only through `TimeAnchor`; compact audio gaps must remain observable.
 - New identifiers are safe single path segments matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$` and may not equal `.` or `..`.
 - New domain values are immutable (`@dataclass(frozen=True, slots=True)`) and serialize to deterministic JSON-compatible dictionaries.
-- Job/domain objects never store API keys, authorization headers, passwords, external absolute paths, or user-home paths.
+- Job/domain objects never store API keys, authorization headers, passwords, external absolute paths, URLs, or user-home paths; all direct constructors and `from_dict` factories enforce the same production privacy helper.
 - No new runtime dependency is allowed in 02A.
 - All tests must work without CS2, GPU, FFmpeg, Whisper, a real Demo, network access, or a paid model API.
 - CI compatibility remains Ubuntu Python 3.11/3.12/3.13 and Windows Python 3.12, including repository paths containing Chinese characters and spaces.
@@ -73,7 +73,7 @@ Documentation updates:
 - Produces: `DomainSchemaError(code: str, message: str, action: str, path: str | None = None)`.
 - Produces: `CURRENT_DOMAIN_SCHEMA_VERSION: Final[int] = 1`.
 - Produces: `MAX_DEMO_TIME_US = 2_592_000_000_000`, `MAX_SOURCE_POSITION = 9_223_372_036_854_775_807`, and `MAX_COUNT = 2_147_483_647`.
-- Produces: `require_mapping`, `require_exact_keys`, `require_current_schema`, `require_int`, `require_optional_int`, `require_str`, `require_optional_str`, `require_identifier`, `require_sha256`, `require_probability`, `require_string_list`, and `reject_secret_keys`.
+- Produces: `require_mapping`, `require_exact_keys`, `require_current_schema`, `require_int`, `require_optional_int`, `require_str`, `require_optional_str`, `require_identifier`, `require_sha256`, `require_probability`, `require_string_list`, `reject_secret_keys`, and `reject_private_data`.
 - Produces: `canonical_json_bytes(value: object) -> bytes` and `content_fingerprint(value: object) -> str`.
 - All later `from_dict` factories depend on these exact helpers and error codes.
 
@@ -92,6 +92,7 @@ def require_sha256(value: object, path: str) -> str
 def require_probability(value: object, path: str) -> float
 def require_string_list(value: object, path: str, *, allow_empty: bool = True) -> tuple[str, ...]
 def reject_secret_keys(value: object, path: str) -> None
+def reject_private_data(value: object, path: str) -> None
 ```
 
 - [ ] **Step 1: Write failing tests for error shape and strict scalar validation**
@@ -108,6 +109,7 @@ from cs2pov.domain.fingerprint import canonical_json_bytes, content_fingerprint
 from cs2pov.domain.schema import (
     CURRENT_DOMAIN_SCHEMA_VERSION,
     MAX_DEMO_TIME_US,
+    reject_private_data,
     reject_secret_keys,
     require_current_schema,
     require_identifier,
@@ -170,13 +172,32 @@ def test_secret_key_scan_rejects_nested_credentials_but_not_max_tokens() -> None
 
     for payload in (
         {"api_key": "secret"},
+        {"x-api-key": "secret"},
         {"headers": {"authorization": "Bearer secret"}},
+        {"headers": {"proxy-authorization": "Basic secret"}},
         {"credentials": [{"access_token": "secret"}]},
+        {"refresh_token": "secret"},
+        {"client_secret": "secret"},
         {"password": "secret"},
     ):
         with pytest.raises(DomainSchemaError) as caught:
             reject_secret_keys(payload, "parameters")
         assert caught.value.code == "domain_secret_forbidden"
+
+
+def test_durable_privacy_scan_rejects_absolute_locations_and_urls() -> None:
+    reject_private_data({"text": "B, B, B", "model": "org/model-name"}, "document")
+
+    for value in (
+        r"C:\Users\private\demo.dem",
+        "/home/private/demo.dem",
+        r"\\server\share\demo.dem",
+        "https://private.example/api",
+        "~/private/demo.dem",
+    ):
+        with pytest.raises(DomainSchemaError) as caught:
+            reject_private_data({"value": value}, "document")
+        assert caught.value.code == "domain_private_data_forbidden"
 
 
 def test_demo_time_has_a_bounded_current_version_range() -> None:
@@ -221,12 +242,18 @@ CURRENT_DOMAIN_SCHEMA_VERSION = 1
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_SECRET_KEYS = frozenset({
-    "api_key", "api-key", "authorization", "access_token", "secret", "password"
+    "api_key", "api-key", "x-api-key", "authorization", "proxy-authorization",
+    "access_token", "refresh_token", "client_secret", "secret", "password"
+})
+FORBIDDEN_DURABLE_KEYS = FORBIDDEN_SECRET_KEYS | frozenset({
+    "path", "file_path", "directory_path", "steamid", "steam_id"
 })
 WINDOWS_RESERVED_STEMS = frozenset({"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))})
 ```
 
 `require_exact_keys(data, required, optional, path)` must reject both missing and unknown keys with `domain_schema_invalid`. `require_current_schema` must convert missing, boolean, non-integer, and non-1 versions into `domain_schema_unsupported`. `reject_secret_keys` must recursively inspect mapping keys and list elements, compare keys case-insensitively, and never reject the legitimate key `max_tokens`.
+
+`reject_private_data` is the reusable production boundary for every durable object. It recursively applies the expanded secret-key scan, rejects the non-secret forbidden metadata keys above, and rejects string values that begin with a Windows drive-root, UNC root, Unix root, `~/`/`~\\`, or a URI scheme followed by `://`. Direct dataclass construction validates its string-bearing fields in `__post_init__`; every `from_dict` validates the complete incoming mapping before parsing. The contract replay imports this helper instead of maintaining a fixture-only privacy implementation.
 
 `require_identifier` must reject Windows device stems case-insensitively even when followed by an extension. `canonical_json_bytes` uses `json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")`; translate unsupported values and non-finite numbers to `DomainSchemaError("domain_field_invalid", ...)`. `content_fingerprint` is always `hashlib.sha256(canonical_json_bytes(value)).hexdigest()` and never accepts a caller-supplied digest.
 
@@ -275,6 +302,7 @@ from __future__ import annotations
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.schema import MAX_DEMO_TIME_US
 from cs2pov.domain.timebase import (
     SourceClock,
     TimeAnchor,
@@ -421,6 +449,16 @@ def test_anchor_round_trip_uses_exact_current_schema() -> None:
     assert caught.value.code == "domain_schema_invalid"
 
 
+def test_anchor_uncertainty_is_bounded_like_all_demo_time_values() -> None:
+    with pytest.raises(DomainSchemaError) as caught:
+        TimeAnchor(
+            "anchor-too-uncertain", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha",
+            0, 24_000, TimeRange(10_000_000, 11_000_000),
+            MAX_DEMO_TIME_US + 1, "synthetic-voice-extractor-v1",
+        )
+    assert caught.value.code == "domain_field_invalid"
+
+
 def test_round_local_conversion_and_srt_rounding_have_one_policy() -> None:
     round_range = TimeRange(10_000_000, 20_000_000)
     assert demo_to_round_local_us(10_750_000, round_range) == 750_000
@@ -445,8 +483,9 @@ Expected: collection fails because `cs2pov.domain.timebase` does not exist.
 
 Implement these policies in `timebase.py`:
 
+- every direct constructor validates its string-bearing fields with `reject_private_data`, and every `from_dict` validates the whole incoming mapping before parsing;
 - `TimeRange` validates both values through `require_int(value, path, minimum=0, maximum=MAX_DEMO_TIME_US)` and requires `end_us > start_us`.
-- `TimeAnchor` bounds source positions by `MAX_SOURCE_POSITION`, requires a non-empty source span, one safe `source_stream_id`, non-negative uncertainty, and a safe identifier for provenance so local paths cannot be stored there.
+- `TimeAnchor` bounds source positions by `MAX_SOURCE_POSITION`, requires a non-empty source span, bounds uncertainty from zero through `MAX_DEMO_TIME_US`, and requires safe identifiers for `source_stream_id` and provenance so local paths cannot be stored there.
 - Source overlap is mapped linearly using integer arithmetic. Start boundaries use floor division; end boundaries use ceiling division, so the mapped range never becomes shorter through rounding.
 - `map_source_range` filters by both clock and stream, sorts anchors by `source_start`, rejects overlapping source anchors, requires the full requested source range to be covered, returns each discontinuous Demo segment separately, and never silently converts gaps into continuous time.
 - `validate_anchor_sequence` groups by `(source_clock, source_stream_id)` and rejects source overlap, mapped Demo overlap, and mapped Demo reversal; both `map_source_range` and `DemoTimeline` call it.
@@ -554,6 +593,18 @@ def test_demo_and_round_documents_round_trip_without_float_time() -> None:
     assert "start_time" not in str(round_payload)
     assert DemoDescriptor.from_dict(demo_payload) == descriptor
     assert RoundCollection.from_dict(round_payload) == rounds
+
+
+def test_demo_rejects_private_absolute_location_in_direct_and_decoded_values() -> None:
+    with pytest.raises(DomainSchemaError) as caught:
+        DemoDescriptor("a" * 64, "de_mirage", r"C:\private\demo.dem", 64, 1, ())
+    assert caught.value.code == "domain_private_data_forbidden"
+
+    payload = _descriptor().to_dict()
+    payload["server_name"] = "/home/private/demo.dem"
+    with pytest.raises(DomainSchemaError) as caught:
+        DemoDescriptor.from_dict(payload)
+    assert caught.value.code == "domain_private_data_forbidden"
 
 
 def test_round_ids_and_player_ids_are_unique() -> None:
@@ -682,6 +733,7 @@ Expected: collection fails because `cs2pov.domain.timeline` does not exist.
 
 Implement `timeline.py` so that:
 
+- direct constructors and `from_dict` factories apply the Task 1 production privacy boundary;
 - every non-hash domain identifier uses `require_identifier`;
 - every `demo_asset_id` uses `require_sha256`, matching the existing content-addressed `DemoAssetRef` identity;
 - tick-rate numerator and denominator are positive integers and remain rational, never a float;
@@ -793,6 +845,12 @@ def test_configuration_rejects_secret_bearing_parameters() -> None:
     assert caught.value.code == "domain_secret_forbidden"
 
 
+def test_configuration_rejects_private_url_values() -> None:
+    with pytest.raises(DomainSchemaError) as caught:
+        _configuration({"callback": "https://private.example/hook"})
+    assert caught.value.code == "domain_private_data_forbidden"
+
+
 def test_configuration_rejects_non_json_values_and_tampered_fingerprint() -> None:
     with pytest.raises(DomainSchemaError) as caught:
         _configuration({"temperature": object()})
@@ -825,6 +883,22 @@ def test_rounds_share_configuration_but_have_distinct_invocation_records() -> No
     assert round_one.configuration_snapshot_id == round_two.configuration_snapshot_id
     assert round_one.request_content_fingerprint != round_two.request_content_fingerprint
     assert ModelInvocationRecord.from_dict(round_one.to_dict()) == round_one
+
+
+def test_retry_keeps_task_identity_but_gets_a_new_invocation_identity() -> None:
+    configuration = _configuration()
+    first = ModelInvocationRecord.from_payloads(
+        "invoke-round-001-attempt-001", configuration.snapshot_id, "round-001",
+        {"round_id": "round-001", "attempt": 1}, {"error": "provider-timeout"},
+    )
+    retry = ModelInvocationRecord.from_payloads(
+        "invoke-round-001-attempt-002", configuration.snapshot_id, "round-001",
+        {"round_id": "round-001", "attempt": 2}, {"translated_zh": "警家一个"},
+    )
+
+    assert first.task_id == retry.task_id == "round-001"
+    assert first.invocation_id != retry.invocation_id
+    assert first.request_content_fingerprint != retry.request_content_fingerprint
 
 
 def test_local_asr_uses_same_closed_provenance_graph_without_endpoint_profile() -> None:
@@ -865,13 +939,14 @@ Expected: collection fails because `cs2pov.domain.invocation` does not exist.
 
 Implement `invocation.py` with these policies:
 
+- direct constructors and `from_dict` factories apply `reject_private_data` before accepting configuration or invocation content;
 - all identity/version fields are non-empty strings; ID fields use `require_identifier`;
 - parameters recursively accept only `None`, `bool`, finite `int`/`float`, `str`, lists, and dictionaries with string keys;
 - copy parameters into an immutable internal representation on construction and return fresh JSON-compatible containers from `to_dict`, so caller mutation cannot alter the configuration;
 - call `reject_secret_keys` before storage;
 - compute the configuration fingerprint from the exact configuration payload excluding `schema_version` and `configuration_fingerprint`; `from_dict` recomputes and rejects mismatch;
 - `ModelInvocationRecord.from_payloads` derives request/response hashes with Task 1 `content_fingerprint`; direct construction and `from_dict` only accept validated lowercase hashes because raw request/response payloads are intentionally not persisted;
-- different round invocations may reference one shared configuration but must have unique invocation IDs and task IDs;
+- a persisted invocation collection requires unique invocation IDs; task IDs deliberately may repeat because retries of one round retain the same task identity while receiving a new invocation/attempt identity;
 - emit no base URL, API key, credential value, request/response text, SteamID, or filesystem path;
 - reject missing/unknown keys and unsupported schema versions.
 
@@ -987,6 +1062,15 @@ def test_unassigned_transcript_is_explicit_and_round_trips() -> None:
 
     cue = TranscriptCue.from_dict(payload)
     assert cue.round_id is None
+
+
+def test_transcript_rejects_private_location_disguised_as_source_text() -> None:
+    payload = _cue().to_dict()
+    payload["asr_original"] = r"C:\Users\private\recording.wav"
+
+    with pytest.raises(DomainSchemaError) as caught:
+        TranscriptCue.from_dict(payload)
+    assert caught.value.code == "domain_private_data_forbidden"
 
 
 def test_transcript_factory_rejects_discontinuous_compact_audio_span() -> None:
@@ -1123,6 +1207,7 @@ Expected: collection fails because voice/transcript/understanding modules do not
 
 Implement the three modules with exact-key `to_dict`/`from_dict` factories. Apply these rules:
 
+- direct constructors and `from_dict` factories apply `reject_private_data` to the complete durable content, including ASR/interpreted/translated text;
 - cue and round/player/configuration/invocation/anchor IDs use safe identifiers; only TranscriptCue permits `round_id=None`;
 - voice activity has a positive packet count no greater than `MAX_COUNT`, at least one anchor ID, and non-negative uncertainty no greater than `MAX_DEMO_TIME_US`;
 - `TranscriptCue.asr_original` is non-empty and frozen;
@@ -1182,6 +1267,7 @@ git commit -m "feat: add transcript and understanding contracts"
 - Produces: `ReviewDecision(decision_id, cue_id, source_result_fingerprint, action, reviewed_at, reviewer_label, reason, revised_time_range, revised_interpreted_source, revised_translated_zh)`.
 - Produces: `DraftCommsCue.from_transcript_and_understanding(...)` and `ReviewedCommsCue` preserving source, interpreted, and translated layers.
 - Produces: `DraftCommsTimeline.content_fingerprint()` and `ReviewedCommsTimeline` with explicit `timebase` and deterministic ordering validation.
+- Produces: `compose_draft_timeline(timeline, transcripts, documents, configurations, invocations) -> DraftCommsTimeline` as the only application-facing Draft construction path, plus `validate_draft_timeline_graph` for reopened documents.
 - Produces: `compose_reviewed_timeline(draft, decisions) -> ReviewedCommsTimeline` as the only public composition path.
 - Produces: `validate_voice_activity_against_timeline`, `validate_transcript_against_timeline`, `validate_understanding_document_graph(document, transcripts, configurations, invocations)`, and `validate_reviewed_timeline_graph`.
 
@@ -1195,6 +1281,7 @@ from __future__ import annotations
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.fingerprint import content_fingerprint
 from cs2pov.domain.review import (
     DraftCommsCue,
     DraftCommsTimeline,
@@ -1206,6 +1293,9 @@ from cs2pov.domain.review import (
 from cs2pov.domain.timebase import SourceClock, TimeRange
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.understanding import UnderstandingResult
+
+
+PERSISTENCE_TEST_INPUT_FINGERPRINT = content_fingerprint({"round_understanding": []})
 
 
 def _draft(cue_id: str = "cue-b-callout", start_us: int = 20_500_000) -> DraftCommsCue:
@@ -1290,6 +1380,17 @@ def test_edit_requires_a_change_and_exclude_requires_reason() -> None:
     assert caught.value.code == "review_decision_invalid"
 
 
+def test_review_reason_rejects_private_location() -> None:
+    draft = _draft()
+    with pytest.raises(DomainSchemaError) as caught:
+        ReviewDecision(
+            "decision-private", draft.cue_id, draft.understanding_result_fingerprint,
+            ReviewAction.EXCLUDE, "2026-08-31T12:00:00.000000Z", "local-user",
+            "/home/private/evidence.txt", None, None, None,
+        )
+    assert caught.value.code == "domain_private_data_forbidden"
+
+
 def test_composition_preserves_original_and_records_final_values() -> None:
     draft = _draft()
     decision = ReviewDecision(
@@ -1304,7 +1405,9 @@ def test_composition_preserves_original_and_records_final_values() -> None:
         revised_interpreted_source=None,
         revised_translated_zh="B点！B点！B点！",
     )
-    draft_timeline = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+    draft_timeline = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (draft,),
+    )
     reviewed_timeline = compose_reviewed_timeline(draft_timeline, (decision,))
     cue = reviewed_timeline.cues[0]
 
@@ -1318,13 +1421,30 @@ def test_composition_preserves_original_and_records_final_values() -> None:
     assert reviewed_timeline.source_draft_fingerprint == draft_timeline.content_fingerprint()
 
 
+def test_valid_exclude_removes_cue_and_preserves_decision_id() -> None:
+    draft = _draft()
+    decision = ReviewDecision(
+        "decision-exclude", draft.cue_id, draft.understanding_result_fingerprint,
+        ReviewAction.EXCLUDE, "2026-08-31T12:00:00.000000Z", "local-user",
+        "与目标队伍交流无关", None, None, None,
+    )
+    source = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (draft,),
+    )
+
+    reviewed = compose_reviewed_timeline(source, (decision,))
+
+    assert reviewed.cues == ()
+    assert reviewed.excluded_decision_ids == ("decision-exclude",)
+
+
 def test_timeline_requires_explicit_demo_timebase_and_sorted_cues() -> None:
     first = _draft("cue-first", 20_500_000)
     second = _draft("cue-second", 22_000_000)
     timeline = DraftCommsTimeline(
         demo_asset_id="a" * 64,
         timebase="demo-microseconds",
-        input_fingerprint="d" * 64,
+        input_fingerprint=PERSISTENCE_TEST_INPUT_FINGERPRINT,
         cues=(first, second),
     )
     assert DraftCommsTimeline.from_dict(timeline.to_dict()) == timeline
@@ -1333,7 +1453,7 @@ def test_timeline_requires_explicit_demo_timebase_and_sorted_cues() -> None:
         DraftCommsTimeline(
             demo_asset_id="a" * 64,
             timebase="round-local-milliseconds",
-            input_fingerprint="d" * 64,
+            input_fingerprint=PERSISTENCE_TEST_INPUT_FINGERPRINT,
             cues=(first, second),
         )
     assert caught.value.code == "timeline_invalid"
@@ -1343,7 +1463,7 @@ def test_timeline_requires_explicit_demo_timebase_and_sorted_cues() -> None:
         DraftCommsTimeline(
             demo_asset_id="a" * 64,
             timebase="demo-microseconds",
-            input_fingerprint="d" * 64,
+            input_fingerprint=PERSISTENCE_TEST_INPUT_FINGERPRINT,
             cues=(second, first),
         )
     assert caught.value.code == "timeline_invalid"
@@ -1363,7 +1483,9 @@ def test_reviewed_timeline_round_trips_from_verified_composition() -> None:
         revised_interpreted_source=None,
         revised_translated_zh=None,
     )
-    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+    source = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (draft,),
+    )
     timeline = compose_reviewed_timeline(source, (decision,))
 
     assert ReviewedCommsTimeline.from_dict(timeline.to_dict()) == timeline
@@ -1371,7 +1493,9 @@ def test_reviewed_timeline_round_trips_from_verified_composition() -> None:
 
 def test_composition_rejects_missing_extra_stale_and_noop_decisions() -> None:
     draft = _draft()
-    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,))
+    source = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (draft,),
+    )
 
     with pytest.raises(DomainSchemaError) as caught:
         compose_reviewed_timeline(source, ())
@@ -1403,7 +1527,9 @@ def test_composition_rejects_missing_extra_stale_and_noop_decisions() -> None:
 
 
 def test_tampered_draft_payload_cannot_keep_old_content_fingerprint() -> None:
-    source = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (_draft(),))
+    source = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (_draft(),),
+    )
     payload = source.to_dict()
     original_fingerprint = source.content_fingerprint()
     payload["cues"][0]["translated_zh"] = "被篡改"
@@ -1418,21 +1544,25 @@ def test_direct_reviewed_document_rejects_duplicate_cues() -> None:
         "decision-001", draft.cue_id, draft.understanding_result_fingerprint, ReviewAction.ACCEPT,
         "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None,
     )
-    reviewed = compose_reviewed_timeline(
-        DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft,)),
+    composed = compose_reviewed_timeline(
+        DraftCommsTimeline(
+            "a" * 64, "demo-microseconds", PERSISTENCE_TEST_INPUT_FINGERPRINT, (draft,),
+        ),
         (decision,),
-    ).cues[0]
+    )
+    reviewed = composed.cues[0]
 
     with pytest.raises(DomainSchemaError) as caught:
         ReviewedCommsTimeline(
-            "a" * 64, "demo-microseconds", "d" * 64, (reviewed, reviewed), (),
+            "a" * 64, "demo-microseconds", composed.source_draft_fingerprint,
+            (reviewed, reviewed), (),
         )
     assert caught.value.code == "timeline_invalid"
 ```
 
 - [ ] **Step 2: Write failing cross-object containment and provenance tests**
 
-Create `tests/test_domain_validation_v1.py` with one closed graph and two tamper cases:
+Create `tests/test_domain_validation_v1.py` with one closed graph plus reference, privacy-adjacent, containment, and fingerprint tamper cases:
 
 ```python
 from __future__ import annotations
@@ -1448,9 +1578,12 @@ from cs2pov.domain.timeline import DemoDescriptor, DemoTimeline, MatchPhase, Pla
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.understanding import RoundUnderstandingDocument, UnderstandingResult
 from cs2pov.domain.validation import (
+    compose_draft_timeline,
+    validate_draft_timeline_graph,
     validate_reviewed_timeline_graph,
     validate_transcript_against_timeline,
     validate_understanding_document_graph,
+    validate_voice_activity_against_timeline,
 )
 from cs2pov.domain.voice import VoiceActivityCue
 
@@ -1496,6 +1629,30 @@ def test_transcript_graph_validates_player_round_activity_anchor_and_asr_call() 
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "error_code"),
+    (
+        ("player_id", "player-missing", "player_reference_invalid"),
+        ("anchor_ids", ["anchor-missing"], "time_anchor_invalid"),
+        ("start_us", 9_000_000, "cue_reference_invalid"),
+    ),
+)
+def test_voice_activity_graph_rejects_unknown_or_unmapped_evidence(
+    field: str,
+    value: object,
+    error_code: str,
+) -> None:
+    timeline, activity, _, _, _ = _closed_graph()
+    payload = activity.to_dict()
+    payload[field] = value
+    if field == "start_us":
+        payload["end_us"] = 9_500_000
+
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_voice_activity_against_timeline(VoiceActivityCue.from_dict(payload), timeline)
+    assert caught.value.code == error_code
+
+
 def test_transcript_graph_rejects_unknown_player_dangling_call_and_round_crossing() -> None:
     timeline, activity, transcript, configuration, invocation = _closed_graph()
 
@@ -1520,8 +1677,8 @@ def test_transcript_graph_rejects_unknown_player_dangling_call_and_round_crossin
     assert caught.value.code == "cue_reference_invalid"
 
 
-def test_understanding_graph_derives_request_response_and_source_integrity() -> None:
-    _, _, transcript, asr_configuration, _ = _closed_graph()
+def test_understanding_and_draft_graph_derive_all_source_fingerprints() -> None:
+    timeline, _, transcript, asr_configuration, _ = _closed_graph()
     configuration = ModelConfigurationSnapshot(
         "llm-config-001", ModelCapability.UNDERSTANDING_TRANSLATION, "openai-compatible",
         "provider-local-profile", "fixture-model", "understanding-v1",
@@ -1544,6 +1701,21 @@ def test_understanding_graph_derives_request_response_and_source_integrity() -> 
     validate_understanding_document_graph(
         document, (transcript,), (configuration,), (invocation,),
     )
+    draft = compose_draft_timeline(
+        timeline, (transcript,), (document,), (configuration,), (invocation,),
+    )
+    validate_draft_timeline_graph(
+        draft, timeline, (transcript,), (document,), (configuration,), (invocation,),
+    )
+
+    tampered_payload = draft.to_dict()
+    tampered_payload["input_fingerprint"] = "0" * 64
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_draft_timeline_graph(
+            DraftCommsTimeline.from_dict(tampered_payload), timeline, (transcript,),
+            (document,), (configuration,), (invocation,),
+        )
+    assert caught.value.code == "domain_fingerprint_mismatch"
 
     changed_payload = result.to_dict()
     changed_payload["asr_original"] = "B B B"
@@ -1571,7 +1743,10 @@ def test_reviewed_time_edit_must_remain_inside_declared_round() -> None:
         0.93, ("same-round-context",), (), "invoke-round-001",
     )
     draft_cue = DraftCommsCue.from_transcript_and_understanding(transcript, result)
-    draft = DraftCommsTimeline("a" * 64, "demo-microseconds", "d" * 64, (draft_cue,))
+    draft = DraftCommsTimeline(
+        "a" * 64, "demo-microseconds",
+        content_fingerprint({"round_understanding": []}), (draft_cue,),
+    )
     decision = ReviewDecision(
         "decision-001", draft_cue.cue_id, draft_cue.understanding_result_fingerprint,
         ReviewAction.EDIT, "2026-08-31T12:00:00.000000Z", "local-user",
@@ -1598,9 +1773,12 @@ Expected: collection fails because `cs2pov.domain.review` and `cs2pov.domain.val
 
 Apply these exact policies:
 
+- review/timeline direct constructors and `from_dict` factories apply `reject_private_data` to every durable field, including reviewer labels, reasons, source text, and translated text;
 - parse `reviewed_at` with `datetime.fromisoformat` after accepting a terminal `Z`, require a timezone-aware timestamp, convert to UTC, and serialize exactly `YYYY-MM-DDTHH:MM:SS.ffffffZ`;
 - `ACCEPT` permits no revision fields; `EDIT` requires at least one revised field; `EXCLUDE` permits no revisions and requires a non-empty reason;
 - `UnderstandingResult.content_fingerprint()` derives from its exact `to_dict()` with Task 1 canonical JSON; `DraftCommsCue.from_transcript_and_understanding` computes and stores that value rather than accepting one from its caller;
+- `compose_draft_timeline` orders documents by the authoritative `DemoTimeline.rounds`, validates every document through `validate_understanding_document_graph`, rejects missing/extra round documents and results, joins each assigned result to its exact transcript, derives each Draft cue, sorts cues by Demo time, and computes `input_fingerprint` from `{"round_understanding": [document.to_dict(), ...]}` in that canonical round order;
+- `DraftCommsTimeline` direct construction and `from_dict` exist only as persistence primitives. Application code must create new drafts through `compose_draft_timeline`; reopened drafts remain untrusted until `validate_draft_timeline_graph` recomposes the expected draft and compares the entire value, including `input_fingerprint` and cue order;
 - `DraftCommsTimeline.content_fingerprint()` derives from its exact serialized document;
 - `compose_reviewed_timeline` requires exactly one unique decision per draft cue, rejects missing/extra/stale decisions, rejects an EDIT whose resolved values equal the draft, derives `source_draft_fingerprint`, and is the only application-facing composition path;
 - `ReviewedCommsCue` retains ASR original, interpreted source, and model translation even when final time/text changes;
@@ -1792,15 +1970,14 @@ round_documents = (
     RoundUnderstandingDocument("round-002", content_fingerprint(round_two_request), llm_configuration.snapshot_id, "invoke-round-002", (results[1], results[2])),
     RoundUnderstandingDocument("round-003", content_fingerprint(round_three_request), llm_configuration.snapshot_id, None, ()),
 )
-draft_cues = (
-    DraftCommsCue.from_transcript_and_understanding(transcripts[0], results[0]),
-    DraftCommsCue.from_transcript_and_understanding(transcripts[1], results[1]),
-    DraftCommsCue.from_transcript_and_understanding(transcripts[2], results[2]),
+draft_timeline = compose_draft_timeline(
+    timeline,
+    transcripts,
+    round_documents,
+    (asr_configuration, llm_configuration),
+    invocations,
 )
-draft_input_fingerprint = content_fingerprint({
-    "round_understanding": [document.to_dict() for document in round_documents],
-})
-draft_timeline = DraftCommsTimeline("a" * 64, "demo-microseconds", draft_input_fingerprint, draft_cues)
+draft_cues = draft_timeline.cues
 decisions = (
     ReviewDecision("decision-first", "cue-first", draft_cues[0].understanding_result_fingerprint, ReviewAction.ACCEPT, "2026-08-31T12:00:00.000000Z", "local-user", None, None, None, None),
     ReviewDecision("decision-b-callout", "cue-b-callout", draft_cues[1].understanding_result_fingerprint, ReviewAction.EDIT, "2026-08-31T12:01:00.000000Z", "local-user", "将呼叫翻译调整为更自然的中文", None, None, "B点！B点！B点！"),
@@ -1835,7 +2012,7 @@ payload = {
 }
 ```
 
-The fixture must contain no SteamID, absolute path, URL, API key, credential, real Demo hash, or private media. Round 3 is deliberately a successful speechless round and `cue-unassigned` deliberately remains outside every round document; neither condition is represented by a fake result or fake invocation.
+The fixture must contain no SteamID, absolute path, URL, API key, credential, real Demo hash, or private media. Round 3 is deliberately a successful speechless round and `cue-unassigned` deliberately remains outside every round document; neither condition is represented by a fake result or fake invocation. `round_completion_order` proves that persisted aggregation ignores worker completion order, but it is not an attempt/failure log. Retriable failure state belongs to the later scheduler batch and must not be invented in 02A.
 
 - [ ] **Step 4: Implement the standalone replay validator**
 
@@ -1843,11 +2020,11 @@ Create `scripts/check_new_domain_contract.py` that:
 
 1. resolves the fixture relative to repository root;
 2. loads JSON as UTF-8, rejects duplicate JSON object keys, and requires the exact transport keys shown in Step 3 with transport `schema_version == 1`;
-3. performs the recursive privacy scan before object construction: reject dictionary keys `path`, `steamid`, `steam_id`, `api_key`, `authorization`, `access_token`, `password`, and `secret`, and reject string values beginning with a Windows drive, `/`, `\\`, `http://`, or `https://`;
+3. calls Task 1 production `reject_private_data` on the complete payload before object construction; do not maintain a second fixture-only key/path list;
 4. reconstructs every configuration, invocation, Demo, round, anchor, activity, transcript, understanding document, decision, draft timeline, and reviewed timeline exclusively through production `from_dict` factories; reject duplicate IDs in every collection and dangling configuration IDs in every invocation;
 5. builds `DemoTimeline`, which applies production anchor-sequence and exact-round/tick validation, then calls `validate_voice_activity_against_timeline` and `validate_transcript_against_timeline` for every activity and transcript;
 6. requires exactly one understanding document per known round, calls `validate_understanding_document_graph` for each, requires the expected speechless round to have zero results and no invocation, and requires the expected unassigned cue to have `round_id=None` and appear in no round document;
-7. reconstructs draft cues from the validated transcript/result pairs, compares them to the stored draft timeline, recomputes the draft input fingerprint from canonical round documents, recomposes the reviewed timeline only through `compose_reviewed_timeline`, compares it to the stored reviewed document, and calls `validate_reviewed_timeline_graph`;
+7. builds the expected draft only through production `compose_draft_timeline`, calls `validate_draft_timeline_graph` on the stored draft, recomposes the reviewed timeline only through `compose_reviewed_timeline`, compares it to the stored reviewed document, and calls `validate_reviewed_timeline_graph`;
 8. checks the B callout source/interpretation/final translation against `expected` and checks reviewed cues are in expected Demo-time order despite the declared parallel completion order;
 9. requires `round_completion_order` to be a duplicate-free permutation of all round IDs but never uses completion order to determine persisted cue order or fingerprints;
 10. normalizes all schema, JSON, reference, privacy, and fingerprint failures to a concise `ContractValidationError` from the public `validate_contract(path: Path) -> None` function;
@@ -1893,6 +2070,10 @@ def _stale_review_fingerprint(payload: dict[str, Any]) -> None:
     payload["review_decisions"][0]["source_result_fingerprint"] = "0" * 64
 
 
+def _stale_draft_input_fingerprint(payload: dict[str, Any]) -> None:
+    payload["draft_timeline"]["input_fingerprint"] = "0" * 64
+
+
 def _stale_configuration_fingerprint(payload: dict[str, Any]) -> None:
     payload["model_configurations"][1]["model_name"] = "tampered-model"
 
@@ -1918,6 +2099,7 @@ TAMPERS: tuple[Callable[[dict[str, Any]], None], ...] = (
     _dangling_invocation,
     _changed_asr,
     _stale_review_fingerprint,
+    _stale_draft_input_fingerprint,
     _stale_configuration_fingerprint,
     _unsupported_schema,
     _reversed_cues,

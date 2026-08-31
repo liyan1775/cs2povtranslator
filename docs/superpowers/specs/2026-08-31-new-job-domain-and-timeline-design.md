@@ -82,7 +82,7 @@ TimeRange = [start_us, end_us), end_us > start_us
   "demo_start_us": 512340000,
   "demo_end_us": 513340000,
   "uncertainty_us": 16000,
-  "provenance": "voice-extractor/..."
+  "provenance": "voice-extractor-v1"
 }
 ```
 
@@ -204,6 +204,8 @@ jobs/<job_id>/
 
 UnderstandingResult 和 DraftCommsTimeline 提供 `content_fingerprint()`。复核合成器必须重新计算并验证来源指纹、确保每个 Draft Cue 恰好一个决定、没有缺失或多余决定、EDIT 实际改变至少一个最终字段，并把排除决定保留在 ReviewedTimeline 中。
 
+DraftCommsTimeline 的 `input_fingerprint` 也必须由生产合成器从按规范回合顺序排列的 RoundUnderstandingDocument 计算；反序列化得到的 Draft 在通过同一生产级聚合校验前不可信。夹具脚本不得单独复制这套逻辑。
+
 ## 7. 新版历史 Job 的打开语义
 
 ### 7.1 定义和发现
@@ -305,6 +307,7 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 - `domain_schema_unsupported`
 - `domain_field_invalid`
 - `domain_secret_forbidden`
+- `domain_private_data_forbidden`
 - `domain_fingerprint_mismatch`
 - `time_range_invalid`
 - `time_anchor_invalid`
@@ -323,7 +326,7 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 
 ### 11.1 固定夹具
 
-至少包含：
+完整新版端到端验收夹具最终至少包含：
 
 - 三个回合和稳定 Round ID；
 - 交叠说话；
@@ -334,6 +337,8 @@ RUNNING --process exit--> INTERRUPTED -> PENDING/RUNNING
 - 一个未分配回合的 Cue 和一个无语音的正常回合；
 - 整场与逐回合字幕聚合；
 - 无 CS2/GPU 合法结束。
+
+02A 的匿名领域契约夹具只负责已进入本批次的对象边界：三个回合、交叠说话、理解翻译、人工修改、乱序完成声明、一个未分配 Cue 和一个无语音回合。它不实现任务尝试、可重试失败、调度状态、字幕聚合或视频产物；这些分别在后续状态/调度与导出批次进入真实进程夹具。02A 不得为了满足完整夹具清单而提前实现调度器。
 
 ### 11.2 四层门禁
 
