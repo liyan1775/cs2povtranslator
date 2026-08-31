@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from cs2pov.domain.models import PipelineConfig, STAGE_ORDER, StageName, StageStatus, Round
+from cs2pov.domain.assets import DemoAssetRef, validate_display_name
+from cs2pov.application.demo_assets import DemoAssetApplicationService
 from cs2pov.pipeline.manifest import PipelineManifest
 from cs2pov.pipeline.progress import ProgressSink
 from cs2pov.services.demo_service import DemoService
@@ -28,6 +30,9 @@ class PipelineEngine:
         *,
         runtime: WorkspaceRuntime | None = None,
         job_runtime: JobRuntime | None = None,
+        demo_asset_ref: DemoAssetRef | None = None,
+        demo_asset_display_name: str | None = None,
+        demo_assets: DemoAssetApplicationService | None = None,
     ):
         if runtime is None:
             raise JobRuntimeError(
@@ -41,6 +46,67 @@ class PipelineEngine:
                 "Job 路径与临时资源不属于同一个工作区运行时。",
                 "请使用同一份 WorkspaceRuntime 解析 Job 路径和缓存目录。",
             )
+        managed_values = (demo_asset_ref, demo_asset_display_name, demo_assets)
+        managed = any(value is not None for value in managed_values)
+        if managed and not all(value is not None for value in managed_values):
+            raise JobRuntimeError(
+                "demo_asset_dependency_incomplete",
+                "DemoAsset 运行依赖必须完整提供。",
+                "请同时提供素材引用、显示名称和绑定的 DemoAsset 服务。",
+            )
+        if managed:
+            if not isinstance(demo_asset_ref, DemoAssetRef):
+                raise JobRuntimeError(
+                    "demo_asset_ref_invalid", "DemoAsset 引用无效。", "请重新导入 Demo 后重试。"
+                )
+            if getattr(demo_assets, "bound_runtime", None) is not runtime or not callable(getattr(demo_assets, "resolve_asset", None)):
+                raise JobRuntimeError(
+                    "demo_asset_runtime_mismatch",
+                    "DemoAsset 服务与当前工作区不一致。",
+                    "请使用同一份 WorkspaceRuntime 创建素材服务后重试。",
+                )
+            try:
+                validate_display_name(demo_asset_display_name)
+            except (TypeError, ValueError) as exc:
+                raise JobRuntimeError(
+                    "demo_asset_display_name_invalid", "Demo 显示名称无效。", "请使用不含路径或控制字符的文件名。"
+                ) from exc
+            if manifest is not None:
+                try:
+                    existing_ref = manifest.demo_asset_ref()
+                    existing_display_name = manifest.demo_asset_display_name() if existing_ref is not None else None
+                except ValueError as exc:
+                    raise JobRuntimeError(
+                        "demo_asset_manifest_invalid", "Job 的 DemoAsset 引用无效。", "请检查 Job manifest 后重试。"
+                    ) from exc
+                if existing_ref is not None and existing_ref != demo_asset_ref:
+                    raise JobRuntimeError(
+                        "demo_asset_ref_mismatch", "Job 的 DemoAsset 引用与恢复参数不一致。", "请使用创建该 Job 时的素材引用。"
+                    )
+                if existing_ref is not None and existing_display_name != demo_asset_display_name:
+                    raise JobRuntimeError(
+                        "demo_asset_display_name_mismatch", "Job 的 Demo 显示名称与恢复参数不一致。", "请使用创建该 Job 时的显示名称。"
+                    )
+            try:
+                # Validate the name before creating a Job.
+                manifest_demo = manifest.demo if manifest is not None else {}
+                if manifest_demo.get("input_mode") == "legacy_job_copy":
+                    raise JobRuntimeError(
+                        "demo_asset_mode_mismatch", "旧 Job 不能按 DemoAsset 模式恢复。", "请按旧 Job 输入方式恢复。"
+                    )
+            except AttributeError:
+                raise JobRuntimeError("demo_asset_manifest_invalid", "Job manifest 无效。", "请检查 Job manifest 后重试。")
+        elif manifest is not None:
+            try:
+                existing_ref = manifest.demo_asset_ref()
+            except ValueError as exc:
+                raise JobRuntimeError(
+                    "demo_asset_manifest_invalid", "Job 的 DemoAsset 引用无效。", "请检查 Job manifest 后重试。"
+                ) from exc
+            if existing_ref is not None:
+                raise JobRuntimeError(
+                    "demo_asset_dependency_required", "恢复此 Job 需要 DemoAsset 运行依赖。", "请使用创建该 Job 的工作区恢复。"
+                )
         policy = job_runtime
         if runtime is not None and policy is None:
             policy = JobRuntime.from_config(runtime, config)
@@ -61,6 +127,12 @@ class PipelineEngine:
         )
         self.manifest.config = self.config
         self.manifest.job_id = self.store.job_dir.name
+        self.demo_asset_ref = demo_asset_ref
+        self.demo_asset_display_name = demo_asset_display_name
+        self.demo_assets = demo_assets
+        self._managed_demo = managed
+        if managed:
+            self.manifest.bind_demo_asset(demo_asset_ref, demo_asset_display_name)  # type: ignore[arg-type]
         self.manifest.save(self.store.manifest_path)
         self.demo_service = DemoService()
         self.voice_service = VoiceService()
@@ -70,32 +142,59 @@ class PipelineEngine:
         self.subtitle_service = SubtitleService()
         self.demo_path: Path | None = None
 
-    def run(self, input_path: Path, from_stage: StageName | None = None, to_stage: StageName | None = None) -> ArtifactStore:
+    def run(self, input_path: Path | None = None, from_stage: StageName | None = None, to_stage: StageName | None = None) -> ArtifactStore:
+        if self._managed_demo and input_path is not None:
+            raise JobRuntimeError(
+                "demo_asset_input_path_forbidden", "DemoAsset 模式不能再提供外部 input_path。", "请让入口先导入素材并传入 None。"
+            )
+        if not self._managed_demo and input_path is None:
+            raise JobRuntimeError(
+                "legacy_input_path_required", "旧版 Job 必须提供 input_path。", "请从 prepare_input 阶段开始并提供 Demo 路径。"
+            )
         stages = _slice_stages(from_stage, to_stage)
         for stage in stages:
-            self._run_stage(stage, Path(input_path))
+            self._run_stage(stage, Path(input_path) if input_path is not None else None)
         self.progress.emit("done", f"任务完成。Job 目录：{self.store.job_dir}")
         return self.store
 
-    def _run_stage(self, stage: StageName, input_path: Path) -> None:
+    def _run_stage(self, stage: StageName, input_path: Path | None) -> None:
         self.manifest.set_stage(stage, StageStatus.RUNNING)
         self.manifest.save(self.store.manifest_path)
         try:
             if stage == StageName.PREPARE_INPUT:
                 self.progress.emit(stage, "准备输入 demo。支持 .dem 和 .dem.zst。")
-                self.demo_path = self.demo_service.prepare_input(input_path, self.store)
-                self.manifest.set_artifact("demo_path", self.demo_path)
+                if self._managed_demo:
+                    self.demo_path = self._resolve_managed_demo()
+                else:
+                    assert input_path is not None
+                    self.manifest.mark_legacy_demo_input()
+                    self.demo_path = self.demo_service.prepare_input(input_path, self.store)
+                    self.manifest.set_artifact("demo_path", self.demo_path)
             elif stage == StageName.INSPECT_DEMO:
                 self.progress.emit(stage, "读取 demo header、地图名和玩家列表。")
                 demo_path = self._require_demo_path()
-                info = self.demo_service.inspect(demo_path, input_path, self.store)
+                if self._managed_demo:
+                    info = self.demo_service.inspect(
+                        demo_path,
+                        demo_path,
+                        self.store,
+                        public_input_path=self.demo_asset_display_name,
+                        public_demo_path=f"demo-asset:{self.demo_asset_ref.asset_id}",
+                    )
+                else:
+                    assert input_path is not None
+                    info = self.demo_service.inspect(demo_path, input_path, self.store)
                 if not self.config.map_name:
                     self.config.map_name = info.map_name
                 if info.map_name and not self.config.job_id:
                     self._rename_auto_job_dir(info.map_name)
                     # The directory moved after demo_info.json was written; refresh paths in manifest and demo_info.
-                    self.manifest.set_artifact("demo_path", self._require_demo_path())
-                    info.demo_path = str(self.demo_path)
+                    if not self._managed_demo:
+                        self.manifest.set_artifact("demo_path", self._require_demo_path())
+                        info.demo_path = str(self.demo_path)
+                    else:
+                        info.input_path = self.demo_asset_display_name or info.input_path
+                        info.demo_path = f"demo-asset:{self.demo_asset_ref.asset_id}"
                     write_json(self.store.demo_info_path, info)
                 self.manifest.demo.update({"map_name": info.map_name, "server_name": info.server_name, "players": len(info.players)})
                 self.manifest.set_artifact("demo_info", self.store.demo_info_path)
@@ -217,7 +316,7 @@ class PipelineEngine:
         if new_store.job_dir == old_dir:
             return
         self.store = new_store
-        if old_demo_name:
+        if old_demo_name and not self._managed_demo:
             self.demo_path = self.store.input_dir / old_demo_name
         self.progress.log_path = self.store.progress_log_path
         self.manifest.job_id = self.store.job_dir.name
@@ -237,6 +336,8 @@ class PipelineEngine:
             self.progress.emit(stage, f"回合清洗阈值：min_round_duration_seconds={self.config.min_round_duration_seconds:.1f}s。原始候选见 artifacts/rounds_raw.json。")
 
     def _require_demo_path(self) -> Path:
+        if self._managed_demo:
+            return self._resolve_managed_demo()
         if self.demo_path and self.demo_path.exists():
             return self.demo_path
         existing = self.manifest.artifacts.get("demo_path")
@@ -253,6 +354,14 @@ class PipelineEngine:
             self.demo_path = candidates[0]
             return self.demo_path
         raise RuntimeError("找不到已准备好的 .dem 文件。请从 prepare_input 阶段开始运行。")
+
+    def _resolve_managed_demo(self) -> Path:
+        if self.demo_assets is None or self.demo_asset_ref is None:
+            raise JobRuntimeError(
+                "demo_asset_dependency_required", "当前 Job 缺少 DemoAsset 运行依赖。", "请使用当前工作区素材服务恢复。"
+            )
+        self.demo_path = Path(self.demo_assets.resolve_asset(self.demo_asset_ref))
+        return self.demo_path
 
     def _tick_rate(self) -> float:
         try:
