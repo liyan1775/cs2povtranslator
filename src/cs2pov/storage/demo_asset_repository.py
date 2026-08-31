@@ -123,14 +123,14 @@ class FileSystemDemoAssetRepository:
             final_asset = self.paths.demo_library_dir / asset_id
             self._validate_final_target(final_asset)
             if final_asset.exists() or final_asset.is_symlink():
-                existing = self._load_asset(final_asset, strict=True)
+                existing = self._load_asset(final_asset)
                 if existing.asset_id != asset_id:
                     raise _error("demo_asset_integrity_failed")
                 return DemoImportResult(existing, "reused", 0)
             try:
                 staging_asset.rename(final_asset)
             except FileExistsError:
-                existing = self._load_asset(final_asset, strict=True)
+                existing = self._load_asset(final_asset)
                 return DemoImportResult(existing, "reused", 0)
             return imported_result
         except DemoAssetRepositoryError:
@@ -155,7 +155,7 @@ class FileSystemDemoAssetRepository:
             if _is_link(candidate) or not candidate.is_dir():
                 continue
             try:
-                asset = self._load_asset(candidate, strict=True)
+                asset = self._load_asset(candidate)
             except DemoAssetRepositoryError as exc:
                 asset = None
                 try:
@@ -316,7 +316,7 @@ class FileSystemDemoAssetRepository:
             raise TypeError("clock 必须返回带 UTC 时区的 datetime。")
         return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
-    def _load_asset(self, asset_dir: Path, *, strict: bool) -> DemoAsset:
+    def _load_asset(self, asset_dir: Path) -> DemoAsset:
         if _is_link(asset_dir) or not asset_dir.is_dir():
             raise _error("demo_asset_path_escape")
         try:

@@ -445,7 +445,7 @@ final_asset = paths.demo_library_dir / asset_id
 
 覆盖：
 
-- list 忽略 `_` 开头目录、随机 staging、非 64 位目录、缺 manifest 和链接目录；
+- list 忽略 `_` 开头目录、随机 staging、非 64 位目录和链接目录；合法 64 位资产目录缺 manifest 时保留为 `healthy=false` 的损坏摘要；
 - list 对完整资产按 `(imported_at, asset_id)` 确定性排序；
 - list 遇到损坏资产返回 `healthy=False` summary，而不是 traceback 或静默消失；
 - inspect 对健康 `.dem` 返回 `source_ok=True/cache_status=not_applicable/ok=True`；

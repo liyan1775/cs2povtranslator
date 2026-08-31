@@ -249,6 +249,51 @@ def test_import_dem_maps_destination_open_failure(failure_errno, expected_code, 
     assert not list(repo.paths.demo_library_dir.glob("*"))
 
 
+class _FailingWriter:
+    def __init__(self, wrapped, error_number):
+        self._wrapped = wrapped
+        self._error_number = error_number
+
+    def __enter__(self):
+        self._wrapped.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._wrapped.__exit__(*args)
+
+    def write(self, data):
+        raise OSError(self._error_number, "destination write failure")
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+
+@pytest.mark.parametrize(
+    "failure_errno,expected_code",
+    [(errno.ENOSPC, "demo_import_space_insufficient"), (errno.EACCES, "demo_asset_commit_failed")],
+)
+def test_import_dem_maps_destination_write_failure(failure_errno, expected_code, tmp_path, monkeypatch):
+    source = tmp_path / "match.dem"
+    payload = b"unchanged-source"
+    source.write_bytes(payload)
+    repo = FileSystemDemoAssetRepository(make_paths(tmp_path))
+    original_open = Path.open
+
+    def wrap_destination_open(self, mode="r", *args, **kwargs):
+        handle = original_open(self, mode, *args, **kwargs)
+        if self.name == "source.dem" and "w" in mode:
+            return _FailingWriter(handle, failure_errno)
+        return handle
+
+    monkeypatch.setattr(Path, "open", wrap_destination_open)
+    with pytest.raises(DemoAssetRepositoryError) as exc_info:
+        repo.import_source(source)
+
+    assert exc_info.value.code == expected_code
+    assert source.read_bytes() == payload
+    assert not list(repo.paths.demo_library_dir.glob("*"))
+
+
 def test_import_dem_maps_source_read_failure(tmp_path, monkeypatch):
     source = tmp_path / "match.dem"
     source.write_bytes(b"match")
@@ -337,6 +382,108 @@ def test_import_dem_rejects_temp_symlink_before_writing(tmp_path):
     assert not (outside / "demo_imports").exists()
 
 
+def test_list_assets_sorts_by_imported_at_then_asset_id_deterministically(tmp_path):
+    payloads = [b"later", b"same-b", b"same-a"]
+    sources = []
+    for index, payload in enumerate(payloads):
+        source = tmp_path / f"{index}.dem"
+        source.write_bytes(payload)
+        sources.append(source)
+    timestamps = iter(
+        [
+            datetime(2026, 8, 31, 0, 0, 2, tzinfo=timezone.utc),
+            datetime(2026, 8, 31, 0, 0, 1, tzinfo=timezone.utc),
+            datetime(2026, 8, 31, 0, 0, 1, tzinfo=timezone.utc),
+        ]
+    )
+    repo = FileSystemDemoAssetRepository(make_paths(tmp_path), clock=lambda: next(timestamps))
+    results = [repo.import_source(source) for source in sources]
+
+    first = repo.list_assets()
+    second = repo.list_assets()
+    same_time_ids = sorted(
+        result.asset.asset_id
+        for result in results
+        if result.asset.imported_at == "2026-08-31T00:00:01.000000Z"
+    )
+
+    assert first == second
+    assert [item.imported_at for item in first] == [
+        "2026-08-31T00:00:01.000000Z",
+        "2026-08-31T00:00:01.000000Z",
+        "2026-08-31T00:00:02.000000Z",
+    ]
+    assert [item.asset_id for item in first[:2]] == same_time_ids
+
+
+def _create_directory_link(link: Path, target: Path):
+    if os.name == "nt":
+        completed = subprocess.run(
+            [os.environ.get("ComSpec", "cmd.exe"), "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("当前系统无法创建 Windows junction")
+    else:
+        try:
+            link.symlink_to(target, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("当前系统不允许创建目录符号链接")
+
+
+def _remove_directory_link(link: Path):
+    if link.exists() or link.is_symlink():
+        link.rmdir() if os.name == "nt" else link.unlink()
+
+
+def test_legal_asset_directory_link_is_not_listed_and_inspect_rejects(tmp_path):
+    paths = make_paths(tmp_path)
+    paths.demo_library_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-asset"
+    outside.mkdir()
+    asset_id = hashlib.sha256(b"linked-asset").hexdigest()
+    link = paths.demo_library_dir / asset_id
+    _create_directory_link(link, outside)
+    before = _tree_snapshot(outside)
+    try:
+        repo = FileSystemDemoAssetRepository(paths)
+        assert repo.list_assets() == ()
+        with pytest.raises(DemoAssetRepositoryError) as exc_info:
+            repo.inspect_asset(asset_id)
+        assert exc_info.value.code == "demo_asset_path_escape"
+        assert _tree_snapshot(outside) == before
+    finally:
+        _remove_directory_link(link)
+
+
+def test_manifest_symlink_is_rejected_without_following_external_file(tmp_path):
+    source = tmp_path / "match.dem"
+    source.write_bytes(b"match")
+    paths = make_paths(tmp_path)
+    repo = FileSystemDemoAssetRepository(paths)
+    result = repo.import_source(source)
+    asset_dir = paths.demo_library_dir / result.asset.asset_id
+    manifest = asset_dir / "asset.json"
+    external_manifest = tmp_path / "external-asset.json"
+    external_manifest.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+    try:
+        manifest.symlink_to(external_manifest)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前系统不允许创建文件符号链接")
+    before = external_manifest.read_bytes()
+    try:
+        with pytest.raises(DemoAssetRepositoryError) as exc_info:
+            repo.inspect_asset(result.asset.asset_id)
+        assert exc_info.value.code == "demo_asset_manifest_invalid"
+        assert external_manifest.read_bytes() == before
+    finally:
+        if manifest.exists() or manifest.is_symlink():
+            manifest.unlink()
+
+
 def _tree_snapshot(root: Path):
     if not root.exists():
         return ()
@@ -416,6 +563,23 @@ def test_list_isolates_corrupt_assets_and_keeps_valid_summary(tmp_path):
     assert by_id["a" * 64].healthy is False
     assert by_id["a" * 64].display_name is None
     assert by_id["a" * 64].issue_code == "demo_asset_manifest_invalid"
+
+
+def test_list_reports_missing_manifest_as_unhealthy_summary(tmp_path):
+    source = tmp_path / "match.dem"
+    source.write_bytes(b"match")
+    paths = make_paths(tmp_path)
+    repo = FileSystemDemoAssetRepository(paths)
+    result = repo.import_source(source)
+    (paths.demo_library_dir / result.asset.asset_id / "asset.json").unlink()
+
+    listed = repo.list_assets()
+
+    assert len(listed) == 1
+    assert listed[0].asset_id == result.asset.asset_id
+    assert listed[0].display_name is None
+    assert listed[0].healthy is False
+    assert listed[0].issue_code == "demo_asset_manifest_invalid"
 
 
 def test_list_uses_directory_id_when_manifest_identity_is_corrupt(tmp_path):
