@@ -94,8 +94,8 @@ python scripts/check_workspace_model_runtime_e2e.py
 # 工作区 Job runtime E2E
 
 使用真实 Python 子进程和合成 `.dem`（只运行到 `prepare_input`），验证默认
-Job 落在工作区 `jobs/`、Demo 被复制到 Job/input、显式 `--output` 的兼容
-警告与 manifest 标志，以及损坏工作区时在创建 Job/复制 Demo 前稳定失败且
+Job 落在工作区 `jobs/`、Demo 自动进入工作区素材库且 Job/input 保持为空、显式
+`--output` 的兼容警告与 manifest 标志，以及损坏工作区时在创建 Job/导入素材前稳定失败且
 旁路目录和已有文件不变：
 
 ```powershell
@@ -112,5 +112,23 @@ python scripts/check_workspace_job_runtime_e2e.py
 python scripts/check_workspace_demo_asset_e2e.py
 ```
 
-这个 E2E 不读取真实 Demo、GPU、CS2、模型或 API。它只验收 01E-A 显式素材库；
-Pipeline 自动导入和 Job `input/` 去重属于 01E-B。
+这个 E2E 不读取真实 Demo、GPU、CS2、模型或 API。它验收显式素材库本身。
+
+# 工作区 Pipeline DemoAsset E2E
+
+使用真实 Python 子进程调用安装后的 CLI，验证新 Job 自动导入/复用、manifest 只保留
+引用、Job `input/` 不复制 Demo、缓存重建、工作区切换、legacy resume、损坏资产前置
+失败和 HOME/cwd/源码树隔离：
+
+```powershell
+python scripts/check_workspace_pipeline_demo_asset_e2e.py
+```
+
+成功时必须打印唯一成功行：
+
+```text
+workspace Pipeline DemoAsset E2E passed: auto-import, reference-only jobs, resume, legacy compatibility, and isolation
+```
+
+该 E2E 只运行到 `prepare_input`，不需要 CS2、GPU、真实 Demo、ASR、LLM 或 API。
+CI 在 Ubuntu Python 3.11/3.12/3.13 和 Windows Python 3.12 的同一测试矩阵中运行它。

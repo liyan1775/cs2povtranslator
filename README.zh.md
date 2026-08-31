@@ -75,7 +75,9 @@ cs2pov workspace init "D:\cs2pov-workspace"
 cs2pov run "D:\demos\match.dem.zst"
 ```
 
-01E-A 已加入显式 Demo 素材库。非程序员可以先导入、查看和检查素材：
+01E 已把 Demo 素材库接入新 Pipeline。普通用户只要在 `run` 或向导中选择
+本机 Demo，程序就会自动导入并在后续 Job 中复用同一份素材，不需要先手工
+执行 `demos import`。非程序员仍可用下面的命令显式整理、查看和诊断素材：
 
 ```powershell
 cs2pov demos import "D:\demos\match.dem.zst"
@@ -84,12 +86,15 @@ cs2pov demos inspect <素材ID>
 ```
 
 持久源保存在工作区 `library/demos/<asset_id>/`；
-`cache/decompressed_demos/` 只是可重建的解压缓存，可以清理。`demos inspect`
-严格只读；缓存缺失或损坏时，再次 import（以及未来的内部 resolve）才会重建。
+`cache/decompressed_demos/` 只是可重建的解压缓存，可以在程序未运行时清理。
+新建的受管 Job 只在 manifest 中保存素材引用，`jobs/<job>/input/` 保持为空，
+不会复制、链接 Demo，也不会写入源文件绝对路径。首次导入成功后，可以删除外部
+原文件；不要删除工作区素材库中的持久源。缓存删掉后，下一次需要 Demo 的阶段会
+自动重建。`demos inspect` 严格只读，适合检查资产状态。
 
-请注意边界：01E-A 只是显式素材管理，现有 `run`、向导和 Pipeline 尚未自动引用
-素材 ID，Job 仍会保留自己的 `input/` 副本；这部分在 01E-B 才接入。普通用户也
-仍可直接按现有向导或 `cs2pov run <demo>` 使用，不必先 import。
+旧 Job 仍保留自己的 `input/`，不会自动迁移。受管 Job 切换工作区后，必须回到
+包含该 DemoAsset 的原工作区才能恢复需要 Demo 的阶段。`--output` 只改变新 Job
+的存放位置，素材仍归当前工作区所有。
 
 普通用户不需要选择输出根。`--output` 只用于显式的旧版外部输出兼容模式，
 会显示警告；它不会自动迁移已有 Job。旧 Job 可以原地查看和修改，但任何
@@ -250,7 +255,7 @@ v0.7.x  GitHub 仓库落地 / 作品集发布整理 ✅
 v0.8.x  模型管理 / 通用术语 / Dust2/Anubis 词典试点 ✅
 v0.9.x  Comms Overlay：按回合通讯流、人工校对中间产物、剪映 overlay 素材 🚧
 01E-A   工作区 Demo 素材库：跨格式内容去重、检查和缓存重建 ✅
-01E-B   Pipeline/Job 自动引用素材、移除重复 input 副本 ⏳
+01E-B   Pipeline/Job 自动引用素材、移除重复 input 副本 ✅
 ```
 
 下一阶段建议见 [ROADMAP.md](ROADMAP.md)。
@@ -280,8 +285,9 @@ v0.9.x  Comms Overlay：按回合通讯流、人工校对中间产物、剪映 o
 当前项目是本地工具，不是云端 SaaS。默认不会上传 demo、语音或字幕。LLM 翻译阶段只会把待翻译文本发送到你配置的 API 服务；不配置 API key 时也能生成原文 / dry-run / 占位字幕。
 
 不要把真实 Demo、工作区 `library/demos/`、解压缓存或真实素材哈希提交到 Git。
-当前没有素材 delete、独立 repair 命令、旧 Job 迁移、Web 管理界面、理解翻译或 POV 录制；
-这些不能从 01E-A 的素材管理命令中推断为已经完成。
+当前没有素材 delete、独立 repair 命令、旧 Job 迁移、Web 管理界面、理解翻译、
+POV 录制或最终视频一体化的一键流程。当前主产物仍是按回合时间对齐的双语字幕、
+可人工复核的 YAML/HTML，以及绿幕/透明 Comms Overlay 素材。
 
 ### v0.9.8：默认不展示回合倒计时
 

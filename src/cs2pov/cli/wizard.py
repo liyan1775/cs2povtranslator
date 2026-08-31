@@ -19,6 +19,8 @@ from cs2pov.storage.config_store import (
 from cs2pov.storage.jsonl import read_json
 from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver, WorkspaceRuntime
+from cs2pov.application.demo_assets import DemoAssetUseCaseError
+from cs2pov.cli.pipeline_demo import prepare_demo_asset
 from cs2pov.application.workspace import WorkspaceSelectionPortError
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
@@ -45,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     except WizardAbort as exc:
         print(f"\n已停止：{exc}")
         return 1
-    except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+    except (WorkspaceRuntimeError, JobRuntimeError, DemoAssetUseCaseError) as exc:
         print(f"\n错误[{exc.code}]：{exc.message_zh}")
         print(f"建议：{exc.suggestion_zh}")
         return 1
@@ -75,9 +77,22 @@ def run_wizard(args: argparse.Namespace) -> int:
     if not ask_yes_no("开始准备 demo 吗？", default=True):
         raise WizardAbort("用户取消准备 demo")
 
+    preparation = prepare_demo_asset(demo_path, runtime=runtime)
+    if preparation.result.disposition == "imported":
+        print("已导入到当前工作区素材库，之后可重复使用。")
+    else:
+        print("工作区已有相同 Demo，本次直接复用，不再占用一份长期空间。")
+    print(f"素材 ID：{preparation.ref.asset_id}")
     policy = JobRuntime.from_config(runtime, config)
-    engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
-    engine.run(demo_path, to_stage=StageName.BUILD_VOICE_ACTIVITY)
+    engine = PipelineEngine(
+        config,
+        runtime=runtime,
+        job_runtime=policy,
+        demo_asset_ref=preparation.ref,
+        demo_asset_display_name=preparation.display_name,
+        demo_assets=preparation.service,
+    )
+    engine.run(None, to_stage=StageName.BUILD_VOICE_ACTIVITY)
 
     step(2, "确认地图", "地图会影响报点翻译和后续配置。自动识别失败时可以手动输入。")
     demo_info = read_json(engine.store.demo_info_path)
@@ -123,7 +138,7 @@ def run_wizard(args: argparse.Namespace) -> int:
     configure_translation(config, defaults)
 
     step(7, "确认任务", "请检查以下配置。开始后会进入转录、按回合翻译和导出阶段。")
-    print_run_summary(config, demo_path, engine.store.job_dir)
+    print_run_summary(config, Path(preparation.display_name), engine.store.job_dir)
     if not ask_yes_no("确认开始处理吗？", default=True):
         print(f"已暂停。Job 目录保留在：{engine.store.job_dir}")
         print("你之后可以用专家命令继续，例如从 parse_rounds 开始。")
@@ -131,7 +146,7 @@ def run_wizard(args: argparse.Namespace) -> int:
 
     engine.config = config
     engine.manifest.config = config
-    engine.run(demo_path, from_stage=StageName.PARSE_ROUNDS)
+    engine.run(None, from_stage=StageName.PARSE_ROUNDS)
 
     step(8, "生成 Comms Feed 校对文件", "v0.9.8 起，通讯流是默认主输出。这里会自动生成按回合可人工校对的 YAML/HTML/Markdown；视频 overlay 仍建议先人工检查 YAML 后再渲染。")
     from cs2pov.cli.job_ops import _update_manifest_config_and_artifacts

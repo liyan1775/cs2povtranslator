@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable
 
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeResolver
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 from cs2pov.domain.assets import (
     DemoAssetInspection,
     DemoAssetRef,
@@ -28,14 +29,33 @@ class DemoAssetUseCaseError(RuntimeError):
 class DemoAssetApplicationService:
     def __init__(
         self,
-        runtime_resolver: WorkspaceRuntimeResolver,
+        runtime_resolver: WorkspaceRuntimeResolver | None = None,
         *,
+        runtime: WorkspaceRuntime | None = None,
         repository_factory: Callable[[WorkspacePaths], FileSystemDemoAssetRepository] = FileSystemDemoAssetRepository,
     ) -> None:
+        if (runtime_resolver is None) == (runtime is None):
+            raise TypeError("必须提供 runtime_resolver 或 runtime，且只能提供一个。")
+        if runtime is not None and not isinstance(runtime, WorkspaceRuntime):
+            raise TypeError("runtime 必须是 WorkspaceRuntime。")
         if not callable(repository_factory):
             raise TypeError("repository_factory 必须可调用。")
         self.runtime_resolver = runtime_resolver
+        self._bound_runtime = runtime
         self.repository_factory = repository_factory
+
+    @classmethod
+    def for_runtime(
+        cls,
+        runtime: WorkspaceRuntime,
+        *,
+        repository_factory: Callable[[WorkspacePaths], FileSystemDemoAssetRepository] = FileSystemDemoAssetRepository,
+    ) -> "DemoAssetApplicationService":
+        return cls(runtime=runtime, repository_factory=repository_factory)
+
+    @property
+    def bound_runtime(self) -> WorkspaceRuntime | None:
+        return self._bound_runtime
 
     def import_demo(self, source: str | Path) -> DemoImportResult:
         repository = self._write_repository()
@@ -54,11 +74,11 @@ class DemoAssetApplicationService:
         return self._call(repository.resolve_asset, ref)
 
     def _read_repository(self) -> FileSystemDemoAssetRepository:
-        runtime = self.runtime_resolver.resolve_for_read()
+        runtime = self._bound_runtime or self.runtime_resolver.resolve_for_read()
         return self.repository_factory(runtime.paths)
 
     def _write_repository(self) -> FileSystemDemoAssetRepository:
-        runtime = self.runtime_resolver.resolve_for_write()
+        runtime = self._bound_runtime or self.runtime_resolver.resolve_for_write()
         return self.repository_factory(runtime.paths)
 
     @staticmethod

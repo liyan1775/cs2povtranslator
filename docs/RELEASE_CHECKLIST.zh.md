@@ -11,6 +11,7 @@ python scripts/check_workspace_cli_e2e.py
 python scripts/check_workspace_model_runtime_e2e.py
 python scripts/check_workspace_job_runtime_e2e.py
 python scripts/check_workspace_demo_asset_e2e.py
+python scripts/check_workspace_pipeline_demo_asset_e2e.py
 python -m compileall -q src tests scripts
 python scripts/launch_sanity_check.py
 cs2pov --help
@@ -48,7 +49,7 @@ python scripts/check_release_version.py "vX.Y.Z" --root .
 - docs/OUTPUT_FILES.zh.md 是否与当前输出一致。
 - docs/FAQ.zh.md 是否覆盖常见问题。
 - docs/SECURITY_AND_PRIVACY.zh.md 是否说明反馈包脱敏。
-- DemoAsset 文档是否明确 `library/demos` 持久、解压 cache 可清、01E-B 尚未接 Pipeline。
+- DemoAsset 文档是否明确 `library/demos` 持久、解压 cache 可清、新 Job 不复制 Demo、旧 Job 不自动迁移。
 
 ## 真实 demo smoke
 

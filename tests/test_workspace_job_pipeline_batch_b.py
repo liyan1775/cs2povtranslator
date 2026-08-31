@@ -88,6 +88,12 @@ def _run_args(**overrides):
 def test_explicit_output_warns_before_and_after_run(monkeypatch, tmp_path: Path, capsys):
     runtime = _runtime(tmp_path)
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: runtime)
+    preparation = type("Preparation", (), {
+        "result": type("Result", (), {"disposition": "imported"})(),
+        "ref": object(), "display_name": "demo.dem", "service": object(),
+        "resolved_path": tmp_path / "workspace" / "library" / "source.dem",
+    })()
+    monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
 
     class _Engine:
         def __init__(self, config, **kwargs):

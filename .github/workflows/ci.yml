@@ -71,6 +71,9 @@ jobs:
       - name: Exercise workspace DemoAsset library end to end
         run: python scripts/check_workspace_demo_asset_e2e.py
 
+      - name: Exercise Pipeline DemoAsset references end to end
+        run: python scripts/check_workspace_pipeline_demo_asset_e2e.py
+
       - name: Compile Python sources
         run: python -m compileall -q src tests scripts
 

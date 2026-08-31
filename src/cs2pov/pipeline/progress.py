@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 import traceback
 
 from cs2pov.domain.models import StageName
@@ -31,9 +32,32 @@ class ProgressSink:
             with self.log_path.open("a", encoding="utf-8") as f:
                 f.write(line + "\n")
 
-    def exception(self, stage: StageName | str, exc: BaseException, error_log: Path | None = None) -> None:
-        self.emit(stage, f"失败：{exc}", "error")
+    def exception(
+        self,
+        stage: StageName | str,
+        exc: BaseException,
+        error_log: Path | None = None,
+        *,
+        redact_values: tuple[str, ...] = (),
+    ) -> None:
+        message = redact_text(str(exc), redact_values)
+        self.emit(stage, f"失败：{message}", "error")
         if error_log:
             with error_log.open("a", encoding="utf-8") as f:
                 f.write(f"\n[{datetime.now().isoformat()}] stage={getattr(stage, 'value', stage)}\n")
-                f.write("".join(traceback.format_exception(exc)))
+                formatted = "".join(traceback.format_exception(exc))
+                f.write(redact_text(formatted, redact_values))
+
+
+def redact_text(text: str, values: tuple[str, ...]) -> str:
+    result = text
+    for value in values:
+        if not value:
+            continue
+        variants = {value, value.replace("\\", "/"), value.replace("/", "\\")}
+        for variant in sorted(variants, key=len, reverse=True):
+            result = re.sub(re.escape(variant), "[workspace-managed]", result, flags=re.IGNORECASE)
+    return result
+
+
+_redact_text = redact_text

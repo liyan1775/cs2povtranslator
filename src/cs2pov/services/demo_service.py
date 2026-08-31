@@ -23,7 +23,19 @@ class DemoService:
             return target
         return self.adapter.decompress_if_needed(input_path, target)
 
-    def inspect(self, demo_path: Path, original_input: Path, store: ArtifactStore) -> DemoInfo:
+    def inspect(
+        self,
+        demo_path: Path,
+        original_input: Path,
+        store: ArtifactStore,
+        *,
+        public_input_path: str | None = None,
+        public_demo_path: str | None = None,
+    ) -> DemoInfo:
         info = self.adapter.inspect(demo_path, original_input)
+        if public_input_path is not None:
+            info.input_path = public_input_path
+        if public_demo_path is not None:
+            info.demo_path = public_demo_path
         write_json(store.demo_info_path, info)
         return info

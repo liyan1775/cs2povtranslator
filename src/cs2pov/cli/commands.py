@@ -21,7 +21,7 @@ from cs2pov.cli.job_ops import (
 )
 from cs2pov.domain.models import PipelineConfig, StageName
 from cs2pov.pipeline.engine import PipelineEngine
-from cs2pov.pipeline.progress import ProgressSink
+from cs2pov.pipeline.progress import ProgressSink, redact_text
 from cs2pov.storage.config_store import load_config, save_config, mask_config_for_display, llm_model_warning
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
@@ -41,9 +41,11 @@ from cs2pov.cli.player_ops import (
     set_player_alias,
 )
 from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
+from cs2pov.application.demo_assets import DemoAssetUseCaseError
 from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver
 from cs2pov.application.workspace_runtime import WorkspaceRuntime
 from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
+from cs2pov.cli.pipeline_demo import prepare_demo_asset
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -267,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return dispatch(args, parser)
-    except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+    except (WorkspaceRuntimeError, JobRuntimeError, DemoAssetUseCaseError) as exc:
         payload = {"ok": False, "error": {"code": exc.code, "message_zh": exc.message_zh, "suggestion_zh": exc.suggestion_zh}}
         if getattr(args, "json", False):
             print(json.dumps(payload, ensure_ascii=False))
@@ -650,6 +652,7 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
     explicit_output = args.output is not None
     path_policy = JobRuntime.from_config(runtime, PipelineConfig(), output_root=args.output)
     output_root = path_policy.output_root
+    preparation = prepare_demo_asset(args.demo, runtime=runtime)
     try:
         output_root.mkdir(parents=True, exist_ok=True)
     except (OSError, RuntimeError, ValueError) as exc:
@@ -661,12 +664,14 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
         print(*values, file=sys.stderr if getattr(args, "json", False) else sys.stdout)
     if explicit_output:
         emit("警告：正在使用旧版外部输出兼容模式（旧版外部输出），benchmark Job 和报告将写入显式 --output 目录。")
-    demo_display = str(args.demo).replace("\\", "/").rsplit("/", 1)[-1]
+    demo_display = preparation.display_name
     report: dict[str, Any] = {
         "schema_version": 1,
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "demo": demo_display,
         "demo_display": demo_display,
+        "demo_asset_id": preparation.ref.asset_id,
+        "demo_asset_disposition": preparation.result.disposition,
         "models": models,
         "team_number": args.team_number,
         "max_rounds": args.max_rounds,
@@ -675,7 +680,11 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
     }
     emit("ASR 模型对比实验")
     emit("=" * 72)
-    emit(f"demo={args.demo}")
+    emit(f"demo={demo_display}")
+    if preparation.result.disposition == "imported":
+        emit("已导入到当前工作区素材库，之后可重复使用。")
+    else:
+        emit("工作区已有相同 Demo，本次直接复用，不再占用一份长期空间。")
     emit(f"models={', '.join(models)} team={args.team_number or '[自动/全部]'} max_rounds={args.max_rounds}")
     for model in models:
         from cs2pov.storage.artifact_store import safe_name
@@ -711,16 +720,31 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
         coverage = {}
         try:
             policy = JobRuntime(runtime, output_root, config, path_policy.legacy_external_output)
-            engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
+            engine = PipelineEngine(
+                config,
+                runtime=runtime,
+                job_runtime=policy,
+                demo_asset_ref=preparation.ref,
+                demo_asset_display_name=preparation.display_name,
+                demo_assets=preparation.service,
+            )
             if args.json:
                 engine.progress = ProgressSink(engine.store.progress_log_path, verbose=False)
-            engine.run(Path(args.demo))
-            job_dir = str(engine.store.job_dir)
+            engine.run(None)
+            job_dir = engine.store.job_dir.name
             if engine.store.transcription_coverage_path.exists():
                 coverage = read_json(engine.store.transcription_coverage_path)
         except Exception as exc:  # pragma: no cover - depends on real demo/env
             ok = False
-            error = f"{type(exc).__name__}: {exc}"
+            error = redact_text(
+                f"{type(exc).__name__}: {exc}",
+                (
+                    str(runtime.root),
+                    str(output_root),
+                    str(preparation.resolved_path),
+                    str(Path(args.demo).expanduser().resolve()),
+                ),
+            )
             emit(f"FAILED: {error}")
         elapsed = round(time.perf_counter() - started, 3)
         item = {
@@ -863,14 +887,26 @@ def run_pipeline(args: argparse.Namespace) -> int:
         glossary_enabled=bool(defaults.get("glossary_enabled", True)) if args.glossary is None else bool(args.glossary),
         player_aliases=_parse_player_alias_args(args.player_alias),
     )
+    preparation = prepare_demo_asset(args.demo, runtime=runtime)
+    if preparation.result.disposition == "imported":
+        print("已导入到当前工作区素材库，之后可重复使用。")
+    else:
+        print("工作区已有相同 Demo，本次直接复用，不再占用一份长期空间。")
     policy = JobRuntime.from_config(runtime, config, output_root=args.output)
     config = policy.adapt_config(config)
     if policy.legacy_external_output:
         print("警告：正在使用旧版外部输出兼容模式（旧版外部输出），Job 将写入显式 --output 目录。")
-    engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
+    engine = PipelineEngine(
+        config,
+        runtime=runtime,
+        job_runtime=policy,
+        demo_asset_ref=preparation.ref,
+        demo_asset_display_name=preparation.display_name,
+        demo_assets=preparation.service,
+    )
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
-    engine.run(Path(args.demo), from_stage=from_stage, to_stage=to_stage)
+    engine.run(None, from_stage=from_stage, to_stage=to_stage)
     if policy.legacy_external_output:
         print("警告：旧版外部输出任务已完成；请检查并迁移该 Job。")
     return 0

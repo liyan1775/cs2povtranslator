@@ -130,14 +130,17 @@ def main() -> int:
         default_jobs = [path for path in (workspace / "jobs").iterdir() if path.is_dir()]
         assert len(default_jobs) == 1
         default_job = default_jobs[0]
-        copied_demo = default_job / "input" / demo.name
-        assert_independent_copy(demo, copied_demo)
         assert hashlib.sha256(demo.read_bytes()).hexdigest() == demo_hash
         default_manifest_path = default_job / "manifest.json"
         default_manifest = json.loads(default_manifest_path.read_text(encoding="utf-8"))
         assert default_manifest["legacy_external_output"] is False
         assert default_manifest["path_policy_version"] == 1
+        assert default_manifest["demo"]["input_mode"] == "demo_asset"
+        assert default_manifest["demo"]["asset_id"] == demo_hash
+        assert "demo_path" not in default_manifest.get("artifacts", {})
+        assert not list((default_job / "input").iterdir())
         assert_manifest_hides_roots(default_manifest_path, (workspace, external_output, home, userprofile, localappdata, appdata, xdg_state, xdg_config, state, cwd, old_cache, demo, external_demo_dir))
+        assert (workspace / "library" / "demos" / demo_hash / "asset.json").is_file()
         for path in bypass_roots:
             assert snapshot(path) == before_bypass[path], path
 
@@ -155,7 +158,10 @@ def main() -> int:
         explicit_manifest_path = explicit_jobs[0] / "manifest.json"
         explicit_manifest = json.loads(explicit_manifest_path.read_text(encoding="utf-8"))
         assert explicit_manifest["legacy_external_output"] is True
-        assert_independent_copy(demo, explicit_jobs[0] / "input" / demo.name)
+        assert explicit_manifest["demo"]["input_mode"] == "demo_asset"
+        assert explicit_manifest["demo"]["asset_id"] == demo_hash
+        assert "demo_path" not in explicit_manifest.get("artifacts", {})
+        assert not list((explicit_jobs[0] / "input").iterdir())
         assert_manifest_hides_roots(explicit_manifest_path, (workspace, external_output, home, userprofile, localappdata, appdata, xdg_state, xdg_config, state, cwd, old_cache, demo, external_demo_dir))
         for path in bypass_roots:
             assert snapshot(path) == before_bypass[path], path

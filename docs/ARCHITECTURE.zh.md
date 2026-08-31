@@ -41,9 +41,16 @@ src/cs2pov/
 工作区内 staging 和同文件系统原子提交，多进程竞争只接受完整赢家。`demos
 list/inspect` 是只读操作；缓存只能由 import 或内部 resolve 重建。
 
-01E-A 没有改变下方 Pipeline：`run`、向导和旧 Job 仍使用 Job 自己的 `input/`
-副本。01E-B 才会让 Pipeline/Job manifest 引用 `DemoAssetRef`，因此当前不能宣称
-已经消除 Job 输入重复文件。
+新建 Pipeline Job 会在入口处把外部 Demo 导入当前工作区并预检一次，然后把
+`DemoAssetRef`、安全显示名和绑定的素材服务交给 `PipelineEngine`。Engine 只解析
+这份绑定引用，不重新查找全局工作区；受管 Job 的 `input/` 不再放 Demo 副本或链接。
+旧 Job 仍走原来的 `input/` 路径，不自动迁移。外部 `--output` 只改变 Job 位置，
+不改变素材所属工作区。
+
+删除解压 cache 是安全的：需要 Demo 的阶段会从工作区持久源重建。切换到没有该
+素材的工作区时，需要 Demo 的 resume 会在写 Job 前稳定失败；不需要 Demo 的后段
+resume 不会被无关的素材缺失阻塞。这样素材管理与按回合解析、翻译、字幕和 overlay
+数据流保持分离，主产物仍是按回合对齐的双语字幕及校对/overlay 文件。
 
 ## 核心原则
 
@@ -58,7 +65,7 @@ list/inspect` 是只读操作；缓存只能由 import 或内部 resolve 重建�
 
 | 阶段 | 作用 | 主要产物 |
 |---|---|---|
-| prepare_input | 复制或解压 `.dem.zst` | `input/demo.dem` |
+| prepare_input | 解析受管 DemoAsset（legacy Job 才复制或解压） | 受管 Job 不写 Demo 到 `input/` |
 | inspect_demo | 读取地图、玩家、demo 信息 | `artifacts/demo_info.json` |
 | extract_voice | 解析语音包并解码 Opus | `artifacts/voice/` |
 | build_voice_activity | 构建语音活动时间轴 | `artifacts/voice_activity.jsonl` |
@@ -74,7 +81,7 @@ list/inspect` 是只读操作；缓存只能由 import 或内部 resolve 重建�
 
 ```text
 jobs/20260610_161929_de_mirage/
-  input/                  # demo 副本或解压结果
+  input/                  # legacy Job 的 demo；受管 Job 通常为空
   artifacts/              # 可复跑的中间产物
   final/                  # 最推荐给剪辑软件使用的字幕
   review/                 # 校对用字幕
@@ -86,7 +93,8 @@ jobs/20260610_161929_de_mirage/
 
 ## Manifest
 
-`manifest.json` 保存 Job 的配置、阶段状态、关键 artifact 路径。公开/反馈场景中不能包含：
+`manifest.json` 保存 Job 的配置、阶段状态、关键 artifact 路径和（受管 Job 的）
+`DemoAssetRef`。公开/反馈场景中不能包含：
 
 - API key
 - 原始本地绝对路径
@@ -109,4 +117,4 @@ CS2 队内语音很短、碎、上下文强。逐句翻译容易误译；按回�
 
 # 工作区 runtime 与模型边界
 
-`WorkspaceRuntime` 已由 01D-A/01D-B 接入模型扫描、加载、run、Job、Demo、向导、输出和临时音频路径；01E-A 又加入显式 DemoAsset 素材管理。默认 Job 使用当前工作区 `jobs/`，模型缓存与临时音频跟随工作区；旧配置与环境缓存仅作为只读迁移候选。显式 `--output` 是带警告的旧版兼容选项，旧 Job 可原地读取和修改，但写操作需要健康工作区。理解翻译、Web UI、录制、素材删除和正式迁移不属于当前实现范围。
+`WorkspaceRuntime` 已由 01D-A/01D-B 接入模型扫描、加载、run、Job、Demo、向导、输出和临时音频路径；01E 又加入受管 DemoAsset 素材管理。默认 Job 使用当前工作区 `jobs/`，模型缓存与临时音频跟随工作区；旧配置与环境缓存仅作为只读迁移候选。显式 `--output` 是带警告的旧版兼容选项，旧 Job 可原地读取和修改，但写操作需要健康工作区。理解翻译、Web UI、录制、素材删除和旧 Job 正式迁移不属于当前实现范围。
