@@ -730,6 +730,7 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
             )
             if args.json:
                 engine.progress = ProgressSink(engine.store.progress_log_path, verbose=False)
+            engine.demo_path = preparation.resolved_path
             engine.run(None)
             job_dir = engine.store.job_dir.name
             if engine.store.transcription_coverage_path.exists():
@@ -896,6 +897,7 @@ def run_pipeline(args: argparse.Namespace) -> int:
         demo_asset_display_name=preparation.display_name,
         demo_assets=preparation.service,
     )
+    engine.demo_path = preparation.resolved_path
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
     engine.run(None, from_stage=from_stage, to_stage=to_stage)

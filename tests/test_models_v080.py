@@ -416,6 +416,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
     preparation = type("Preparation", (), {
         "result": type("Result", (), {"disposition": "reused"})(),
         "ref": type("Ref", (), {"asset_id": "a" * 64})(), "display_name": "match.dem.zst", "service": object(),
+        "resolved_path": tmp_path / "workspace" / "library" / "source.dem",
     })()
     monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
@@ -469,6 +470,7 @@ def test_benchmark_json_keeps_engine_progress_out_of_stdout(monkeypatch, tmp_pat
     preparation = type("Preparation", (), {
         "result": type("Result", (), {"disposition": "reused"})(),
         "ref": type("Ref", (), {"asset_id": "a" * 64})(), "display_name": "match.dem.zst", "service": object(),
+        "resolved_path": tmp_path / "workspace" / "library" / "source.dem",
     })()
     monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))

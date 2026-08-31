@@ -82,6 +82,7 @@ def run_wizard(args: argparse.Namespace) -> int:
         print("已导入到当前工作区素材库，之后可重复使用。")
     else:
         print("工作区已有相同 Demo，本次直接复用，不再占用一份长期空间。")
+    print(f"素材 ID：{preparation.ref.asset_id}")
     policy = JobRuntime.from_config(runtime, config)
     engine = PipelineEngine(
         config,
@@ -91,6 +92,7 @@ def run_wizard(args: argparse.Namespace) -> int:
         demo_asset_display_name=preparation.display_name,
         demo_assets=preparation.service,
     )
+    engine.demo_path = preparation.resolved_path
     engine.run(None, to_stage=StageName.BUILD_VOICE_ACTIVITY)
 
     step(2, "确认地图", "地图会影响报点翻译和后续配置。自动识别失败时可以手动输入。")

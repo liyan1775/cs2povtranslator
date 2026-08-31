@@ -4,9 +4,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from cs2pov.domain.models import PipelineConfig, StageName, StageStatus, STAGE_ORDER
+from cs2pov.domain.models import PipelineConfig, StageName, StageStatus
 from cs2pov.domain.subtitle import policy_from_preset
-from cs2pov.pipeline.engine import PipelineEngine
+from cs2pov.pipeline.engine import PipelineEngine, slice_stages
 from cs2pov.pipeline.manifest import PipelineManifest, REDACTED_SECRET
 from cs2pov.services.subtitle_service import SubtitleService
 from cs2pov.services.translation_service import TranslationService
@@ -322,8 +322,9 @@ def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = N
             print("提示：此 Job 已绑定工作区 DemoAsset，--demo 不会改变引用；如需替换请先显式导入相同素材。")
         asset_display_name = manifest.demo_asset_display_name()
         assets = DemoAssetApplicationService.for_runtime(runtime)
+        resolved_asset_path: Path | None = None
         if _resume_requires_demo(from_stage, to_stage):
-            assets.resolve_asset(asset_ref)
+            resolved_asset_path = Path(assets.resolve_asset(asset_ref))
         engine = PipelineEngine(
             cfg,
             store=store,
@@ -334,10 +335,13 @@ def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = N
             demo_asset_display_name=asset_display_name,
             demo_assets=assets,
         )
+        engine.demo_path = resolved_asset_path
         engine.run(None, from_stage=from_stage, to_stage=to_stage)
     else:
+        legacy_demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage, to_stage)
+        manifest.mark_legacy_demo_input()
         engine = PipelineEngine(cfg, store=store, manifest=manifest, runtime=runtime, job_runtime=policy)
-        engine.demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage, to_stage)
+        engine.demo_path = legacy_demo_path
         input_path = engine.demo_path or Path(".")
         engine.run(input_path, from_stage=from_stage, to_stage=to_stage)
     return store.job_dir
@@ -394,9 +398,7 @@ def _resolve_demo_for_resume(
 
 
 def _resume_requires_demo(from_stage: StageName, to_stage: StageName | None = None) -> bool:
-    stages = STAGE_ORDER[STAGE_ORDER.index(from_stage):]
-    if to_stage is not None:
-        stages = stages[: stages.index(to_stage) + 1]
+    stages = slice_stages(from_stage, to_stage)
     return any(stage in {StageName.PREPARE_INPUT, StageName.INSPECT_DEMO, StageName.EXTRACT_VOICE, StageName.PARSE_ROUNDS} for stage in stages)
 
 

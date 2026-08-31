@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -217,6 +218,19 @@ def test_managed_prepare_resolves_asset_without_copying_into_job_input(tmp_path)
     assert engine.manifest.demo_asset_ref() == ref
 
 
+def test_managed_prepare_reuses_a_still_valid_entry_preflight_path(tmp_path):
+    resolved = tmp_path / "workspace" / "library" / "demos" / "source.dem"
+    resolved.parent.mkdir(parents=True)
+    resolved.write_bytes(b"demo")
+    engine, service, _ = managed_engine(tmp_path, resolved=resolved)
+    engine.demo_path = resolved
+
+    engine.run(None, to_stage=StageName.PREPARE_INPUT)
+
+    assert service.calls == []
+    assert engine.demo_path == resolved
+
+
 def test_managed_zst_prepare_re_resolves_when_cache_was_deleted(tmp_path):
     resolved = tmp_path / "workspace" / "cache" / "decompressed_demos" / "asset.dem"
     resolved.parent.mkdir(parents=True)
@@ -345,6 +359,7 @@ def test_pipeline_demo_helper_imports_and_preflights_once(tmp_path, monkeypatch)
     assert preparation.service.bound_runtime is runtime
     assert preparation.ref == ref
     assert preparation.display_name == "outside.dem"
+    assert preparation.resolved_path == tmp_path / "workspace" / "library" / "demos" / "source.dem"
     assert [name for name, _ in calls] == ["bind", "import", "resolve"]
 
 
@@ -356,6 +371,7 @@ def test_run_pipeline_passes_bound_asset_and_none_to_engine(monkeypatch, tmp_pat
     service = RecordingAssetService(runtime, tmp_path / "workspace" / "demo.dem")
     preparation = type("Preparation", (), {
         "runtime": runtime, "service": service, "ref": ref, "display_name": "match.dem",
+        "resolved_path": tmp_path / "workspace" / "demo.dem",
         "result": type("Result", (), {"disposition": "imported"})(),
     })()
     monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: runtime)
@@ -365,8 +381,9 @@ def test_run_pipeline_passes_bound_asset_and_none_to_engine(monkeypatch, tmp_pat
     class Engine:
         def __init__(self, config, **kwargs):
             seen["kwargs"] = kwargs
+            self.demo_path = None
         def run(self, value, **kwargs):
-            seen["run"] = (value, kwargs)
+            seen["run"] = (value, kwargs, self.demo_path)
 
     monkeypatch.setattr(commands, "PipelineEngine", Engine)
     args = type("Args", (), {
@@ -386,7 +403,11 @@ def test_run_pipeline_passes_bound_asset_and_none_to_engine(monkeypatch, tmp_pat
     assert seen["kwargs"]["demo_asset_ref"] == ref
     assert seen["kwargs"]["demo_asset_display_name"] == "match.dem"
     assert seen["kwargs"]["demo_assets"] is service
-    assert seen["run"] == (None, {"from_stage": None, "to_stage": StageName.PREPARE_INPUT})
+    assert seen["run"] == (
+        None,
+        {"from_stage": None, "to_stage": StageName.PREPARE_INPUT},
+        preparation.resolved_path,
+    )
     assert "已导入到当前工作区素材库" in capsys.readouterr().out
 
 
@@ -431,14 +452,15 @@ def test_resume_managed_job_preflights_before_engine_creation(monkeypatch, tmp_p
         def __init__(self, *args, **kwargs):
             events.append("engine")
             self.store = store
+            self.demo_path = None
         def run(self, value=None, **kwargs):
-            events.append(("run", value))
+            events.append(("run", value, self.demo_path))
 
     monkeypatch.setattr(job_ops.DemoAssetApplicationService, "for_runtime", lambda value: Service())
     monkeypatch.setattr(job_ops, "PipelineEngine", Engine)
     job_ops.resume_job(store.job_dir, StageName.PREPARE_INPUT, runtime=runtime)
 
-    assert events == ["resolve", "engine", ("run", None)]
+    assert events == ["resolve", "engine", ("run", None, tmp_path / "source.dem")]
 
 
 def test_resume_managed_late_stage_does_not_preflight_missing_asset(monkeypatch, tmp_path):
@@ -485,6 +507,34 @@ def test_resume_invalid_demo_asset_manifest_uses_stable_error_before_engine(monk
         job_ops.resume_job(store.job_dir, StageName.PREPARE_INPUT, runtime=runtime)
 
     assert caught.value.code == "demo_asset_manifest_invalid"
+
+
+def test_resume_old_job_marks_legacy_without_importing_or_migrating(monkeypatch, tmp_path):
+    from cs2pov.cli import job_ops
+
+    runtime = runtime_for(tmp_path)
+    store = ArtifactStore.create(runtime.paths.jobs_dir, job_id="old-late-resume")
+    manifest = PipelineManifest.create(store.job_dir.name, PipelineConfig())
+    manifest.save(store.manifest_path)
+
+    class Engine:
+        def __init__(self, *args, manifest, **kwargs):
+            assert manifest.demo == {"input_mode": "legacy_job_copy"}
+            manifest.save(store.manifest_path)
+            self.store = store
+        def run(self, value=None, **kwargs):
+            assert value == Path(".")
+
+    monkeypatch.setattr(job_ops, "PipelineEngine", Engine)
+    monkeypatch.setattr(
+        job_ops.DemoAssetApplicationService,
+        "for_runtime",
+        lambda value: pytest.fail("legacy resume must not create a DemoAsset service"),
+    )
+
+    job_ops.resume_job(store.job_dir, StageName.TRANSLATE, runtime=runtime)
+
+    assert PipelineManifest.load(store.manifest_path).demo == {"input_mode": "legacy_job_copy"}
 
 
 def test_managed_engine_refuses_to_implicitly_migrate_old_manifest(tmp_path):

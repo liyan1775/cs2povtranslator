@@ -158,7 +158,7 @@ class PipelineEngine:
             raise JobRuntimeError(
                 "legacy_input_path_required", "旧版 Job 必须提供 input_path。", "请从 prepare_input 阶段开始并提供 Demo 路径。"
             )
-        stages = _slice_stages(from_stage, to_stage)
+        stages = slice_stages(from_stage, to_stage)
         for stage in stages:
             self._run_stage(stage, Path(input_path) if input_path is not None else None)
         job_display = self.store.job_dir.name if self._managed_demo else str(self.store.job_dir)
@@ -172,7 +172,7 @@ class PipelineEngine:
             if stage == StageName.PREPARE_INPUT:
                 self.progress.emit(stage, "准备输入 demo。支持 .dem 和 .dem.zst。")
                 if self._managed_demo:
-                    self.demo_path = self._resolve_managed_demo()
+                    self.demo_path = self._require_demo_path()
                 else:
                     assert input_path is not None
                     self.manifest.mark_legacy_demo_input()
@@ -389,10 +389,15 @@ class PipelineEngine:
             return 64.0
 
 
-def _slice_stages(from_stage: StageName | None, to_stage: StageName | None) -> list[StageName]:
+def slice_stages(from_stage: StageName | None, to_stage: StageName | None) -> list[StageName]:
     stages = STAGE_ORDER[:]
     if from_stage is not None:
         stages = stages[stages.index(from_stage):]
     if to_stage is not None:
         stages = stages[: stages.index(to_stage) + 1]
     return stages
+
+
+def _slice_stages(from_stage: StageName | None, to_stage: StageName | None) -> list[StageName]:
+    """Backward-compatible alias for older internal callers and tests."""
+    return slice_stages(from_stage, to_stage)

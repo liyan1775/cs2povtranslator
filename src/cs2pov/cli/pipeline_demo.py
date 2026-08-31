@@ -15,6 +15,7 @@ class PreparedDemoAsset:
     result: DemoImportResult
     ref: DemoAssetRef
     display_name: str
+    resolved_path: Path
 
 
 def prepare_demo_asset(source: str | Path, *, runtime: WorkspaceRuntime) -> PreparedDemoAsset:
@@ -22,5 +23,5 @@ def prepare_demo_asset(source: str | Path, *, runtime: WorkspaceRuntime) -> Prep
     service = DemoAssetApplicationService.for_runtime(runtime)
     result = service.import_demo(source)
     ref = result.asset.to_ref()
-    service.resolve_asset(ref)
-    return PreparedDemoAsset(runtime, service, result, ref, result.asset.display_name)
+    resolved_path = Path(service.resolve_asset(ref))
+    return PreparedDemoAsset(runtime, service, result, ref, result.asset.display_name, resolved_path)
