@@ -111,6 +111,9 @@ class PipelineManifest:
     def demo_asset_ref(self) -> DemoAssetRef | None:
         input_mode = self.demo.get("input_mode")
         if input_mode is None:
+            ambiguous = {"asset_id", "asset_manifest"} & self.demo.keys()
+            if ambiguous:
+                raise ValueError("demo.input_mode 缺失，但仍包含 DemoAsset 身份字段。")
             return None
         if input_mode == "legacy_job_copy":
             conflicting = _DEMO_ASSET_IDENTITY_KEYS & self.demo.keys()

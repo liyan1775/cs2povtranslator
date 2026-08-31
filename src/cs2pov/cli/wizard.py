@@ -92,7 +92,6 @@ def run_wizard(args: argparse.Namespace) -> int:
         demo_asset_display_name=preparation.display_name,
         demo_assets=preparation.service,
     )
-    engine.demo_path = preparation.resolved_path
     engine.run(None, to_stage=StageName.BUILD_VOICE_ACTIVITY)
 
     step(2, "确认地图", "地图会影响报点翻译和后续配置。自动识别失败时可以手动输入。")

@@ -322,9 +322,8 @@ def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = N
             print("提示：此 Job 已绑定工作区 DemoAsset，--demo 不会改变引用；如需替换请先显式导入相同素材。")
         asset_display_name = manifest.demo_asset_display_name()
         assets = DemoAssetApplicationService.for_runtime(runtime)
-        resolved_asset_path: Path | None = None
         if _resume_requires_demo(from_stage, to_stage):
-            resolved_asset_path = Path(assets.resolve_asset(asset_ref))
+            assets.resolve_asset(asset_ref)
         engine = PipelineEngine(
             cfg,
             store=store,
@@ -335,7 +334,6 @@ def resume_job(path: Path, from_stage: StageName, to_stage: StageName | None = N
             demo_asset_display_name=asset_display_name,
             demo_assets=assets,
         )
-        engine.demo_path = resolved_asset_path
         engine.run(None, from_stage=from_stage, to_stage=to_stage)
     else:
         legacy_demo_path = _resolve_demo_for_resume(store, manifest, demo_path, from_stage, to_stage)

@@ -143,6 +143,26 @@ def test_legacy_mode_rejects_managed_identity_fields_instead_of_ignoring_them():
         manifest.to_public_dict()
 
 
+def test_missing_input_mode_cannot_hide_managed_asset_identity(tmp_path):
+    manifest = make_manifest()
+    manifest.bind_demo_asset(make_ref(), "match.dem")
+    manifest.demo.pop("input_mode")
+
+    with pytest.raises(ValueError, match="input_mode"):
+        manifest.demo_asset_ref()
+    with pytest.raises(ValueError, match="input_mode"):
+        manifest.to_public_dict()
+
+    raw = {
+        **PipelineManifest.create("old", PipelineConfig()).to_public_dict(),
+        "demo": dict(manifest.demo),
+    }
+    path = tmp_path / "ambiguous-manifest.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="input_mode"):
+        PipelineManifest.load(path)
+
+
 def test_old_manifest_without_input_mode_remains_readable_and_is_not_rewritten(tmp_path):
     manifest = make_manifest()
     path = tmp_path / "manifest.json"
@@ -218,17 +238,44 @@ def test_managed_prepare_resolves_asset_without_copying_into_job_input(tmp_path)
     assert engine.manifest.demo_asset_ref() == ref
 
 
-def test_managed_prepare_reuses_a_still_valid_entry_preflight_path(tmp_path):
+def test_managed_prepare_revalidates_even_when_an_entry_preflight_path_exists(tmp_path):
     resolved = tmp_path / "workspace" / "library" / "demos" / "source.dem"
     resolved.parent.mkdir(parents=True)
     resolved.write_bytes(b"demo")
-    engine, service, _ = managed_engine(tmp_path, resolved=resolved)
+    engine, service, ref = managed_engine(tmp_path, resolved=resolved)
     engine.demo_path = resolved
 
     engine.run(None, to_stage=StageName.PREPARE_INPUT)
 
-    assert service.calls == []
+    assert service.calls == [ref]
     assert engine.demo_path == resolved
+
+
+def test_managed_prepare_rejects_persistent_source_tampered_after_entry_preflight(tmp_path):
+    from cs2pov.workspace.service import WorkspaceService
+
+    runtime = runtime_for(tmp_path)
+    WorkspaceService(runtime.paths, minimum_free_bytes=0).initialize()
+    source = tmp_path / "external.dem"
+    source.write_bytes(b"original-demo")
+    assets = DemoAssetApplicationService.for_runtime(runtime)
+    result = assets.import_demo(source)
+    ref = result.asset.to_ref()
+    preflight_path = assets.resolve_asset(ref)
+    engine = PipelineEngine(
+        PipelineConfig(),
+        runtime=runtime,
+        demo_asset_ref=ref,
+        demo_asset_display_name=result.asset.display_name,
+        demo_assets=assets,
+    )
+    preflight_path.write_bytes(b"tampered-demo")
+
+    with pytest.raises(DemoAssetUseCaseError) as caught:
+        engine.run(None, to_stage=StageName.PREPARE_INPUT)
+
+    assert caught.value.code == "demo_asset_integrity_failed"
+    assert engine.manifest.stages[StageName.PREPARE_INPUT.value] == "failed"
 
 
 def test_managed_zst_prepare_re_resolves_when_cache_was_deleted(tmp_path):
@@ -403,11 +450,7 @@ def test_run_pipeline_passes_bound_asset_and_none_to_engine(monkeypatch, tmp_pat
     assert seen["kwargs"]["demo_asset_ref"] == ref
     assert seen["kwargs"]["demo_asset_display_name"] == "match.dem"
     assert seen["kwargs"]["demo_assets"] is service
-    assert seen["run"] == (
-        None,
-        {"from_stage": None, "to_stage": StageName.PREPARE_INPUT},
-        preparation.resolved_path,
-    )
+    assert seen["run"] == (None, {"from_stage": None, "to_stage": StageName.PREPARE_INPUT}, None)
     assert "已导入到当前工作区素材库" in capsys.readouterr().out
 
 
@@ -460,7 +503,7 @@ def test_resume_managed_job_preflights_before_engine_creation(monkeypatch, tmp_p
     monkeypatch.setattr(job_ops, "PipelineEngine", Engine)
     job_ops.resume_job(store.job_dir, StageName.PREPARE_INPUT, runtime=runtime)
 
-    assert events == ["resolve", "engine", ("run", None, tmp_path / "source.dem")]
+    assert events == ["resolve", "engine", ("run", None, None)]
 
 
 def test_resume_managed_late_stage_does_not_preflight_missing_asset(monkeypatch, tmp_path):

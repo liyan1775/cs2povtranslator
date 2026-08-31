@@ -172,7 +172,7 @@ class PipelineEngine:
             if stage == StageName.PREPARE_INPUT:
                 self.progress.emit(stage, "准备输入 demo。支持 .dem 和 .dem.zst。")
                 if self._managed_demo:
-                    self.demo_path = self._require_demo_path()
+                    self.demo_path = self._resolve_managed_demo()
                 else:
                     assert input_path is not None
                     self.manifest.mark_legacy_demo_input()

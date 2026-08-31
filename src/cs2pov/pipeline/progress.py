@@ -40,16 +40,16 @@ class ProgressSink:
         *,
         redact_values: tuple[str, ...] = (),
     ) -> None:
-        message = _redact_text(str(exc), redact_values)
+        message = redact_text(str(exc), redact_values)
         self.emit(stage, f"失败：{message}", "error")
         if error_log:
             with error_log.open("a", encoding="utf-8") as f:
                 f.write(f"\n[{datetime.now().isoformat()}] stage={getattr(stage, 'value', stage)}\n")
                 formatted = "".join(traceback.format_exception(exc))
-                f.write(_redact_text(formatted, redact_values))
+                f.write(redact_text(formatted, redact_values))
 
 
-def _redact_text(text: str, values: tuple[str, ...]) -> str:
+def redact_text(text: str, values: tuple[str, ...]) -> str:
     result = text
     for value in values:
         if not value:
@@ -58,3 +58,6 @@ def _redact_text(text: str, values: tuple[str, ...]) -> str:
         for variant in sorted(variants, key=len, reverse=True):
             result = re.sub(re.escape(variant), "[workspace-managed]", result, flags=re.IGNORECASE)
     return result
+
+
+_redact_text = redact_text

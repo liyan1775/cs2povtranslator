@@ -495,3 +495,59 @@ def test_benchmark_json_keeps_engine_progress_out_of_stdout(monkeypatch, tmp_pat
     assert "真实引擎进度" not in captured.out
     progress_path = tmp_path / "bench_out" / "20260101_000000_de_mirage" / "progress.log"
     assert "真实引擎进度" in progress_path.read_text(encoding="utf-8")
+
+
+def test_benchmark_redacts_managed_paths_from_failure_report_and_streams(monkeypatch, tmp_path, capsys):
+    from argparse import Namespace
+    import json
+    import cs2pov.cli.commands as commands
+
+    runtime = _runtime(tmp_path / "workspace")
+    resolved = runtime.paths.demo_library_dir / ("a" * 64) / "source.dem"
+
+    class DummyStore:
+        def __init__(self, job_dir):
+            self.job_dir = job_dir
+            self.progress_log_path = job_dir / "progress.log"
+            self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
+
+    class FailingEngine:
+        def __init__(self, config, **kwargs):
+            self.store = DummyStore(Path(config.output_root) / "benchmark-job")
+            self.demo_path = None
+
+        def run(self, demo=None, **kwargs):
+            raise RuntimeError(f"cannot open {resolved}")
+
+    preparation = type("Preparation", (), {
+        "result": type("Result", (), {"disposition": "reused"})(),
+        "ref": type("Ref", (), {"asset_id": "a" * 64})(),
+        "display_name": "match.dem",
+        "service": object(),
+        "resolved_path": resolved,
+    })()
+    monkeypatch.setattr(commands, "PipelineEngine", FailingEngine)
+    monkeypatch.setattr(commands, "prepare_demo_asset", lambda source, runtime: preparation)
+    monkeypatch.chdir(tmp_path)
+    args = Namespace(
+        demo=str(tmp_path / "external" / "match.dem"),
+        output="bench_out",
+        models="base",
+        team_number=2,
+        max_rounds=1,
+        device="cpu",
+        compute_type="int8",
+        language="auto",
+        cache_dir=None,
+        json=True,
+    )
+
+    assert commands.run_asr_benchmark(args, runtime=runtime) == 1
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    report_text = next((tmp_path / "bench_out").glob("asr_benchmark_*.json")).read_text("utf-8")
+    combined = captured.out + captured.err + report_text
+    assert report["runs"][0]["ok"] is False
+    assert str(runtime.root) not in combined
+    assert str(resolved) not in combined
+    assert "[workspace-managed]" in combined

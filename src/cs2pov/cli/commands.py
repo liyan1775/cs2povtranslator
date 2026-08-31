@@ -21,7 +21,7 @@ from cs2pov.cli.job_ops import (
 )
 from cs2pov.domain.models import PipelineConfig, StageName
 from cs2pov.pipeline.engine import PipelineEngine
-from cs2pov.pipeline.progress import ProgressSink
+from cs2pov.pipeline.progress import ProgressSink, redact_text
 from cs2pov.storage.config_store import load_config, save_config, mask_config_for_display, llm_model_warning
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
@@ -730,14 +730,21 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
             )
             if args.json:
                 engine.progress = ProgressSink(engine.store.progress_log_path, verbose=False)
-            engine.demo_path = preparation.resolved_path
             engine.run(None)
             job_dir = engine.store.job_dir.name
             if engine.store.transcription_coverage_path.exists():
                 coverage = read_json(engine.store.transcription_coverage_path)
         except Exception as exc:  # pragma: no cover - depends on real demo/env
             ok = False
-            error = f"{type(exc).__name__}: {exc}"
+            error = redact_text(
+                f"{type(exc).__name__}: {exc}",
+                (
+                    str(runtime.root),
+                    str(output_root),
+                    str(preparation.resolved_path),
+                    str(Path(args.demo).expanduser().resolve()),
+                ),
+            )
             emit(f"FAILED: {error}")
         elapsed = round(time.perf_counter() - started, 3)
         item = {
@@ -897,7 +904,6 @@ def run_pipeline(args: argparse.Namespace) -> int:
         demo_asset_display_name=preparation.display_name,
         demo_assets=preparation.service,
     )
-    engine.demo_path = preparation.resolved_path
     from_stage = StageName(args.from_stage) if args.from_stage else None
     to_stage = StageName(args.to_stage) if args.to_stage else None
     engine.run(None, from_stage=from_stage, to_stage=to_stage)
