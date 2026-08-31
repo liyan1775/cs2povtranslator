@@ -73,6 +73,42 @@ def make_app(tmp_path):
     return DemoAssetApplicationService(resolver, repository_factory=factory), resolver, repository, factory, runtime
 
 
+def test_for_runtime_binds_one_immutable_runtime_without_selection_lookup(tmp_path):
+    runtime = WorkspaceRuntime(tmp_path / "workspace-a", "workspace-a", 1, 1)
+    app = DemoAssetApplicationService.for_runtime(runtime)
+    assert app.bound_runtime is runtime
+    assert app.bound_runtime.paths.root == runtime.root
+
+
+def test_bound_runtime_service_uses_bound_paths_even_if_global_selection_changes(tmp_path):
+    runtime_a = WorkspaceRuntime(tmp_path / "workspace-a", "workspace-a", 1, 1)
+    runtime_b = WorkspaceRuntime(tmp_path / "workspace-b", "workspace-b", 1, 1)
+    repository = FakeRepository()
+    factory = RecordingFactory(repository)
+    resolver = FakeResolver(runtime_b)
+    app = DemoAssetApplicationService.for_runtime(runtime_a, repository_factory=factory)
+
+    app.import_demo("match.dem")
+    app.inspect_asset("a" * 64)
+    app.resolve_asset(DemoAssetRef("a" * 64, f"library/demos/{'a' * 64}/asset.json"))
+
+    assert [paths.root for paths in factory.paths] == [runtime_a.root, runtime_a.root, runtime_a.root]
+    assert resolver.calls == []
+
+
+def test_constructor_requires_exactly_one_of_resolver_or_runtime(tmp_path):
+    runtime = WorkspaceRuntime(tmp_path / "workspace", "workspace", 1, 1)
+    with pytest.raises(TypeError, match="runtime_resolver 或 runtime"):
+        DemoAssetApplicationService()
+    with pytest.raises(TypeError, match="runtime_resolver 或 runtime"):
+        DemoAssetApplicationService(FakeResolver(runtime), runtime=runtime)
+
+
+def test_resolver_mode_remains_unbound(tmp_path):
+    app, _, _, _, _ = make_app(tmp_path)
+    assert app.bound_runtime is None
+
+
 def test_import_resolves_one_write_runtime_before_repository_call(tmp_path):
     app, resolver, repository, factory, runtime = make_app(tmp_path)
 

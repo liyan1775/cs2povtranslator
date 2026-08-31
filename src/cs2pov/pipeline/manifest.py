@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from cs2pov.domain.assets import DemoAssetRef, validate_display_name
 from cs2pov.domain.models import PipelineConfig, StageName, StageStatus, STAGE_ORDER, to_jsonable
 from cs2pov.storage.jsonl import read_json, write_json
 
@@ -58,6 +59,60 @@ class PipelineManifest:
         # paths whenever possible.
         self.artifacts[key] = str(path)
         self.updated_at = datetime.now().isoformat(timespec="seconds")
+
+    def bind_demo_asset(self, ref: DemoAssetRef, display_name: str) -> None:
+        if not isinstance(ref, DemoAssetRef):
+            raise TypeError("ref 必须是 DemoAssetRef。")
+        validate_display_name(display_name)
+        metadata = {
+            key: value
+            for key, value in self.demo.items()
+            if key not in {"input_mode", "asset_id", "asset_manifest", "display_name"}
+        }
+        self.demo = {
+            **metadata,
+            "input_mode": "demo_asset",
+            "asset_id": ref.asset_id,
+            "asset_manifest": ref.asset_manifest_relative_path,
+            "display_name": display_name,
+        }
+        self.updated_at = datetime.now().isoformat(timespec="seconds")
+
+    def mark_legacy_demo_input(self) -> None:
+        self.demo = {
+            key: value
+            for key, value in self.demo.items()
+            if key not in {"asset_id", "asset_manifest", "display_name"}
+        }
+        self.demo["input_mode"] = "legacy_job_copy"
+        self.updated_at = datetime.now().isoformat(timespec="seconds")
+
+    def demo_asset_ref(self) -> DemoAssetRef | None:
+        input_mode = self.demo.get("input_mode")
+        if input_mode is None:
+            return None
+        if input_mode == "legacy_job_copy":
+            return None
+        if input_mode != "demo_asset":
+            raise ValueError("demo.input_mode 不受支持。")
+        try:
+            return DemoAssetRef.from_dict(
+                {
+                    "asset_id": self.demo["asset_id"],
+                    "asset_manifest_relative_path": self.demo["asset_manifest"],
+                }
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("demo_asset 引用字段无效。") from exc
+
+    def demo_asset_display_name(self) -> str | None:
+        if self.demo.get("input_mode") is None or self.demo.get("input_mode") == "legacy_job_copy":
+            return None
+        self.demo_asset_ref()
+        try:
+            return validate_display_name(self.demo["display_name"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("demo_asset display_name 无效。") from exc
 
     def _public_artifact_path(self, value: str) -> str:
         """Return a shareable artifact path for manifest.json.

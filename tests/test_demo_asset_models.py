@@ -12,6 +12,7 @@ from cs2pov.domain.assets import (
     DemoAssetSummary,
     DemoImportResult,
 )
+import cs2pov.domain.assets as assets_module
 
 
 def valid_asset() -> DemoAsset:
@@ -64,6 +65,34 @@ def test_demo_asset_ref_has_exact_stable_schema():
         "asset_id": asset.asset_id,
         "asset_manifest_relative_path": f"library/demos/{asset.asset_id}/asset.json",
     }
+
+
+def test_demo_asset_ref_round_trips_and_requires_exact_safe_reference_schema():
+    asset = valid_asset()
+    ref = asset.to_ref()
+
+    from_dict = getattr(DemoAssetRef, "from_dict", None)
+    assert callable(from_dict)
+    assert from_dict(ref.to_dict()) == ref
+    invalid_values = [
+        {**ref.to_dict(), "extra": "nope"},
+        {"asset_id": ref.asset_id},
+        {"asset_manifest_relative_path": ref.asset_manifest_relative_path},
+        {"asset_id": "A" * 64, "asset_manifest_relative_path": ref.asset_manifest_relative_path},
+        {"asset_id": ref.asset_id, "asset_manifest_relative_path": "D:/outside/asset.json"},
+        {"asset_id": ref.asset_id, "asset_manifest_relative_path": "library/demos/other/asset.json"},
+    ]
+    for value in invalid_values:
+        with pytest.raises(ValueError):
+            from_dict(value)
+
+
+def test_display_name_validation_is_shared_domain_entry_point():
+    validate_display_name = getattr(assets_module, "validate_display_name", None)
+    assert callable(validate_display_name)
+    assert validate_display_name("match.dem.zst") == "match.dem.zst"
+    with pytest.raises(ValueError):
+        validate_display_name("nested/match.dem")
 
 
 def test_all_dtos_are_json_serializable_and_inspection_cache_missing_is_ok():

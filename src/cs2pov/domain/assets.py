@@ -53,7 +53,7 @@ def _validate_imported_at(value: object) -> str:
     return value
 
 
-def _validate_display_name(value: object) -> str:
+def validate_display_name(value: object) -> str:
     if not isinstance(value, str) or not value or value != value.strip() or not value.strip() or len(value) > 255:
         raise ValueError("display_name 必须是 1 到 255 个字符。")
     if "/" in value or "\\" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
@@ -103,7 +103,7 @@ class DemoAsset:
         if self.source_format not in {"dem", "dem.zst"}:
             raise ValueError("source_format 必须为 dem 或 dem.zst。")
         _validate_relative_path(self.source_relative_path, asset_id, self.source_format)
-        _validate_display_name(self.display_name)
+        validate_display_name(self.display_name)
         _validate_imported_at(self.imported_at)
 
     def to_dict(self) -> dict[str, object]:
@@ -145,6 +145,14 @@ class DemoAssetRef:
             "asset_manifest_relative_path": self.asset_manifest_relative_path,
         }
 
+    @classmethod
+    def from_dict(cls, value: object) -> "DemoAssetRef":
+        if not isinstance(value, dict) or frozenset(value) != frozenset(
+            {"asset_id", "asset_manifest_relative_path"}
+        ):
+            raise ValueError("DemoAssetRef 字段不符合固定 schema。")
+        return cls(**value)
+
 
 @dataclass(frozen=True, slots=True)
 class DemoImportResult:
@@ -183,7 +191,7 @@ class DemoAssetSummary:
     def __post_init__(self) -> None:
         _validate_hash(self.asset_id, "asset_id")
         if self.display_name is not None:
-            _validate_display_name(self.display_name)
+            validate_display_name(self.display_name)
         if self.source_format is not None and self.source_format not in {"dem", "dem.zst"}:
             raise ValueError("source_format 必须为 dem 或 dem.zst。")
         if self.source_size_bytes is not None:
