@@ -1,0 +1,589 @@
+{
+  "schema_version": 1,
+  "fixture_id": "new-domain-three-round-v1",
+  "demo": {
+    "schema_version": 1,
+    "demo_asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "map_name": "de_mirage",
+    "server_name": "fixture-server",
+    "tick_rate": {
+      "numerator": 64,
+      "denominator": 1
+    },
+    "players": [
+      {
+        "player_id": "player-alpha",
+        "display_name": "Alpha",
+        "team_number": 2
+      },
+      {
+        "player_id": "player-bravo",
+        "display_name": "Bravo",
+        "team_number": 2
+      }
+    ]
+  },
+  "rounds": {
+    "schema_version": 1,
+    "rounds": [
+      {
+        "round_id": "round-001",
+        "display_number": 1,
+        "start_us": 10000000,
+        "end_us": 20000000,
+        "start_tick": 640,
+        "end_tick": 1280,
+        "match_phase": "regulation_first_half",
+        "provenance": "synthetic-round-parser-v1",
+        "confidence": "exact",
+        "boundary_uncertainty_us": 0
+      },
+      {
+        "round_id": "round-002",
+        "display_number": 2,
+        "start_us": 20000000,
+        "end_us": 30000000,
+        "start_tick": 1280,
+        "end_tick": 1920,
+        "match_phase": "regulation_first_half",
+        "provenance": "synthetic-round-parser-v1",
+        "confidence": "exact",
+        "boundary_uncertainty_us": 0
+      },
+      {
+        "round_id": "round-003",
+        "display_number": 3,
+        "start_us": 30000000,
+        "end_us": 40000000,
+        "start_tick": 1920,
+        "end_tick": 2560,
+        "match_phase": "regulation_second_half",
+        "provenance": "synthetic-round-parser-v1",
+        "confidence": "exact",
+        "boundary_uncertainty_us": 0
+      }
+    ]
+  },
+  "time_anchors": [
+    {
+      "schema_version": 1,
+      "anchor_id": "anchor-demo-ticks",
+      "source_clock": "demo_tick",
+      "source_stream_id": "demo",
+      "source_start": 640,
+      "source_end": 2560,
+      "demo_start_us": 10000000,
+      "demo_end_us": 40000000,
+      "uncertainty_us": 0,
+      "provenance": "synthetic-round-parser-v1"
+    },
+    {
+      "schema_version": 1,
+      "anchor_id": "anchor-alpha-001",
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 0,
+      "source_end": 24000,
+      "demo_start_us": 10500000,
+      "demo_end_us": 11500000,
+      "uncertainty_us": 16000,
+      "provenance": "synthetic-voice-extractor-v1"
+    },
+    {
+      "schema_version": 1,
+      "anchor_id": "anchor-alpha-002",
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 24000,
+      "source_end": 48000,
+      "demo_start_us": 20000000,
+      "demo_end_us": 21000000,
+      "uncertainty_us": 16000,
+      "provenance": "synthetic-voice-extractor-v1"
+    },
+    {
+      "schema_version": 1,
+      "anchor_id": "anchor-alpha-unassigned",
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 48000,
+      "source_end": 67200,
+      "demo_start_us": 40500000,
+      "demo_end_us": 41300000,
+      "uncertainty_us": 16000,
+      "provenance": "synthetic-voice-extractor-v1"
+    },
+    {
+      "schema_version": 1,
+      "anchor_id": "anchor-bravo-001",
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-bravo",
+      "source_start": 0,
+      "source_end": 28800,
+      "demo_start_us": 20500000,
+      "demo_end_us": 21700000,
+      "uncertainty_us": 16000,
+      "provenance": "synthetic-voice-extractor-v1"
+    }
+  ],
+  "model_configurations": [
+    {
+      "schema_version": 1,
+      "snapshot_id": "asr-config-001",
+      "capability": "asr",
+      "provider_kind": "faster-whisper-local",
+      "endpoint_profile_id": null,
+      "model_name": "fixture-asr-model",
+      "prompt_template_version": null,
+      "parameters": {
+        "language": "en"
+      },
+      "knowledge_revision_ids": [],
+      "adapter_version": "asr-adapter-v1",
+      "configuration_fingerprint": "f009a35a183786105f0e5144ade527c6afd7bc261073dd9437c71e668d0f4161"
+    },
+    {
+      "schema_version": 1,
+      "snapshot_id": "llm-config-001",
+      "capability": "understanding_translation",
+      "provider_kind": "openai-compatible",
+      "endpoint_profile_id": "provider-local-profile",
+      "model_name": "fixture-model",
+      "prompt_template_version": "understanding-v1",
+      "parameters": {
+        "max_tokens": 512,
+        "temperature": 0.2
+      },
+      "knowledge_revision_ids": [
+        "knowledge-global-001"
+      ],
+      "adapter_version": "adapter-v1",
+      "configuration_fingerprint": "2e63140f74d62f23866ae920b3a5405f84f39f9a534cdf992bea0def2c4eeabe"
+    }
+  ],
+  "model_invocations": [
+    {
+      "schema_version": 1,
+      "invocation_id": "asr-invoke-001",
+      "configuration_snapshot_id": "asr-config-001",
+      "task_id": "asr-batch-001",
+      "request_content_fingerprint": "c0b99f343162c801fd9c0c6c8ac5dc6420e84a25ad36eacd06b856c5d0e0ca54",
+      "response_content_fingerprint": "d8dce6891ea631931c15c0b77e30c7c1b9d16d223b04131cdbfb0d8d0ea119a2"
+    },
+    {
+      "schema_version": 1,
+      "invocation_id": "invoke-round-001",
+      "configuration_snapshot_id": "llm-config-001",
+      "task_id": "round-001",
+      "request_content_fingerprint": "3dc3a6ce3554d89ee26126855b168da6a3afe9266a24d0d6cb7f2e8d6260a7e2",
+      "response_content_fingerprint": "d6ebb5aa35ff7aa90e6163b251a054cdf0eeee2c3efe462aee16aa3eb73dc945"
+    },
+    {
+      "schema_version": 1,
+      "invocation_id": "invoke-round-002",
+      "configuration_snapshot_id": "llm-config-001",
+      "task_id": "round-002",
+      "request_content_fingerprint": "1d00d021b5cbcc5ac3999e43ae5101e8392694d64b800371d320c6cb126153fb",
+      "response_content_fingerprint": "4039ada518e1f7a8efa6d83054e0d239fe83741bc693db041ea26f16fb68d6cc"
+    }
+  ],
+  "voice_activities": [
+    {
+      "schema_version": 1,
+      "activity_id": "activity-alpha-001",
+      "player_id": "player-alpha",
+      "start_us": 10750000,
+      "end_us": 11250000,
+      "packet_count": 8,
+      "anchor_ids": [
+        "anchor-alpha-001"
+      ],
+      "uncertainty_us": 16000
+    },
+    {
+      "schema_version": 1,
+      "activity_id": "activity-bravo-001",
+      "player_id": "player-bravo",
+      "start_us": 20500000,
+      "end_us": 21700000,
+      "packet_count": 12,
+      "anchor_ids": [
+        "anchor-bravo-001"
+      ],
+      "uncertainty_us": 16000
+    },
+    {
+      "schema_version": 1,
+      "activity_id": "activity-alpha-002",
+      "player_id": "player-alpha",
+      "start_us": 20650000,
+      "end_us": 20950000,
+      "packet_count": 5,
+      "anchor_ids": [
+        "anchor-alpha-002"
+      ],
+      "uncertainty_us": 16000
+    },
+    {
+      "schema_version": 1,
+      "activity_id": "activity-alpha-unassigned",
+      "player_id": "player-alpha",
+      "start_us": 40500000,
+      "end_us": 41300000,
+      "packet_count": 7,
+      "anchor_ids": [
+        "anchor-alpha-unassigned"
+      ],
+      "uncertainty_us": 16000
+    }
+  ],
+  "transcript_cues": [
+    {
+      "schema_version": 1,
+      "cue_id": "cue-first",
+      "player_id": "player-alpha",
+      "round_id": "round-001",
+      "start_us": 10750000,
+      "end_us": 11250000,
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 6000,
+      "source_end": 18000,
+      "asr_original": "one jungle",
+      "language": "en",
+      "confidence": 0.91,
+      "anchor_ids": [
+        "anchor-alpha-001"
+      ],
+      "voice_activity_ids": [
+        "activity-alpha-001"
+      ],
+      "asr_invocation_record_id": "asr-invoke-001"
+    },
+    {
+      "schema_version": 1,
+      "cue_id": "cue-b-callout",
+      "player_id": "player-bravo",
+      "round_id": "round-002",
+      "start_us": 20500000,
+      "end_us": 21700000,
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-bravo",
+      "source_start": 0,
+      "source_end": 28800,
+      "asr_original": "be be be",
+      "language": "en",
+      "confidence": 0.62,
+      "anchor_ids": [
+        "anchor-bravo-001"
+      ],
+      "voice_activity_ids": [
+        "activity-bravo-001"
+      ],
+      "asr_invocation_record_id": "asr-invoke-001"
+    },
+    {
+      "schema_version": 1,
+      "cue_id": "cue-overlap",
+      "player_id": "player-alpha",
+      "round_id": "round-002",
+      "start_us": 20650000,
+      "end_us": 20950000,
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 39600,
+      "source_end": 46800,
+      "asr_original": "two short",
+      "language": "en",
+      "confidence": 0.84,
+      "anchor_ids": [
+        "anchor-alpha-002"
+      ],
+      "voice_activity_ids": [
+        "activity-alpha-002"
+      ],
+      "asr_invocation_record_id": "asr-invoke-001"
+    },
+    {
+      "schema_version": 1,
+      "cue_id": "cue-unassigned",
+      "player_id": "player-alpha",
+      "round_id": null,
+      "start_us": 40500000,
+      "end_us": 41300000,
+      "source_clock": "compact_audio_sample",
+      "source_stream_id": "player-alpha",
+      "source_start": 48000,
+      "source_end": 67200,
+      "asr_original": "after round chatter",
+      "language": "en",
+      "confidence": 0.74,
+      "anchor_ids": [
+        "anchor-alpha-unassigned"
+      ],
+      "voice_activity_ids": [
+        "activity-alpha-unassigned"
+      ],
+      "asr_invocation_record_id": "asr-invoke-001"
+    }
+  ],
+  "round_understanding": [
+    {
+      "schema_version": 1,
+      "round_id": "round-001",
+      "input_fingerprint": "3dc3a6ce3554d89ee26126855b168da6a3afe9266a24d0d6cb7f2e8d6260a7e2",
+      "model_configuration_snapshot_id": "llm-config-001",
+      "invocation_record_id": "invoke-round-001",
+      "results": [
+        {
+          "schema_version": 1,
+          "cue_id": "cue-first",
+          "round_id": "round-001",
+          "asr_original": "one jungle",
+          "interpreted_source": "one jungle",
+          "translated_zh": "警家一个",
+          "confidence": 0.93,
+          "evidence": [
+            "same-round-context"
+          ],
+          "warnings": [],
+          "model_invocation_record_id": "invoke-round-001"
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "round_id": "round-002",
+      "input_fingerprint": "1d00d021b5cbcc5ac3999e43ae5101e8392694d64b800371d320c6cb126153fb",
+      "model_configuration_snapshot_id": "llm-config-001",
+      "invocation_record_id": "invoke-round-002",
+      "results": [
+        {
+          "schema_version": 1,
+          "cue_id": "cue-b-callout",
+          "round_id": "round-002",
+          "asr_original": "be be be",
+          "interpreted_source": "B, B, B",
+          "translated_zh": "B点，B点，B点",
+          "confidence": 0.86,
+          "evidence": [
+            "same-round-context",
+            "case-letter-b-v1"
+          ],
+          "warnings": [],
+          "model_invocation_record_id": "invoke-round-002"
+        },
+        {
+          "schema_version": 1,
+          "cue_id": "cue-overlap",
+          "round_id": "round-002",
+          "asr_original": "two short",
+          "interpreted_source": "two short",
+          "translated_zh": "短箱两个",
+          "confidence": 0.88,
+          "evidence": [
+            "same-round-context"
+          ],
+          "warnings": [],
+          "model_invocation_record_id": "invoke-round-002"
+        }
+      ]
+    },
+    {
+      "schema_version": 1,
+      "round_id": "round-003",
+      "input_fingerprint": "e9d417da9785735d4baa0229a2f869836db8f6af78f60a206a4af34fdce67355",
+      "model_configuration_snapshot_id": "llm-config-001",
+      "invocation_record_id": null,
+      "results": []
+    }
+  ],
+  "review_decisions": [
+    {
+      "schema_version": 1,
+      "decision_id": "decision-first",
+      "cue_id": "cue-first",
+      "source_result_fingerprint": "e8d37f49d015c67e4254c281c0575111747935c0c9d9513f7ce4deaf7eba4ea3",
+      "action": "accept",
+      "reviewed_at": "2026-08-31T12:00:00.000000Z",
+      "reviewer_label": "local-user",
+      "reason": null,
+      "revised_start_us": null,
+      "revised_end_us": null,
+      "revised_interpreted_source": null,
+      "revised_translated_zh": null
+    },
+    {
+      "schema_version": 1,
+      "decision_id": "decision-b-callout",
+      "cue_id": "cue-b-callout",
+      "source_result_fingerprint": "e37268b9bdf747e7219f1b8b6271884612515654fc05956e062deb820875b0bc",
+      "action": "edit",
+      "reviewed_at": "2026-08-31T12:01:00.000000Z",
+      "reviewer_label": "local-user",
+      "reason": "将呼叫翻译调整为更自然的中文",
+      "revised_start_us": null,
+      "revised_end_us": null,
+      "revised_interpreted_source": null,
+      "revised_translated_zh": "B点！B点！B点！"
+    },
+    {
+      "schema_version": 1,
+      "decision_id": "decision-overlap",
+      "cue_id": "cue-overlap",
+      "source_result_fingerprint": "52e36a771f6ca1d47843b278a9b056a278104e048c38109260aedd7dd1db7d9e",
+      "action": "accept",
+      "reviewed_at": "2026-08-31T12:02:00.000000Z",
+      "reviewer_label": "local-user",
+      "reason": null,
+      "revised_start_us": null,
+      "revised_end_us": null,
+      "revised_interpreted_source": null,
+      "revised_translated_zh": null
+    }
+  ],
+  "draft_timeline": {
+    "schema_version": 1,
+    "demo_asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "timebase": "demo-microseconds",
+    "input_fingerprint": "c5b5173653694f032f9e2a0d89a051d89f447fdccae69bb1a36de8e53da62721",
+    "cues": [
+      {
+        "schema_version": 1,
+        "cue_id": "cue-first",
+        "round_id": "round-001",
+        "player_id": "player-alpha",
+        "start_us": 10750000,
+        "end_us": 11250000,
+        "asr_original": "one jungle",
+        "interpreted_source": "one jungle",
+        "translated_zh": "警家一个",
+        "confidence": 0.93,
+        "evidence": [
+          "same-round-context"
+        ],
+        "understanding_result_fingerprint": "e8d37f49d015c67e4254c281c0575111747935c0c9d9513f7ce4deaf7eba4ea3"
+      },
+      {
+        "schema_version": 1,
+        "cue_id": "cue-b-callout",
+        "round_id": "round-002",
+        "player_id": "player-bravo",
+        "start_us": 20500000,
+        "end_us": 21700000,
+        "asr_original": "be be be",
+        "interpreted_source": "B, B, B",
+        "translated_zh": "B点，B点，B点",
+        "confidence": 0.86,
+        "evidence": [
+          "same-round-context",
+          "case-letter-b-v1"
+        ],
+        "understanding_result_fingerprint": "e37268b9bdf747e7219f1b8b6271884612515654fc05956e062deb820875b0bc"
+      },
+      {
+        "schema_version": 1,
+        "cue_id": "cue-overlap",
+        "round_id": "round-002",
+        "player_id": "player-alpha",
+        "start_us": 20650000,
+        "end_us": 20950000,
+        "asr_original": "two short",
+        "interpreted_source": "two short",
+        "translated_zh": "短箱两个",
+        "confidence": 0.88,
+        "evidence": [
+          "same-round-context"
+        ],
+        "understanding_result_fingerprint": "52e36a771f6ca1d47843b278a9b056a278104e048c38109260aedd7dd1db7d9e"
+      }
+    ]
+  },
+  "reviewed_timeline": {
+    "schema_version": 1,
+    "demo_asset_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "timebase": "demo-microseconds",
+    "source_draft_fingerprint": "f2a9c0a4752ff2815d528f51c2d6360cbae5427d098ac3a7b9e9cf7759a9d0ce",
+    "cues": [
+      {
+        "schema_version": 1,
+        "cue_id": "cue-first",
+        "round_id": "round-001",
+        "player_id": "player-alpha",
+        "start_us": 10750000,
+        "end_us": 11250000,
+        "asr_original": "one jungle",
+        "interpreted_source": "one jungle",
+        "model_translated_zh": "警家一个",
+        "model_confidence": 0.93,
+        "evidence": [
+          "same-round-context"
+        ],
+        "final_interpreted_source": "one jungle",
+        "final_translated_zh": "警家一个",
+        "review_decision_id": "decision-first"
+      },
+      {
+        "schema_version": 1,
+        "cue_id": "cue-b-callout",
+        "round_id": "round-002",
+        "player_id": "player-bravo",
+        "start_us": 20500000,
+        "end_us": 21700000,
+        "asr_original": "be be be",
+        "interpreted_source": "B, B, B",
+        "model_translated_zh": "B点，B点，B点",
+        "model_confidence": 0.86,
+        "evidence": [
+          "same-round-context",
+          "case-letter-b-v1"
+        ],
+        "final_interpreted_source": "B, B, B",
+        "final_translated_zh": "B点！B点！B点！",
+        "review_decision_id": "decision-b-callout"
+      },
+      {
+        "schema_version": 1,
+        "cue_id": "cue-overlap",
+        "round_id": "round-002",
+        "player_id": "player-alpha",
+        "start_us": 20650000,
+        "end_us": 20950000,
+        "asr_original": "two short",
+        "interpreted_source": "two short",
+        "model_translated_zh": "短箱两个",
+        "model_confidence": 0.88,
+        "evidence": [
+          "same-round-context"
+        ],
+        "final_interpreted_source": "two short",
+        "final_translated_zh": "短箱两个",
+        "review_decision_id": "decision-overlap"
+      }
+    ],
+    "excluded_decision_ids": []
+  },
+  "round_completion_order": [
+    "round-003",
+    "round-001",
+    "round-002"
+  ],
+  "expected": {
+    "round_ids": [
+      "round-001",
+      "round-002",
+      "round-003"
+    ],
+    "b_callout_cue_id": "cue-b-callout",
+    "asr_original": "be be be",
+    "interpreted_source": "B, B, B",
+    "final_translated_zh": "B点！B点！B点！",
+    "reviewed_cue_order": [
+      "cue-first",
+      "cue-b-callout",
+      "cue-overlap"
+    ],
+    "speechless_round_id": "round-003",
+    "unassigned_cue_id": "cue-unassigned"
+  }
+}
