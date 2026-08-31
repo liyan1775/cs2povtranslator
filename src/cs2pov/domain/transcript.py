@@ -37,6 +37,10 @@ class TranscriptCue:
             raise DomainSchemaError(
                 "domain_field_invalid", "提示无效。", "请修正后重试。"
             )
+        if self.source_end <= self.source_start:
+            raise DomainSchemaError(
+                "domain_field_invalid", "提示无效。", "请修正后重试。"
+            )
         require_int(
             self.source_start, "source_start", minimum=0, maximum=MAX_SOURCE_POSITION
         )
@@ -47,8 +51,25 @@ class TranscriptCue:
         require_identifier(self.language, "language")
         if self.confidence is not None:
             require_probability(self.confidence, "confidence")
-        object.__setattr__(self, "anchor_ids", tuple(self.anchor_ids))
-        object.__setattr__(self, "voice_activity_ids", tuple(self.voice_activity_ids))
+        if not isinstance(self.anchor_ids, (list, tuple)) or not isinstance(
+            self.voice_activity_ids, (list, tuple)
+        ):
+            raise DomainSchemaError(
+                "domain_field_invalid", "提示无效。", "请修正后重试。"
+            )
+        object.__setattr__(
+            self,
+            "anchor_ids",
+            tuple(require_identifier(x, "anchor_id") for x in self.anchor_ids),
+        )
+        object.__setattr__(
+            self,
+            "voice_activity_ids",
+            tuple(
+                require_identifier(x, "voice_activity_id")
+                for x in self.voice_activity_ids
+            ),
+        )
         if (
             not self.anchor_ids
             or any(not isinstance(x, str) for x in self.anchor_ids)

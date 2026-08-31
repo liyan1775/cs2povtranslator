@@ -30,14 +30,25 @@ class UnderstandingResult:
         ):
             require_str(v, p)
         require_probability(self.confidence, "confidence")
-        object.__setattr__(self, "evidence", tuple(self.evidence))
-        object.__setattr__(self, "warnings", tuple(self.warnings))
+        if not isinstance(self.evidence, (list, tuple)) or not isinstance(
+            self.warnings, (list, tuple)
+        ):
+            raise DomainSchemaError(
+                "domain_field_invalid", "证据无效。", "请修正后重试。"
+            )
+        object.__setattr__(
+            self, "evidence", tuple(require_str(x, "evidence") for x in self.evidence)
+        )
+        object.__setattr__(
+            self, "warnings", tuple(require_str(x, "warnings") for x in self.warnings)
+        )
         if not self.evidence or any(
             not isinstance(x, str) or not x for x in self.evidence
         ):
             raise DomainSchemaError(
                 "domain_field_invalid", "证据无效。", "请修正后重试。"
             )
+        reject_private_data(self.to_dict(), "result")
 
     def to_dict(self):
         return {
@@ -59,6 +70,7 @@ class UnderstandingResult:
     @classmethod
     def from_dict(cls, d):
         d = require_mapping(d, "result")
+        reject_private_data(d, "result")
         require_current_schema(d, "result")
         require_exact_keys(
             d,
@@ -143,6 +155,7 @@ class RoundUnderstandingDocument:
     @classmethod
     def from_dict(cls, d):
         d = require_mapping(d, "round_understanding")
+        reject_private_data(d, "round_understanding")
         require_current_schema(d, "round_understanding")
         require_exact_keys(
             d,
