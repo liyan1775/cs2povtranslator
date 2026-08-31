@@ -8,6 +8,14 @@ jobs/20260610_141449_de_mirage/
 
 v0.9.0 以后，最常用的文件仍在 `final/`，默认推荐双语字幕；如果要做 POV 通讯增强视频，还会使用 `review/comms_rounds/` 和 `final/comms_overlay/`。
 
+## 工作区素材与 Job 输入的区别
+
+- `library/demos/<asset_id>/`：01E-A 的持久 Demo 素材；包含 `asset.json` 和首次导入的一个 `source.dem` 或 `source.dem.zst`。
+- `cache/decompressed_demos/<asset_id>.dem`：可清理、可重建的解压缓存，不是最终产物。
+- `jobs/<job>/input/`：现有 Pipeline 的 Job 输入副本。01E-A 尚未改变它；01E-B 才会让 Job 自动引用素材库。
+
+可用 `cs2pov demos import/list/inspect` 管理前两项。当前没有 delete、独立 repair 命令或旧 Job 自动迁移，不能手工把素材目录当作 Job 输出目录。
+
 ## final/
 
 给剪辑软件使用的最终字幕。普通用户最应该看这里。
