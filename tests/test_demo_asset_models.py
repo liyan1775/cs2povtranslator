@@ -75,7 +75,7 @@ def test_all_dtos_are_json_serializable_and_inspection_cache_missing_is_ok():
     assert inspection.ok is True
     assert inspection.to_dict()["ok"] is True
     assert DemoAssetInspection(asset, False, "missing", ()).ok is False
-    assert DemoAssetInspection(asset, True, "valid", ("demo_asset_integrity_failed",)).ok is False
+    assert DemoAssetInspection(asset, True, "valid", ("demo_asset_integrity_failed",)).ok is True
 
 
 @pytest.mark.parametrize(
@@ -98,6 +98,8 @@ def test_all_dtos_are_json_serializable_and_inspection_cache_missing_is_ok():
         ("source_relative_path", "library/demos/./source.dem"),
         ("source_relative_path", "library/demos/../source.dem"),
         ("display_name", ""),
+        ("display_name", " leading.dem"),
+        ("display_name", "trailing.dem "),
         ("display_name", "name/with-slash.dem"),
         ("display_name", "name\\with-slash.dem"),
         ("display_name", "bad\nname.dem"),
@@ -142,7 +144,28 @@ def test_import_result_rejects_unknown_disposition(disposition):
         DemoImportResult(valid_asset(), disposition, 0)
 
 
+def test_reused_import_result_cannot_claim_persistent_bytes():
+    with pytest.raises(ValueError):
+        DemoImportResult(valid_asset(), "reused", 1)
+
+
+@pytest.mark.parametrize(
+    "healthy,issue_code",
+    [(True, "demo_asset_integrity_failed"), (False, None), (False, "")],
+)
+def test_asset_summary_requires_consistent_health_and_issue(healthy, issue_code):
+    asset = valid_asset()
+    with pytest.raises(ValueError):
+        DemoAssetSummary(asset.asset_id, asset.display_name, "dem", 14, 14, asset.imported_at, healthy, issue_code)
+
+
 @pytest.mark.parametrize("cache_status", ["", "missing-cache", "corrupted"])
 def test_inspection_rejects_unknown_cache_status(cache_status):
     with pytest.raises(ValueError):
         DemoAssetInspection(valid_asset(), True, cache_status, ())
+
+
+def test_corrupt_cache_does_not_make_persistent_asset_unhealthy():
+    inspection = DemoAssetInspection(valid_asset(), True, "corrupt", ("demo_cache_rebuild_required",))
+
+    assert inspection.ok is True

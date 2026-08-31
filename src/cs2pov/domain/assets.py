@@ -49,7 +49,7 @@ def _validate_imported_at(value: object) -> str:
 
 
 def _validate_display_name(value: object) -> str:
-    if not isinstance(value, str) or not value.strip() or len(value) > 255:
+    if not isinstance(value, str) or not value or value != value.strip() or not value.strip() or len(value) > 255:
         raise ValueError("display_name 必须是 1 到 255 个字符。")
     if "/" in value or "\\" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
         raise ValueError("display_name 不能包含路径分隔符或控制字符。")
@@ -153,6 +153,8 @@ class DemoImportResult:
         if self.disposition not in {"imported", "reused"}:
             raise ValueError("disposition 必须为 imported 或 reused。")
         _validate_size(self.persistent_bytes_added, "persistent_bytes_added")
+        if self.disposition == "reused" and self.persistent_bytes_added != 0:
+            raise ValueError("reused 结果的 persistent_bytes_added 必须为 0。")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -189,6 +191,10 @@ class DemoAssetSummary:
             raise ValueError("healthy 必须是布尔值。")
         if self.issue_code is not None and (not isinstance(self.issue_code, str) or not self.issue_code):
             raise ValueError("issue_code 必须是非空字符串。")
+        if self.healthy and self.issue_code is not None:
+            raise ValueError("healthy 资产不能带 issue_code。")
+        if not self.healthy and not self.issue_code:
+            raise ValueError("不健康资产必须带 issue_code。")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -222,7 +228,7 @@ class DemoAssetInspection:
 
     @property
     def ok(self) -> bool:
-        return self.source_ok and not self.issues
+        return self.source_ok
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -21,6 +21,42 @@ def test_iter_decompressed_yields_original_bytes_in_bounded_chunks():
     assert all(0 < len(chunk) <= 4096 for chunk in chunks)
 
 
+def test_iter_decompressed_handles_complete_unknown_content_size_frame():
+    original = b"anonymous-unknown-size-demo" * 256
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(original)
+
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed), chunk_size=4096))
+
+    assert b"".join(chunks) == original
+
+
+@pytest.mark.parametrize("trim", [1, 3, 10])
+def test_iter_decompressed_rejects_any_truncated_unknown_content_size_frame(trim):
+    compressed = zstandard.ZstdCompressor(write_content_size=False).compress(b"anonymous-demo" * 256)
+
+    with pytest.raises(DemoCompressionError):
+        list(ZstandardDemoAdapter().iter_decompressed(io.BytesIO(compressed[:-trim]), chunk_size=4096))
+
+
+def test_iter_decompressed_never_requests_unbounded_source_reads():
+    original = b"anonymous-tracking-demo" * 1024
+    compressed = zstandard.ZstdCompressor().compress(original)
+
+    class TrackingReader(io.BytesIO):
+        requests: list[int] = []
+
+        def read(self, size=-1):
+            self.requests.append(size)
+            assert 0 <= size <= 256 * 1024
+            return super().read(size)
+
+    source = TrackingReader(compressed)
+    chunks = list(ZstandardDemoAdapter().iter_decompressed(source, chunk_size=4096))
+
+    assert b"".join(chunks) == original
+    assert source.requests
+
+
 def test_iter_decompressed_accepts_a_valid_empty_frame():
     compressed = zstandard.ZstdCompressor().compress(b"")
 
