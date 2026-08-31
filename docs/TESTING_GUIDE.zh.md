@@ -82,3 +82,10 @@ cs2pov feedback output_smoke
 - manifest 是否脱敏。
 - feedback zip 是否误打包大文件。
 - 失败日志是否与报告结论一致。
+# 工作区模型 runtime E2E
+
+使用真实 Python 子进程验证选中工作区的模型缓存隔离、旧缓存只读检测和 override 拒绝：
+
+```powershell
+python scripts/check_workspace_model_runtime_e2e.py
+```
