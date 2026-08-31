@@ -1,5 +1,15 @@
 from dataclasses import dataclass
-from .schema import *
+
+from .schema import (
+    require_current_schema,
+    require_exact_keys,
+    require_identifier,
+    require_mapping,
+    require_probability,
+    require_sha256,
+    require_str,
+    reject_private_data,
+)
 from .fingerprint import content_fingerprint
 from .errors import DomainSchemaError
 
@@ -17,6 +27,9 @@ class UnderstandingResult:
     model_invocation_record_id: str
 
     def __post_init__(self):
+        reject_private_data({"asr_original": self.asr_original,
+                             "interpreted_source": self.interpreted_source,
+                             "translated_zh": self.translated_zh}, "result")
         for v, p in (
             (self.cue_id, "cue_id"),
             (self.round_id, "round_id"),
@@ -48,7 +61,6 @@ class UnderstandingResult:
             raise DomainSchemaError(
                 "domain_field_invalid", "证据无效。", "请修正后重试。"
             )
-        reject_private_data(self.to_dict(), "result")
 
     def to_dict(self):
         return {
@@ -89,6 +101,10 @@ class UnderstandingResult:
             set(),
             "result",
         )
+        if not isinstance(d["evidence"], (list, tuple)) or not isinstance(
+            d["warnings"], (list, tuple)
+        ):
+            raise DomainSchemaError("domain_field_invalid", "证据无效。", "请修正后重试。")
         return cls(
             d["cue_id"],
             d["round_id"],
@@ -111,6 +127,15 @@ class RoundUnderstandingDocument:
     results: tuple[UnderstandingResult, ...]
 
     def __post_init__(self):
+        reject_private_data(
+            {
+                "round_id": self.round_id,
+                "input_fingerprint": self.input_fingerprint,
+                "model_configuration_snapshot_id": self.model_configuration_snapshot_id,
+                "invocation_record_id": self.invocation_record_id,
+            },
+            "round_understanding",
+        )
         require_identifier(self.round_id, "round_id")
         require_sha256(self.input_fingerprint, "input_fingerprint")
         require_identifier(
@@ -184,6 +209,10 @@ class RoundUnderstandingDocument:
 
 
 def validate_understanding_against_transcript(result, cue):
+    from .transcript import TranscriptCue
+
+    if not isinstance(result, UnderstandingResult) or not isinstance(cue, TranscriptCue):
+        raise DomainSchemaError("domain_field_invalid", "提示来源无效。", "请修正后重试。")
     if (
         result.cue_id != cue.cue_id
         or result.round_id != cue.round_id

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+
 from .timebase import TimeRange
 from .schema import (
     MAX_COUNT,
@@ -23,6 +24,9 @@ class VoiceActivityCue:
     uncertainty_us: int
 
     def __post_init__(self):
+        reject_private_data(
+            {"activity_id": self.activity_id, "player_id": self.player_id}, "activity"
+        )
         require_identifier(self.activity_id, "activity_id")
         require_identifier(self.player_id, "player_id")
         if not isinstance(self.time_range, TimeRange):
@@ -30,7 +34,7 @@ class VoiceActivityCue:
                 "domain_field_invalid", "活动无效。", "请修正后重试。"
             )
         require_int(self.packet_count, "packet_count", minimum=1, maximum=MAX_COUNT)
-        if not isinstance(self.anchor_ids, (list, tuple)):
+        if not isinstance(self.anchor_ids, (list, tuple)) or not self.anchor_ids:
             raise DomainSchemaError(
                 "domain_field_invalid", "活动无效。", "请修正后重试。"
             )
@@ -42,10 +46,6 @@ class VoiceActivityCue:
         require_int(
             self.uncertainty_us, "uncertainty_us", minimum=0, maximum=MAX_DEMO_TIME_US
         )
-        if not self.anchor_ids:
-            raise DomainSchemaError(
-                "domain_field_invalid", "活动无效。", "请修正后重试。"
-            )
 
     def to_dict(self):
         return {

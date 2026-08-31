@@ -1,7 +1,18 @@
 from dataclasses import dataclass
+
 from .errors import DomainSchemaError
-from .schema import *
-from .timebase import *
+from .schema import (
+    MAX_SOURCE_POSITION,
+    require_current_schema,
+    require_exact_keys,
+    require_identifier,
+    require_int,
+    require_mapping,
+    require_probability,
+    require_str,
+    reject_private_data,
+)
+from .timebase import SourceClock, TimeRange, map_source_range
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +33,7 @@ class TranscriptCue:
     asr_invocation_record_id: str
 
     def __post_init__(self):
+        reject_private_data({"asr_original": self.asr_original}, "cue")
         for v, p in (
             (self.cue_id, "cue_id"),
             (self.player_id, "player_id"),
@@ -37,22 +49,23 @@ class TranscriptCue:
             raise DomainSchemaError(
                 "domain_field_invalid", "提示无效。", "请修正后重试。"
             )
-        if self.source_end <= self.source_start:
-            raise DomainSchemaError(
-                "domain_field_invalid", "提示无效。", "请修正后重试。"
-            )
         require_int(
             self.source_start, "source_start", minimum=0, maximum=MAX_SOURCE_POSITION
         )
         require_int(
             self.source_end, "source_end", minimum=0, maximum=MAX_SOURCE_POSITION
         )
+        if self.source_end <= self.source_start:
+            raise DomainSchemaError("domain_field_invalid", "提示无效。", "请修正后重试。")
         require_str(self.asr_original, "asr_original")
         require_identifier(self.language, "language")
         if self.confidence is not None:
             require_probability(self.confidence, "confidence")
-        if not isinstance(self.anchor_ids, (list, tuple)) or not isinstance(
-            self.voice_activity_ids, (list, tuple)
+        if (
+            not isinstance(self.anchor_ids, (list, tuple))
+            or not self.anchor_ids
+            or not isinstance(self.voice_activity_ids, (list, tuple))
+            or not self.voice_activity_ids
         ):
             raise DomainSchemaError(
                 "domain_field_invalid", "提示无效。", "请修正后重试。"
@@ -69,17 +82,6 @@ class TranscriptCue:
                 require_identifier(x, "voice_activity_id")
                 for x in self.voice_activity_ids
             ),
-        )
-        if (
-            not self.anchor_ids
-            or any(not isinstance(x, str) for x in self.anchor_ids)
-            or any(not isinstance(x, str) for x in self.voice_activity_ids)
-        ):
-            raise DomainSchemaError(
-                "domain_field_invalid", "提示无效。", "请修正后重试。"
-            )
-        reject_private_data(
-            {"asr_original": self.asr_original, "language": self.language}, "cue"
         )
 
     @classmethod
@@ -171,8 +173,11 @@ class TranscriptCue:
             set(),
             "cue",
         )
-        if not isinstance(d["anchor_ids"], (list, tuple)) or not isinstance(
-            d["voice_activity_ids"], (list, tuple)
+        if (
+            not isinstance(d["anchor_ids"], (list, tuple))
+            or not d["anchor_ids"]
+            or not isinstance(d["voice_activity_ids"], (list, tuple))
+            or not d["voice_activity_ids"]
         ):
             raise DomainSchemaError(
                 "domain_field_invalid", "提示无效。", "请修正后重试。"
