@@ -64,19 +64,25 @@ class ArtifactStore:
             candidate_name = name if index == 1 else f"{name}_{index}"
             candidate = root / candidate_name
             _reject_escaped_candidate(candidate, root)
-            try:
-                # This mkdir is the ownership claim.  exists()+mkdir() is racy.
-                candidate.mkdir(parents=True, exist_ok=False)
-            except FileExistsError:
+            collided = False
+            with _rename_claim(root, candidate_name):
+                try:
+                    # The candidate claim serializes create and rename before
+                    # either operation can observe/create the Job directory.
+                    candidate.mkdir(parents=True, exist_ok=False)
+                except FileExistsError:
+                    collided = True
+                else:
+                    store = cls(candidate, audio_cache_root=audio_cache_root, keep_temp_audio=keep_temp_audio)
+                    try:
+                        store.ensure_dirs()
+                    except Exception:
+                        import shutil
+                        shutil.rmtree(candidate, ignore_errors=True)
+                        raise
+            if collided:
                 index += 1
                 continue
-            store = cls(candidate, audio_cache_root=audio_cache_root, keep_temp_audio=keep_temp_audio)
-            try:
-                store.ensure_dirs()
-            except Exception:
-                import shutil
-                shutil.rmtree(candidate, ignore_errors=True)
-                raise
             return store
 
     def ensure_dirs(self) -> None:
@@ -106,44 +112,57 @@ class ArtifactStore:
         idx = 2
         old_temp_audio = self.temp_audio_dir
         external_audio_cache = self._audio_cache_root is not None and not self._keep_temp_audio
-        target_temp_audio: Path | None = None
-        with _rename_claim(self.job_dir.parent, self.job_dir.name):
-            while True:
+        while True:
+            target_temp_audio: Path | None = None
+            collided = False
+            renamed = False
+            with _rename_claim(self.job_dir.parent, target.name):
                 _reject_escaped_candidate(target, self.job_dir.parent.resolve())
-                # The cooperative claim makes this check and rename one
-                # critical section for all ArtifactStore writers.  A target
-                # is never replaced, including an empty directory.
                 if target.exists() or target.is_symlink():
-                    target = base.with_name(f"{base.name}_{idx}")
-                    idx += 1
-                    continue
-                target_temp_audio = self._temp_audio_path(target)
-                if external_audio_cache and old_temp_audio.exists() and target_temp_audio.exists() and old_temp_audio != target_temp_audio:
-                    target = base.with_name(f"{base.name}_{idx}")
-                    idx += 1
-                    continue
-                copied_audio = False
-                try:
-                    if external_audio_cache and old_temp_audio.exists() and old_temp_audio != target_temp_audio:
-                        self._copy_temp_audio(old_temp_audio, target_temp_audio)
-                        copied_audio = True
-                    self.job_dir.rename(target)
-                    break
-                except FileExistsError:
-                    # A non-cooperating creator won the race.  Never retry
-                    # the same target, since POSIX rename can replace dirs.
-                    if not copied_audio:
-                        raise
-                    if target_temp_audio is not None:
-                        self._remove_temp_audio_copy(target_temp_audio)
-                    target = base.with_name(f"{base.name}_{idx}")
-                    idx += 1
-                except Exception:
-                    if target_temp_audio is not None:
-                        self._remove_temp_audio_copy(target_temp_audio)
-                    raise
-        if external_audio_cache and old_temp_audio.exists() and target_temp_audio is not None and old_temp_audio != target_temp_audio:
-            self._remove_temp_audio_copy(old_temp_audio)
+                    collided = True
+                else:
+                    target_temp_audio = self._temp_audio_path(target)
+                    if external_audio_cache and old_temp_audio.exists() and target_temp_audio.exists() and old_temp_audio != target_temp_audio:
+                        collided = True
+                    else:
+                        with _rename_claim(self.job_dir.parent, self.job_dir.name):
+                            copied_audio = False
+                            try:
+                                if external_audio_cache and old_temp_audio.exists() and old_temp_audio != target_temp_audio:
+                                    self._copy_temp_audio(old_temp_audio, target_temp_audio)
+                                    copied_audio = True
+                                self.job_dir.rename(target)
+                                if external_audio_cache and copied_audio:
+                                    try:
+                                        self._remove_temp_audio_strict(old_temp_audio)
+                                    except Exception as source_error:
+                                        try:
+                                            self._restore_rename_after_source_delete_failure(
+                                                target, target_temp_audio, old_temp_audio
+                                            )
+                                        except Exception as rollback_error:
+                                            raise JobRuntimeError(
+                                                "job_rename_rollback_failed",
+                                                "Job 重命名后的临时音频清理失败，且回滚也失败。",
+                                                "请保留当前 Job 目录和 cache/audio 状态，按日志诊断后再处理。",
+                                            ) from rollback_error
+                                        raise source_error
+                                renamed = True
+                            except FileExistsError:
+                                # A non-cooperating creator won the race.  The
+                                # candidate claim normally prevents this, but
+                                # retry without replacing either directory.
+                                if copied_audio and target_temp_audio is not None:
+                                    self._remove_temp_audio_copy(target_temp_audio)
+                                collided = True
+                            except Exception:
+                                if copied_audio and target_temp_audio is not None:
+                                    self._remove_temp_audio_copy(target_temp_audio)
+                                raise
+            if renamed:
+                break
+            target = base.with_name(f"{base.name}_{idx}")
+            idx += 1
         store = ArtifactStore(target, audio_cache_root=self._audio_cache_root, keep_temp_audio=self._keep_temp_audio)
         store.ensure_dirs()
         return store
@@ -182,6 +201,33 @@ class ArtifactStore:
             path.unlink(missing_ok=True)
         elif path.is_dir():
             shutil.rmtree(path, ignore_errors=True)
+
+    @staticmethod
+    def _remove_temp_audio_strict(path: Path) -> None:
+        import shutil
+
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    def _restore_rename_after_source_delete_failure(
+        self, target: Path, target_temp_audio: Path | None, old_temp_audio: Path
+    ) -> None:
+        """Restore both cache and Job path after source cleanup failed."""
+        if target_temp_audio is not None and target_temp_audio.exists():
+            self._remove_temp_audio_copy(old_temp_audio)
+            self._copy_temp_audio(target_temp_audio, old_temp_audio)
+        try:
+            target.rename(self.job_dir)
+        except Exception as exc:
+            raise JobRuntimeError(
+                "job_rename_rollback_failed",
+                "Job 重命名回滚失败，当前目录状态需要人工诊断。",
+                "请保留 Job 与 cache/audio 目录，不要继续写入后重试。",
+            ) from exc
+        if target_temp_audio is not None:
+            self._remove_temp_audio_copy(target_temp_audio)
 
     @property
     def manifest_path(self) -> Path:
@@ -302,21 +348,28 @@ def _reject_escaped_candidate(candidate: Path, root: Path) -> None:
 
 
 @contextmanager
-def _rename_claim(parent: Path, source_name: str):
-    """Acquire a cooperative, observable claim for a rename operation.
+def _rename_claim(parent: Path, candidate_name: str):
+    """Acquire a cooperative, observable claim for one candidate name.
 
     ``rename`` has no portable no-replace mode: on POSIX it can replace an
     existing empty directory.  A mkdir-based claim serializes all cooperating
     ArtifactStore renames, while the stale claim error makes a crash residue
     visible instead of silently deleting or taking it over.
     """
-    claim = parent / f".{source_name}.rename.claim"
+    claim = parent / f".{candidate_name}.job.claim"
     deadline = time.monotonic() + 10.0
     while True:
         try:
             claim.mkdir()
             owner = claim / "owner"
-            owner.write_text(f"pid={os.getpid()}\n", encoding="ascii")
+            try:
+                owner.write_text(f"pid={os.getpid()}\n", encoding="ascii")
+            except OSError as exc:
+                try:
+                    claim.rmdir()
+                except OSError:
+                    pass
+                raise JobRuntimeError("job_path_claim_failed", "无法记录 Job claim。", "请检查 Job 根目录权限后重试。") from exc
             break
         except FileExistsError:
             try:

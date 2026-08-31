@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -145,6 +147,87 @@ def test_renaming_job_audio_copy_failure_keeps_job_and_audio_consistent(tmp_path
     assert original_job_dir.exists()
     assert (store.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
     assert not any(p.name.endswith("_de_mirage") for p in original_job_dir.parent.iterdir())
+
+
+def test_create_vs_rename_claims_same_candidate_without_overwriting_empty_job(tmp_path: Path, monkeypatch):
+    root = tmp_path / "jobs"
+    source = ArtifactStore.create(root, job_id="same_unknown_map")
+    (source.job_dir / "source.txt").write_text("source", encoding="utf-8")
+    target = root / "same_de_mirage"
+    rename_ready = threading.Event()
+    target_ready = threading.Event()
+    allow_rename = threading.Event()
+    allow_ensure = threading.Event()
+    original_rename = Path.rename
+    original_ensure = ArtifactStore.ensure_dirs
+
+    def gated_rename(path, destination):
+        if path == source.job_dir and destination == target:
+            rename_ready.set()
+            assert allow_rename.wait(5)
+        return original_rename(path, destination)
+
+    def gated_ensure(store):
+        if store.job_dir == target:
+            target_ready.set()
+            assert allow_ensure.wait(5)
+        return original_ensure(store)
+
+    monkeypatch.setattr(Path, "rename", gated_rename)
+    monkeypatch.setattr(ArtifactStore, "ensure_dirs", gated_ensure)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rename_future = pool.submit(source.rename_suffix, "de_mirage")
+        assert rename_ready.wait(5)
+        create_future = pool.submit(ArtifactStore.create, root, job_id="same_de_mirage")
+        # Without a candidate claim, create can mkdir the empty destination
+        # while rename is between its exists check and Path.rename call.
+        target_ready.wait(1)
+        allow_rename.set()
+        allow_ensure.set()
+        renamed = rename_future.result()
+        created = create_future.result()
+
+    assert renamed.job_dir != created.job_dir
+    assert (renamed.job_dir / "source.txt").read_text(encoding="utf-8") == "source"
+    assert renamed.job_dir.is_dir() and created.job_dir.is_dir()
+
+
+def test_source_audio_delete_failure_rolls_back_job_and_target_copy(tmp_path: Path, monkeypatch):
+    cache_root = tmp_path / "workspace" / "cache" / "audio"
+    store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
+    store.temp_audio_dir.mkdir(parents=True)
+    (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
+    original_job_dir = store.job_dir
+    original_source = store.temp_audio_dir
+    original_remove = ArtifactStore._remove_temp_audio_strict
+
+    def fail_source_delete(path):
+        if path == original_source:
+            raise OSError("synthetic source delete failure")
+        return original_remove(path)
+
+    monkeypatch.setattr(ArtifactStore, "_remove_temp_audio_strict", staticmethod(fail_source_delete))
+    with pytest.raises(OSError, match="synthetic source delete failure"):
+        store.rename_suffix("de_mirage")
+
+    assert original_job_dir.exists()
+    assert (original_source / "slice.wav").read_bytes() == b"audio"
+    assert not any(p.name.endswith("_de_mirage") for p in original_job_dir.parent.iterdir())
+
+
+def test_successful_rename_removes_old_audio_id_and_cleanup_removes_final(tmp_path: Path):
+    from cs2pov.services.transcription_service import _cleanup_temp_audio
+
+    cache_root = tmp_path / "workspace" / "cache" / "audio"
+    store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
+    store.temp_audio_dir.mkdir(parents=True)
+    (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
+
+    renamed = store.rename_suffix("de_mirage")
+    assert not (cache_root / store.job_dir.name).exists()
+    _cleanup_temp_audio(renamed)
+    assert not renamed.temp_audio_dir.exists()
 
 
 def test_pipeline_new_job_requires_explicit_runtime(tmp_path: Path):
