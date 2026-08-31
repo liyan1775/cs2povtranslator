@@ -8,9 +8,11 @@ v0.8.0 新增模型管理命令：
 cs2pov models info
 cs2pov models list
 cs2pov models recommend
-模型缓存跟随已选择的工作区；旧 cache override 仅返回迁移说明。
 cs2pov models test --model small --local-only
 ```
+
+模型缓存跟随已选择的工作区。旧 `models set-cache`、`models test --cache-dir`
+和 `config set --whisper-cache-dir` 已弃用，只返回迁移说明和非零退出码，不会创建目录或保存配置。
 
 ## 推荐档位
 

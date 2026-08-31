@@ -1,7 +1,7 @@
 # Luna-01D：工作区运行时与旧管线路径接入设计
 
 - 日期：2026-08-31
-- 状态：已完成讨论，待书面审核
+- 状态：已批准；Luna-01D-A 已实施并完成本地审查，Luna-01D-B 待实施
 - 所属阶段：阶段 1.1「Workspace 配置与路径策略」收尾
 - 前置实现：Luna-01A `WorkspacePaths`、Luna-01B `WorkspaceService`、Luna-01C 工作区选择与用户入口
 - 实施模型：Luna

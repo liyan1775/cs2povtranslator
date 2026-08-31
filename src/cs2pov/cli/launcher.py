@@ -354,7 +354,7 @@ def run_models_menu() -> None:
     print("\nWhisper 模型管理")
     print("=" * 72)
     print("用途：查看模型放在哪里、C 盘是否被占用、已有模型多大，以及 tiny/base/small/medium 哪个值得下载。")
-    print("本工具采用项目级缓存配置，不会悄悄修改系统全局环境变量。")
+    print("模型缓存跟随当前工作区；旧缓存只读显示，不会自动迁移或修改系统全局环境变量。")
     print("输入 0 / q / back 可返回主菜单。")
     print("1. 查看当前缓存目录和默认模型")
     print("2. 列出已下载模型")

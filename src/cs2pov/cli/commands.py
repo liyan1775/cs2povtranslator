@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     cfg_set.add_argument("--whisper-model")
     cfg_set.add_argument("--whisper-device", choices=["cpu", "cuda", "auto"])
     cfg_set.add_argument("--whisper-compute-type")
-    cfg_set.add_argument("--whisper-cache-dir", help="项目级模型缓存根目录，例如 D:\\AIModels\\huggingface。")
+    cfg_set.add_argument("--whisper-cache-dir", help="已弃用：模型缓存跟随当前工作区；该选项只返回迁移说明。")
     cfg_set.add_argument("--whisper-vad", action=argparse.BooleanOptionalAction, default=None)
     cfg_set.add_argument("--transcription-mode", choices=["round", "activity", "player"])
     cfg_set.add_argument("--filter-hallucinations", action=argparse.BooleanOptionalAction, default=None)
@@ -138,20 +138,25 @@ def main(argv: list[str] | None = None) -> int:
 
     models = sub.add_parser("models", help="Whisper 模型管理：缓存位置、已下载模型、质量档位、模型可用性测试")
     models_sub = models.add_subparsers(dest="models_cmd")
-    models_info = models_sub.add_parser("info", help="查看当前模型缓存目录和转录默认值")
+    models_info = models_sub.add_parser("info", help="查看当前工作区模型缓存、旧缓存迁移信息和转录默认值")
     models_info.add_argument("--json", action="store_true")
-    models_list = models_sub.add_parser("list", help="扫描本机已下载的 faster-whisper/Whisper 模型")
+    models_list = models_sub.add_parser("list", help="扫描当前工作区模型，并单独只读显示旧缓存模型")
     models_list.add_argument("--json", action="store_true")
     models_rec = models_sub.add_parser("recommend", help="查看 tiny/base/small/medium/CUDA 档位建议和近似大小")
     models_rec.add_argument("--json", action="store_true")
-    models_cache = models_sub.add_parser("set-cache", help="设置项目级模型缓存根目录，推荐放到 D 盘")
-    models_cache.add_argument("path", help="例如 D:\\AIModels\\huggingface")
+    cache_migration_help = "已弃用：模型缓存跟随当前工作区；仅显示迁移说明"
+    models_cache = models_sub.add_parser(
+        "set-cache",
+        help=cache_migration_help,
+        description=cache_migration_help,
+    )
+    models_cache.add_argument("path", help="旧缓存路径（只用于返回迁移说明，不会创建或保存）")
     models_test = models_sub.add_parser("test", help="测试某个 Whisper 模型能否加载；可能触发下载")
     models_test.add_argument("--model", default=None, help="默认使用当前配置模型")
     models_test.add_argument("--profile", choices=list(TRANSCRIPTION_PROFILES), default=None, help="用质量档位自动选择模型/设备/compute_type")
     models_test.add_argument("--device", choices=["cpu", "cuda", "auto"], default=None)
     models_test.add_argument("--compute-type", default=None)
-    models_test.add_argument("--cache-dir", default=None)
+    models_test.add_argument("--cache-dir", default=None, help="已弃用：不能覆盖当前工作区模型缓存")
     models_test.add_argument("--local-only", action="store_true", help="只检查本地已有模型，不联网下载")
     models_test.add_argument("--json", action="store_true")
 
@@ -522,7 +527,14 @@ def run_models(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int
         if args.cache_dir:
             result = {"ok": False, "command": "models.test", "error": {"code": "legacy_model_cache_override_rejected", "message_zh": "--cache-dir 已弃用，请使用当前工作区缓存。", "suggestion_zh": "请移除该参数并使用当前工作区缓存。"}}
         else:
-            result = test_model_load(model, device, compute_type, cache_dir=str(runtime.paths.whisper_cache_dir), local_only=args.local_only)
+            result = test_model_load(
+                model,
+                device,
+                compute_type,
+                cache_dir=str(runtime.paths.whisper_cache_dir),
+                local_only=args.local_only,
+                workspace_root=str(runtime.root),
+            )
         if not result.get("ok") and not isinstance(result.get("error"), dict):
             result = {"ok": False, "command": "models.test", "error": {"code": result.get("code", "model_load_failed"), "message_zh": str(result.get("error", "模型加载失败。")), "suggestion_zh": "请检查当前工作区缓存并重试。"}}
         if args.json:

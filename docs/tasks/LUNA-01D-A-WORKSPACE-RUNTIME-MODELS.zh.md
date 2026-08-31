@@ -1,7 +1,7 @@
 # Luna-01D-A：工作区运行时与模型缓存接入任务书
 
 - 日期：2026-08-31
-- 状态：待实施
+- 状态：已实施并完成本地审查
 - 设计依据：`docs/plans/2026-08-31-workspace-runtime-paths-design.zh.md`
 - 基线：`master` 合并提交 `c32b099`
 - 工作分支：`feature/luna-01d-a-runtime-paths`

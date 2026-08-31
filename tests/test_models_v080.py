@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +16,22 @@ from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 def _runtime(tmp_path):
     return WorkspaceRuntime(tmp_path, "id", 1, 1)
+
+
+def _create_directory_link_or_skip(link: Path, target: Path) -> None:
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(f"无法创建 Windows junction：{result.stderr or result.stdout}")
+        return
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"当前平台不能创建目录符号链接：{exc}")
 
 
 def test_workspace_scan_is_explicit_and_separates_legacy(tmp_path, monkeypatch):
@@ -48,8 +67,15 @@ def test_model_load_requires_explicit_cache_and_passes_download_root(monkeypatch
     monkeypatch.setitem(__import__("sys").modules, "faster_whisper", type("M", (), {"WhisperModel": Fake}))
     result = model_manager.test_model_load("small", "cpu", "int8")
     assert result["ok"] is False and result["code"] == "model_cache_required"
-    result = model_manager.test_model_load("small", "cpu", "int8", cache_dir=str(tmp_path))
-    assert result["ok"] is True and captured["download_root"] == str(tmp_path)
+    workspace = tmp_path / "workspace"
+    cache = workspace / "cache" / "whisper"
+    cache.mkdir(parents=True)
+    result = model_manager.test_model_load("small", "cpu", "int8", cache_dir=str(cache))
+    assert result["ok"] is False and result["code"] == "model_cache_boundary_required"
+    result = model_manager.test_model_load(
+        "small", "cpu", "int8", cache_dir=str(cache), workspace_root=str(workspace)
+    )
+    assert result["ok"] is True and captured["download_root"] == str(cache)
 
 
 def test_invalid_state_path_is_structured_json(monkeypatch, capsys):
@@ -57,6 +83,38 @@ def test_invalid_state_path_is_structured_json(monkeypatch, capsys):
     monkeypatch.setenv("CS2POV_STATE_FILE", "relative-state.json")
     assert main(["models", "info", "--json"]) == 1
     assert '"code": "selection_state_location_unavailable"' in capsys.readouterr().out
+
+
+def test_deprecated_cache_options_have_workspace_migration_help():
+    environment = dict(os.environ)
+    environment["PYTHONUTF8"] = "1"
+    source = Path(__file__).resolve().parents[1] / "src"
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (str(source), environment.get("PYTHONPATH")) if part
+    )
+    models_result = subprocess.run(
+        [sys.executable, "-m", "cs2pov.cli.commands", "models", "set-cache", "--help"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert models_result.returncode == 0
+    models_help = models_result.stdout
+    assert "已弃用" in models_help and "当前工作区" in models_help
+    assert "推荐放到 D 盘" not in models_help
+
+    config_result = subprocess.run(
+        [sys.executable, "-m", "cs2pov.cli.commands", "config", "set", "--help"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert config_result.returncode == 0
+    config_help = config_result.stdout
+    assert "--whisper-cache-dir" in config_help
+    assert "已弃用" in config_help and "当前工作区" in config_help
 
 
 def test_model_override_non_json_is_user_readable(monkeypatch, tmp_path, capsys):
@@ -88,6 +146,28 @@ def test_deprecated_set_cache_and_config_cache_are_zero_write(monkeypatch, tmp_p
     assert config.read_bytes() == before and not out.exists()
 
 
+def test_legacy_config_decode_and_io_failures_fall_back_without_writes(monkeypatch, tmp_path):
+    import cs2pov.storage.config_store as store
+
+    config = tmp_path / "config.json"
+    config.write_bytes(b"\xff")
+    monkeypatch.setattr(store, "CONFIG_PATH", config)
+    monkeypatch.setattr(store, "CONFIG_DIR", tmp_path)
+
+    before = config.read_bytes()
+    assert store.load_config() == store.DEFAULT_CONFIG
+    assert config.read_bytes() == before
+
+    config.write_text("null", encoding="utf-8")
+    assert store.load_config() == store.DEFAULT_CONFIG
+    assert config.read_text(encoding="utf-8") == "null"
+
+    config.unlink()
+    config.mkdir()
+    assert store.load_config() == store.DEFAULT_CONFIG
+    assert config.is_dir()
+
+
 def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path):
     from cs2pov.cli import model_manager
     with pytest.raises(TypeError): model_manager.cache_candidates()
@@ -99,6 +179,111 @@ def test_current_scanner_requires_runtime_and_deduplicates_by_priority(tmp_path)
         (folder / "x").write_bytes(b"1")
     rows = model_manager.scan_current_models(runtime)
     assert [(r["name"], r["source"]) for r in rows] == [("small", "workspace_whisper"), ("base", "workspace_huggingface_hub")]
+
+
+def test_current_scanner_rejects_model_directory_link_outside_managed_cache(tmp_path):
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    cache = runtime.paths.whisper_cache_dir
+    cache.mkdir(parents=True)
+    external = tmp_path / "external" / "models--x--faster-whisper-base"
+    external.mkdir(parents=True)
+    (external / "outside.bin").write_bytes(b"outside")
+    linked_model = cache / external.name
+    _create_directory_link_or_skip(linked_model, external)
+
+    try:
+        assert model_manager.scan_current_models(runtime) == []
+    finally:
+        linked_model.rmdir()
+
+
+def test_current_scanner_rejects_nested_link_outside_managed_cache(tmp_path):
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    model = runtime.paths.whisper_cache_dir / "models--x--faster-whisper-base"
+    model.mkdir(parents=True)
+    external = tmp_path / "external-snapshot"
+    external.mkdir()
+    (external / "outside.bin").write_bytes(b"outside")
+    linked_snapshot = model / "snapshots"
+    _create_directory_link_or_skip(linked_snapshot, external)
+
+    try:
+        assert model_manager.scan_current_models(runtime) == []
+    finally:
+        linked_snapshot.rmdir()
+
+
+def test_model_load_rejects_external_cache_link_before_model_import(monkeypatch, tmp_path):
+    import sys
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    cache = runtime.paths.whisper_cache_dir
+    cache.mkdir(parents=True)
+    external = tmp_path / "external-model"
+    external.mkdir()
+    linked_model = cache / "models--x--faster-whisper-base"
+    _create_directory_link_or_skip(linked_model, external)
+    constructed = []
+
+    class Fake:
+        def __init__(self, model, **kwargs):
+            constructed.append((model, kwargs))
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", type("M", (), {"WhisperModel": Fake}))
+    try:
+        result = model_manager.test_model_load(
+            "base",
+            "cpu",
+            "int8",
+            cache_dir=str(cache),
+            workspace_root=str(runtime.root),
+        )
+    finally:
+        linked_model.rmdir()
+
+    assert result["ok"] is False
+    assert result["code"] == "model_cache_boundary_invalid"
+    assert constructed == []
+
+
+def test_internal_cache_link_remains_managed_and_loadable(monkeypatch, tmp_path):
+    import sys
+    from cs2pov.cli import model_manager
+
+    runtime = _runtime(tmp_path / "workspace")
+    cache = runtime.paths.whisper_cache_dir
+    internal = cache / "internal" / "base"
+    internal.mkdir(parents=True)
+    (internal / "model.bin").write_bytes(b"inside")
+    linked_model = cache / "models--x--faster-whisper-base"
+    _create_directory_link_or_skip(linked_model, internal)
+    constructed = []
+
+    class Fake:
+        def __init__(self, model, **kwargs):
+            constructed.append((model, kwargs))
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", type("M", (), {"WhisperModel": Fake}))
+    try:
+        rows = model_manager.scan_current_models(runtime)
+        result = model_manager.test_model_load(
+            "base",
+            "cpu",
+            "int8",
+            cache_dir=str(cache),
+            workspace_root=str(runtime.root),
+        )
+    finally:
+        linked_model.rmdir()
+
+    assert [(row["name"], row["managed"]) for row in rows] == [("base", True)]
+    assert result["ok"] is True
+    assert constructed[0][1]["download_root"] == str(cache)
 
 
 def test_legacy_runtime_inputs_are_explicit_deduplicated_and_read_only(tmp_path):

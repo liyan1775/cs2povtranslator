@@ -92,7 +92,8 @@ def main() -> int:
         code, document = run("workspace", "init", str(workspace), "--json")
         assert code == 0 and document["ok"]
         (home / ".cs2pov").mkdir()
-        (home / ".cs2pov" / "config.json").write_text(
+        config_path = home / ".cs2pov" / "config.json"
+        config_path.write_text(
             json.dumps({"whisper_cache_dir": str(configured)}),
             encoding="utf-8",
         )
@@ -112,10 +113,19 @@ def main() -> int:
         code, result = run("models", "test", "--model", "base", "--json")
         assert code == 0 and result["cache_dir"] == str((workspace / "cache/whisper").resolve())
         logged = json.loads(record.read_text(encoding="utf-8"))
+        assert logged["model"] == "base"
         assert logged["kwargs"]["download_root"] == str((workspace / "cache/whisper").resolve())
+        assert logged["kwargs"]["device"] == "cpu"
+        assert logged["kwargs"]["compute_type"] == "int8"
         logged_values = " ".join(str(value) for value in logged["kwargs"].values())
         for forbidden in (configured, env_cache, cwd, home, local, xdg):
             assert str(forbidden.resolve()) not in logged_values
+        code, local_result = run(
+            "models", "test", "--model", "base", "--local-only", "--json"
+        )
+        assert code == 0 and local_result["ok"] is True
+        local_logged = json.loads(record.read_text(encoding="utf-8"))
+        assert local_logged["kwargs"]["local_files_only"] is True
         before_record = record.read_bytes()
         assert snapshot(configured) == before_legacy["configured"]
         assert snapshot(env_cache) == before_legacy["env"]
@@ -124,6 +134,23 @@ def main() -> int:
         assert code == 1 and rejected["error"]["code"] == "legacy_model_cache_override_rejected"
         assert not override.exists() and record.read_bytes() == before_record
         assert snapshot(configured) == before_legacy["configured"] and snapshot(env_cache) == before_legacy["env"]
+        valid_config = config_path.read_bytes()
+        config_path.write_bytes(b"\xff")
+        code, invalid_encoding_info = run("models", "info", "--json")
+        assert code == 0
+        assert invalid_encoding_info["deprecated_config"]["present"] is False
+        config_path.write_text("null", encoding="utf-8")
+        code, invalid_shape_info = run("models", "info", "--json")
+        assert code == 0
+        assert invalid_shape_info["deprecated_config"]["present"] is False
+        config_path.unlink()
+        config_path.mkdir()
+        code, unreadable_info = run("models", "info", "--json")
+        assert code == 0
+        assert unreadable_info["deprecated_config"]["present"] is False
+        config_path.rmdir()
+        config_path.write_bytes(valid_config)
+        assert snapshot(home) == expected_home
         record.unlink()
         whisper = workspace / "cache/whisper"
         for child in whisper.iterdir():

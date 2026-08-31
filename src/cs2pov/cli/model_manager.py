@@ -132,13 +132,42 @@ def directory_size(path: Path) -> int:
     return total
 
 
+def _path_resolves_within(path: Path, boundary: Path) -> bool:
+    try:
+        path.resolve().relative_to(boundary.resolve())
+        return True
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _managed_cache_tree_is_safe(cache: Path, workspace_root: Path) -> bool:
+    if not cache.is_dir() or not _path_resolves_within(cache, workspace_root):
+        return False
+    resolved_cache = cache.resolve()
+    walk_errors: list[OSError] = []
+    for current, directories, files in os.walk(
+        cache,
+        topdown=True,
+        onerror=walk_errors.append,
+        followlinks=False,
+    ):
+        current_path = Path(current)
+        if not _path_resolves_within(current_path, resolved_cache):
+            return False
+        for name in (*directories, *files):
+            if not _path_resolves_within(current_path / name, resolved_cache):
+                return False
+    return not walk_errors
+
+
 def scan_current_models(runtime: WorkspaceRuntime) -> list[dict[str, Any]]:
     models: list[dict[str, Any]] = []
     for cache in cache_candidates(runtime):
-        if not cache.exists():
+        if not cache.exists() or not _path_resolves_within(cache, runtime.root):
             continue
+        resolved_cache = cache.resolve()
         for item in sorted(cache.glob("models--*--*")):
-            if not item.is_dir():
+            if not item.is_dir() or not _managed_cache_tree_is_safe(item, resolved_cache):
                 continue
             name = _display_model_name_from_cache_dir(item.name)
             if not _looks_like_whisper_model(name, item.name):
@@ -317,15 +346,28 @@ def print_models_recommend(json_mode: bool = False) -> int:
     return 0
 
 
-def test_model_load(model: str, device: str, compute_type: str, cache_dir: str | None = None, local_only: bool = False) -> dict[str, Any]:
+def test_model_load(
+    model: str,
+    device: str,
+    compute_type: str,
+    cache_dir: str | None = None,
+    local_only: bool = False,
+    *,
+    workspace_root: str | None = None,
+) -> dict[str, Any]:
     if not cache_dir:
         return {"ok": False, "code": "model_cache_required", "error": "必须显式提供工作区模型缓存路径。"}
+    if not workspace_root:
+        return {"ok": False, "code": "model_cache_boundary_required", "error": "必须显式提供工作区根目录以验证模型缓存边界。"}
+    effective_cache_path = Path(cache_dir).expanduser()
+    if not _managed_cache_tree_is_safe(effective_cache_path, Path(workspace_root)):
+        return {"ok": False, "code": "model_cache_boundary_invalid", "error": "模型缓存包含越界链接或无法安全读取。"}
     try:
         from faster_whisper import WhisperModel  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dependency
         return {"ok": False, "error_type": type(exc).__name__, "error": "缺少 faster-whisper。请运行 pip install -e .[all]"}
     kwargs: dict[str, Any] = {"device": device, "compute_type": compute_type}
-    effective_cache = str(Path(cache_dir).expanduser())
+    effective_cache = str(effective_cache_path)
     kwargs["download_root"] = effective_cache
     if local_only:
         kwargs["local_files_only"] = True
