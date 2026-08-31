@@ -25,7 +25,9 @@ def resolve_job_dir(path: Path) -> Path | None:
     jobs = [p for p in path.iterdir() if p.is_dir() and (p / "manifest.json").exists()]
     if not jobs:
         return None
-    return max(jobs, key=lambda p: p.stat().st_mtime)
+    # Directory mtimes can be equal on coarse filesystems.  The canonical
+    # name tie-breaker keeps read-only "latest job" selection deterministic.
+    return max(jobs, key=lambda p: (p.stat().st_mtime_ns, p.name.casefold(), p.name))
 
 
 def inspect_job(path: Path) -> dict[str, Any]:

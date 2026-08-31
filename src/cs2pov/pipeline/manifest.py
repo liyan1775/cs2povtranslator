@@ -18,13 +18,22 @@ class PipelineManifest:
     created_at: str
     updated_at: str
     config: PipelineConfig
+    path_policy_version: int = 1
+    legacy_external_output: bool = False
     stages: dict[str, str] = field(default_factory=dict)
     artifacts: dict[str, str] = field(default_factory=dict)
     demo: dict[str, Any] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
 
     @classmethod
-    def create(cls, job_id: str, config: PipelineConfig) -> "PipelineManifest":
+    def create(
+        cls,
+        job_id: str,
+        config: PipelineConfig,
+        *,
+        path_policy_version: int = 1,
+        legacy_external_output: bool = False,
+    ) -> "PipelineManifest":
         now = datetime.now().isoformat(timespec="seconds")
         return cls(
             schema_version=1,
@@ -32,6 +41,8 @@ class PipelineManifest:
             created_at=now,
             updated_at=now,
             config=config,
+            path_policy_version=path_policy_version,
+            legacy_external_output=legacy_external_output,
             stages={stage.value: StageStatus.PENDING.value for stage in STAGE_ORDER},
         )
 
@@ -66,6 +77,11 @@ class PipelineManifest:
         marker_no_lead = f"{self.job_id}/"
         if marker_no_lead in text:
             return text.split(marker_no_lead, 1)[1]
+        # An absolute path that is not recognizably inside this Job must not
+        # leak a workspace, legacy output, or user directory into a shareable
+        # manifest.  Relative artifact names remain useful as-is.
+        if text.startswith("/") or (len(text) >= 3 and text[1] == ":" and text[2] == "/"):
+            return "[artifact-path]"
         return text
 
     def to_public_dict(self) -> dict[str, Any]:
@@ -80,6 +96,8 @@ class PipelineManifest:
             "job_id": self.job_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "path_policy_version": self.path_policy_version,
+            "legacy_external_output": self.legacy_external_output,
             "config": to_jsonable(self.config),
             "stages": dict(self.stages),
             "artifacts": {key: self._public_artifact_path(value) for key, value in self.artifacts.items()},
@@ -94,7 +112,8 @@ class PipelineManifest:
         cache_dir = cfg.get("whisper_cache_dir")
         cfg["whisper_cache_dir_configured"] = bool(cache_dir)
         if cache_dir:
-            cfg["whisper_cache_dir"] = "[已配置-已隐藏]"
+            cfg["whisper_cache_dir"] = "[workspace-managed]"
+        cfg["output_root"] = "[legacy-external-output]" if self.legacy_external_output else "[workspace-managed]"
         data["config"] = cfg
         return data
 
@@ -112,6 +131,10 @@ class PipelineManifest:
             cfg_data["llm_api_key"] = None
         if cfg_data.get("whisper_cache_dir") == "[已配置-已隐藏]":
             cfg_data["whisper_cache_dir"] = None
+        if cfg_data.get("whisper_cache_dir") == "[workspace-managed]":
+            cfg_data["whisper_cache_dir"] = None
+        if cfg_data.get("output_root") in {"[workspace-managed]", "[legacy-external-output]"}:
+            cfg_data["output_root"] = "output"
         allowed = set(PipelineConfig.__dataclass_fields__.keys())
         cfg_data = {k: v for k, v in cfg_data.items() if k in allowed}
         config = PipelineConfig(**cfg_data)
@@ -121,6 +144,8 @@ class PipelineManifest:
             created_at=str(data["created_at"]),
             updated_at=str(data["updated_at"]),
             config=config,
+            path_policy_version=int(data.get("path_policy_version", 1)),
+            legacy_external_output=bool(data.get("legacy_external_output", False)),
             stages=dict(data.get("stages", {})),
             artifacts=dict(data.get("artifacts", {})),
             demo=dict(data.get("demo", {})),
