@@ -94,8 +94,8 @@ python scripts/check_workspace_model_runtime_e2e.py
 # 工作区 Job runtime E2E
 
 使用真实 Python 子进程和合成 `.dem`（只运行到 `prepare_input`），验证默认
-Job 落在工作区 `jobs/`、Demo 被复制到 Job/input、显式 `--output` 的兼容
-警告与 manifest 标志，以及损坏工作区时在创建 Job/复制 Demo 前稳定失败且
+Job 落在工作区 `jobs/`、Demo 自动进入工作区素材库且 Job/input 保持为空、显式
+`--output` 的兼容警告与 manifest 标志，以及损坏工作区时在创建 Job/导入素材前稳定失败且
 旁路目录和已有文件不变：
 
 ```powershell
