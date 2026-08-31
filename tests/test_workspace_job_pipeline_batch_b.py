@@ -102,6 +102,37 @@ def test_explicit_output_warns_before_and_after_run(monkeypatch, tmp_path: Path,
     assert output.count("旧版外部输出") >= 2
 
 
+@pytest.mark.parametrize("output", [None, "legacy-output"])
+def test_acceptance_warns_only_for_explicit_legacy_output(monkeypatch, tmp_path: Path, capsys, output):
+    import scripts.run_acceptance as acceptance
+    import sys
+
+    runtime = _runtime(tmp_path)
+    resolver = type("Resolver", (), {"resolve_for_write": lambda self: runtime})
+    monkeypatch.setattr(acceptance, "WorkspaceRuntimeResolver", lambda _store: resolver())
+    monkeypatch.setattr(acceptance, "default_state_file", lambda: tmp_path / "state.json")
+
+    class _Store:
+        job_dir = tmp_path / "job"
+
+    class _Engine:
+        def __init__(self, config, **kwargs):
+            self.config = config
+
+        def run(self, *args, **kwargs):
+            return _Store()
+
+    monkeypatch.setattr(acceptance, "PipelineEngine", _Engine)
+    monkeypatch.setattr(sys, "argv", ["run_acceptance.py", "--demo", "demo.dem"] + (["--output", output] if output else []))
+
+    assert acceptance.main() == 0
+    text = capsys.readouterr().out
+    if output is None:
+        assert "旧版外部输出" not in text
+    else:
+        assert text.count("旧版外部输出") == 2
+
+
 def test_renaming_job_updates_default_audio_cache_job_id(tmp_path: Path):
     cache_root = tmp_path / "workspace" / "cache" / "audio"
     store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)

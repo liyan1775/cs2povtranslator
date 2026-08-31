@@ -21,6 +21,7 @@ from cs2pov.cli.job_ops import (
 )
 from cs2pov.domain.models import PipelineConfig, StageName
 from cs2pov.pipeline.engine import PipelineEngine
+from cs2pov.pipeline.progress import ProgressSink
 from cs2pov.storage.config_store import load_config, save_config, mask_config_for_display, llm_model_warning
 from cs2pov.cli.setup_check import build_setup_report, print_setup_report
 from cs2pov.cli.output_explainer import build_output_explanation, print_output_explanation
@@ -706,6 +707,8 @@ def run_asr_benchmark(args: argparse.Namespace, *, runtime: WorkspaceRuntime | N
         try:
             policy = JobRuntime(runtime, output_root, config, path_policy.legacy_external_output)
             engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
+            if args.json:
+                engine.progress = ProgressSink(engine.store.progress_log_path, verbose=False)
             engine.run(Path(args.demo))
             job_dir = str(engine.store.job_dir)
             if engine.store.transcription_coverage_path.exists():

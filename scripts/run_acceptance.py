@@ -66,7 +66,11 @@ def main() -> int:
         voice_cluster_gap_seconds=args.voice_cluster_gap,
     )
     policy = JobRuntime.from_config(runtime, cfg, output_root=args.output)
+    if args.output is not None:
+        print("[ACCEPTANCE] 警告：正在使用旧版外部输出兼容模式；Job 将写入显式 --output 目录。")
     store = PipelineEngine(cfg, runtime=runtime, job_runtime=policy).run(Path(args.demo))
+    if args.output is not None:
+        print("[ACCEPTANCE] 警告：旧版外部输出兼容模式运行成功；请检查并迁移该 Job。")
     print(f"ACCEPTANCE_JOB={store.job_dir}")
     return 0
 

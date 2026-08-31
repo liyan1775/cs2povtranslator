@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -24,6 +25,16 @@ def _runtime(tmp_path: Path):
     selection = JsonWorkspaceSelectionStore(tmp_path / "state.json")
     selection.save(WorkspaceSelection(1, str(root)))
     return WorkspaceRuntimeResolver(selection).resolve_for_write()
+
+
+def _create_windows_junction_or_skip(link: Path, target: Path) -> None:
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"无法创建 Windows junction：{result.stderr or result.stdout}")
 
 
 def test_default_job_store_is_claimed_under_runtime_jobs_dir(tmp_path: Path):
@@ -141,6 +152,22 @@ def test_job_creation_rejects_symlinked_candidate_outside_root(tmp_path: Path):
         (root / "linked").symlink_to(outside, target_is_directory=True)
     except OSError as exc:
         pytest.skip(f"symlink creation is unavailable: {exc}")
+
+    with pytest.raises(JobRuntimeError) as caught:
+        ArtifactStore.create(root, job_id="linked")
+
+    assert caught.value.code == "job_path_escape"
+    assert not (outside / "input").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction containment check")
+def test_job_creation_rejects_windows_junction_candidate_outside_root(tmp_path: Path):
+    root = tmp_path / "jobs"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    junction = root / "linked"
+    _create_windows_junction_or_skip(junction, outside)
 
     with pytest.raises(JobRuntimeError) as caught:
         ArtifactStore.create(root, job_id="linked")
