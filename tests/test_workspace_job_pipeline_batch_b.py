@@ -130,23 +130,21 @@ def test_renaming_job_with_collision_uses_final_job_id_for_audio_cache(tmp_path:
     assert (renamed.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
 
 
-def test_renaming_job_audio_copy_failure_keeps_job_and_audio_consistent(tmp_path: Path, monkeypatch):
+def test_renaming_job_uses_next_id_when_target_audio_exists(tmp_path: Path):
     cache_root = tmp_path / "workspace" / "cache" / "audio"
     store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
     store.temp_audio_dir.mkdir(parents=True)
     (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
-    original_job_dir = store.job_dir
+    occupied_audio = cache_root / store.job_dir.name.replace("unknown_map", "de_mirage")
+    occupied_audio.mkdir(parents=True)
+    (occupied_audio / "old.wav").write_bytes(b"old")
 
-    def fail_copy(*args, **kwargs):
-        raise OSError("synthetic audio move failure")
+    renamed = store.rename_suffix("de_mirage")
 
-    monkeypatch.setattr(ArtifactStore, "_copy_temp_audio", fail_copy)
-    with pytest.raises(OSError, match="synthetic audio move failure"):
-        store.rename_suffix("de_mirage")
-
-    assert original_job_dir.exists()
-    assert (store.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
-    assert not any(p.name.endswith("_de_mirage") for p in original_job_dir.parent.iterdir())
+    assert renamed.job_dir.name.endswith("_de_mirage_2")
+    assert renamed.temp_audio_dir.name == renamed.job_dir.name
+    assert (renamed.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
+    assert (occupied_audio / "old.wav").read_bytes() == b"old"
 
 
 def test_create_vs_rename_claims_same_candidate_without_overwriting_empty_job(tmp_path: Path, monkeypatch):
@@ -193,27 +191,56 @@ def test_create_vs_rename_claims_same_candidate_without_overwriting_empty_job(tm
     assert renamed.job_dir.is_dir() and created.job_dir.is_dir()
 
 
-def test_source_audio_delete_failure_rolls_back_job_and_target_copy(tmp_path: Path, monkeypatch):
+def test_job_rename_failure_rolls_audio_back_to_old_directory(tmp_path: Path, monkeypatch):
     cache_root = tmp_path / "workspace" / "cache" / "audio"
     store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
     store.temp_audio_dir.mkdir(parents=True)
     (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
     original_job_dir = store.job_dir
-    original_source = store.temp_audio_dir
-    original_remove = ArtifactStore._remove_temp_audio_strict
+    target_job = original_job_dir.with_name(original_job_dir.name.replace("unknown_map", "de_mirage"))
+    target_audio = cache_root / target_job.name
+    original_rename = Path.rename
 
-    def fail_source_delete(path):
-        if path == original_source:
-            raise OSError("synthetic source delete failure")
-        return original_remove(path)
+    def fail_job_rename(path, destination):
+        if path == original_job_dir:
+            raise OSError("synthetic job rename failure")
+        return original_rename(path, destination)
 
-    monkeypatch.setattr(ArtifactStore, "_remove_temp_audio_strict", staticmethod(fail_source_delete))
-    with pytest.raises(OSError, match="synthetic source delete failure"):
+    monkeypatch.setattr(Path, "rename", fail_job_rename)
+    with pytest.raises(OSError, match="synthetic job rename failure"):
         store.rename_suffix("de_mirage")
 
     assert original_job_dir.exists()
-    assert (original_source / "slice.wav").read_bytes() == b"audio"
-    assert not any(p.name.endswith("_de_mirage") for p in original_job_dir.parent.iterdir())
+    assert (store.temp_audio_dir / "slice.wav").read_bytes() == b"audio"
+    assert not target_audio.exists()
+
+
+def test_audio_rollback_failure_returns_stable_error_without_deleting_caches(tmp_path: Path, monkeypatch):
+    cache_root = tmp_path / "workspace" / "cache" / "audio"
+    store = ArtifactStore.create(tmp_path / "jobs", map_name=None, audio_cache_root=cache_root)
+    store.temp_audio_dir.mkdir(parents=True)
+    (store.temp_audio_dir / "slice.wav").write_bytes(b"audio")
+    original_job_dir = store.job_dir
+    original_audio_dir = store.temp_audio_dir
+    original_rename = Path.rename
+    target_job = original_job_dir.with_name(original_job_dir.name.replace("unknown_map", "de_mirage"))
+    target_audio = cache_root / target_job.name
+
+    def fail_rollback(path, destination):
+        if path == original_job_dir:
+            raise OSError("synthetic job rename failure")
+        if path == target_audio and destination == original_audio_dir:
+            raise OSError("synthetic audio rollback failure")
+        return original_rename(path, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_rollback)
+    with pytest.raises(JobRuntimeError) as caught:
+        store.rename_suffix("de_mirage")
+
+    assert caught.value.code == "job_rename_rollback_failed"
+    assert original_job_dir.exists()
+    assert not original_audio_dir.exists()
+    assert target_audio.exists()
 
 
 def test_successful_rename_removes_old_audio_id_and_cleanup_removes_final(tmp_path: Path):
