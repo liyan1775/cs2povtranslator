@@ -403,7 +403,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
             self.transcription_coverage_path = job_dir / "artifacts" / "transcription_coverage.json"
 
     class DummyEngine:
-        def __init__(self, config):
+        def __init__(self, config, runtime=None, job_runtime=None):
             self.config = config
             self.store = DummyStore(Path(config.output_root) / "20260101_000000_de_mirage")
 
@@ -412,6 +412,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
             self.store.transcription_coverage_path.write_text('{"postprocessed_transcript_segments": 1}', encoding="utf-8")
 
     monkeypatch.setattr(commands, "PipelineEngine", DummyEngine)
+    monkeypatch.setattr(commands, "_resolve_write_runtime", lambda: _runtime(tmp_path / "workspace"))
     monkeypatch.chdir(tmp_path)
     args = Namespace(
         demo="D:\\agent_workspace\\cs2demos\\match.dem.zst",
@@ -426,7 +427,7 @@ def test_benchmark_report_uses_demo_basename(monkeypatch, tmp_path):
         json=False,
     )
     assert commands.run_asr_benchmark(args) == 0
-    report = (tmp_path / "bench_out" / "asr_benchmark.json").read_text(encoding="utf-8")
+    report = next((tmp_path / "bench_out").glob("asr_benchmark_*.json")).read_text(encoding="utf-8")
     assert "agent_workspace" not in report
     assert "D:" not in report
     assert "match.dem.zst" in report

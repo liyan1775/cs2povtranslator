@@ -4,7 +4,7 @@ import html
 import math
 import shutil
 import subprocess
-import tempfile
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -122,6 +122,7 @@ class CommsService:
         rounds: set[int] | None = None,
         formats: Iterable[str] = ("preview", "green"),
         options: CommsRenderOptions | None = None,
+        temp_root: Path | None = None,
     ) -> dict[str, str]:
         store.ensure_dirs()
         options = options or CommsRenderOptions()
@@ -138,13 +139,22 @@ class CommsService:
         out_dir.mkdir(parents=True, exist_ok=True)
         normalized_formats = tuple(_normalize_formats(formats))
         outputs: dict[str, str] = {}
-        for round_file in round_files:
-            doc = _read_yaml(round_file)
-            round_no = int(doc.get("round") or _round_number_from_path(round_file) or 0)
-            for fmt in normalized_formats:
-                out_path = _render_round_video(round_file, doc, out_dir, fmt, options)
-                outputs[f"round_{round_no:02d}_{fmt}"] = str(out_path)
-        return outputs
+        # Rendering must never inherit the machine's system temp directory.
+        # The CLI supplies runtime.paths.temp_dir; the job-local fallback keeps
+        # direct service callers isolated without changing global environment.
+        temp_base = Path(temp_root) if temp_root is not None else store.job_dir / "debug" / "comms_tmp"
+        task_dir = temp_base / f"comms_{uuid.uuid4().hex}"
+        task_dir.mkdir(parents=True, exist_ok=False)
+        try:
+            for round_file in round_files:
+                doc = _read_yaml(round_file)
+                round_no = int(doc.get("round") or _round_number_from_path(round_file) or 0)
+                for fmt in normalized_formats:
+                    out_path = _render_round_video(round_file, doc, out_dir, fmt, options, temp_root=task_dir)
+                    outputs[f"round_{round_no:02d}_{fmt}"] = str(out_path)
+            return outputs
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
 
     def _load_translations(
         self,
@@ -528,7 +538,7 @@ def _round_number_from_path(path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fmt: str, options: CommsRenderOptions) -> Path:
+def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fmt: str, options: CommsRenderOptions, *, temp_root: Path) -> Path:
     if fmt == "png":
         return _render_round_png_state(round_file, doc, out_dir, options)
     ffmpeg = shutil.which("ffmpeg")
@@ -542,8 +552,9 @@ def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fm
     duration = _round_duration(doc, options)
     state_times = _state_times(messages, duration, options)
 
-    with tempfile.TemporaryDirectory(prefix=f"cs2pov_round_{round_no:02d}_") as tmp_raw:
-        tmp = Path(tmp_raw)
+    tmp = temp_root / f"round_{round_no:02d}_{uuid.uuid4().hex}"
+    tmp.mkdir(parents=True, exist_ok=False)
+    try:
         image_paths: list[Path] = []
         concat_lines: list[str] = []
         for idx, start in enumerate(state_times):
@@ -567,6 +578,8 @@ def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fm
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg 渲染失败：{proc.stderr[-1200:]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return out_path
 
 

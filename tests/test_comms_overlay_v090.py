@@ -7,6 +7,7 @@ from cs2pov.services.comms_service import CommsRenderOptions, CommsService, pars
 from cs2pov.services.player_alias_service import save_player_aliases
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_json, write_json, write_jsonl
+from cs2pov.application.workspace_runtime import WorkspaceRuntime
 
 
 def _fake_job(tmp_path: Path) -> ArtifactStore:
@@ -76,8 +77,9 @@ def test_render_png_from_review_yaml(tmp_path: Path):
     assert path.suffix == ".png"
 
 
-def test_comms_cli_build_review_json(tmp_path: Path, capsys):
+def test_comms_cli_build_review_json(tmp_path: Path, capsys, monkeypatch):
     store = _fake_job(tmp_path)
+    monkeypatch.setattr("cs2pov.cli.commands._resolve_write_runtime", lambda: WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
 
     code = main(["comms", "build-review", str(store.job_dir), "--rounds", "1", "--json"])
 

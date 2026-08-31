@@ -17,6 +17,10 @@ from cs2pov.storage.config_store import (
     llm_model_warning,
 )
 from cs2pov.storage.jsonl import read_json
+from cs2pov.application.job_runtime import JobRuntime, JobRuntimeError
+from cs2pov.application.workspace_runtime import WorkspaceRuntimeError, WorkspaceRuntimeResolver, WorkspaceRuntime
+from cs2pov.application.workspace import WorkspaceSelectionPortError
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 
 TOTAL_STEPS = 9
 
@@ -29,7 +33,6 @@ def main(argv: list[str] | None = None) -> int:
     configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="CS2 POV Translator 强引导向导")
     parser.add_argument("--demo", help="可选：预填 demo 路径")
-    parser.add_argument("--output", default="output", help="输出根目录，默认 output")
     parser.add_argument("--quick", action="store_true", help="快速测试模式：默认只跑前 3 个含语音回合")
     args = parser.parse_args(argv)
 
@@ -41,6 +44,10 @@ def main(argv: list[str] | None = None) -> int:
         return 130
     except WizardAbort as exc:
         print(f"\n已停止：{exc}")
+        return 1
+    except (WorkspaceRuntimeError, JobRuntimeError) as exc:
+        print(f"\n错误[{exc.code}]：{exc.message_zh}")
+        print(f"建议：{exc.suggestion_zh}")
         return 1
     except Exception as exc:
         print("\n处理失败。")
@@ -57,15 +64,19 @@ def run_wizard(args: argparse.Namespace) -> int:
 
     step(1, "选择 demo 文件", "支持 .dem 和 .dem.zst。你可以把文件拖进终端后按回车。")
     demo_path = Path(args.demo).expanduser() if args.demo else ask_path("请输入 demo 文件路径")
-    output_root = ask_path_or_create("输出根目录", default=args.output)
+    runtime = WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
+    output_root = runtime.paths.jobs_dir
+    print(f"当前工作区：{runtime.root}")
+    print(f"预计 Job 根目录：{output_root}")
 
-    config = config_from_defaults(defaults, output_root)
+    config = config_from_defaults(defaults, output_root, runtime=runtime)
     print("\n接下来会先做准备工作：解压、识别地图和玩家、提取语音。")
     print("这个阶段可能需要一些时间，但不会调用 Whisper 或 LLM。")
     if not ask_yes_no("开始准备 demo 吗？", default=True):
         raise WizardAbort("用户取消准备 demo")
 
-    engine = PipelineEngine(config)
+    policy = JobRuntime.from_config(runtime, config)
+    engine = PipelineEngine(config, runtime=runtime, job_runtime=policy)
     engine.run(demo_path, to_stage=StageName.BUILD_VOICE_ACTIVITY)
 
     step(2, "确认地图", "地图会影响报点翻译和后续配置。自动识别失败时可以手动输入。")
@@ -139,14 +150,14 @@ def run_wizard(args: argparse.Namespace) -> int:
     return 0
 
 
-def config_from_defaults(defaults: dict, output_root: Path) -> PipelineConfig:
+def config_from_defaults(defaults: dict, output_root: Path, *, runtime: WorkspaceRuntime | None = None) -> PipelineConfig:
     return PipelineConfig(
         output_root=str(output_root),
         transcription_profile=defaults.get("transcription_profile") or "balanced",
         whisper_model=defaults.get("whisper_model") or "base",
         whisper_device=defaults.get("whisper_device") or "cpu",
         whisper_compute_type=defaults.get("whisper_compute_type") or "int8",
-        whisper_cache_dir=defaults.get("whisper_cache_dir"),
+        whisper_cache_dir=str(runtime.paths.whisper_cache_dir) if runtime is not None else None,
         whisper_vad_filter=bool(defaults.get("whisper_vad_filter", True)),
         transcription_mode=defaults.get("transcription_mode") or "round",
         filter_hallucinations=bool(defaults.get("filter_hallucinations", True)),
