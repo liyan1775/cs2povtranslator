@@ -8,6 +8,7 @@ from typing import Any
 from .errors import DomainSchemaError
 from .fingerprint import content_fingerprint
 from .schema import (
+    MAX_DEMO_TIME_US,
     require_current_schema,
     require_exact_keys,
     require_identifier,
@@ -215,8 +216,8 @@ class DraftCommsCue:
         require_identifier(self.cue_id, "cue_id")
         require_identifier(self.round_id, "round_id")
         require_identifier(self.player_id, "player_id")
-        require_int(self.start_us, "start_us", minimum=0)
-        require_int(self.end_us, "end_us", minimum=0)
+        require_int(self.start_us, "start_us", minimum=0, maximum=MAX_DEMO_TIME_US)
+        require_int(self.end_us, "end_us", minimum=0, maximum=MAX_DEMO_TIME_US)
         if self.end_us <= self.start_us:
             _error("timeline_invalid", "time_range")
         require_str(self.asr_original, "asr_original")
@@ -264,8 +265,8 @@ class DraftCommsCue:
             understanding.content_fingerprint(),
         )
 
-    def to_dict(self, *, include_schema: bool = True) -> dict[str, object]:
-        result = {
+    def to_dict(self) -> dict[str, object]:
+        return {
             "cue_id": self.cue_id,
             "round_id": self.round_id,
             "player_id": self.player_id,
@@ -278,17 +279,14 @@ class DraftCommsCue:
             "evidence": list(self.evidence),
             "understanding_result_fingerprint": self.understanding_result_fingerprint,
         }
-        return {"schema_version": 1, **result} if include_schema else result
 
     @classmethod
     def from_dict(cls, data: object) -> "DraftCommsCue":
         d = require_mapping(data, "draft_cue")
         reject_private_data(d, "draft_cue")
-        require_current_schema(d, "draft_cue")
         require_exact_keys(
             d,
             {
-                "schema_version",
                 "cue_id",
                 "round_id",
                 "player_id",
@@ -359,8 +357,8 @@ class ReviewedCommsCue:
             (self.review_decision_id, "review_decision_id"),
         ):
             require_identifier(value, path)
-        require_int(self.start_us, "start_us", minimum=0)
-        require_int(self.end_us, "end_us", minimum=0)
+        require_int(self.start_us, "start_us", minimum=0, maximum=MAX_DEMO_TIME_US)
+        require_int(self.end_us, "end_us", minimum=0, maximum=MAX_DEMO_TIME_US)
         if self.end_us <= self.start_us:
             _error("timeline_invalid", "time_range")
         for value, path in (
@@ -378,8 +376,8 @@ class ReviewedCommsCue:
             require_string_list(self.evidence, "evidence", allow_empty=False),
         )
 
-    def to_dict(self, *, include_schema: bool = True) -> dict[str, object]:
-        result = {
+    def to_dict(self) -> dict[str, object]:
+        return {
             "cue_id": self.cue_id,
             "round_id": self.round_id,
             "player_id": self.player_id,
@@ -394,17 +392,14 @@ class ReviewedCommsCue:
             "final_translated_zh": self.final_translated_zh,
             "review_decision_id": self.review_decision_id,
         }
-        return {"schema_version": 1, **result} if include_schema else result
 
     @classmethod
     def from_dict(cls, data: object) -> "ReviewedCommsCue":
         d = require_mapping(data, "reviewed_cue")
         reject_private_data(d, "reviewed_cue")
-        require_current_schema(d, "reviewed_cue")
         require_exact_keys(
             d,
             {
-                "schema_version",
                 "cue_id",
                 "round_id",
                 "player_id",

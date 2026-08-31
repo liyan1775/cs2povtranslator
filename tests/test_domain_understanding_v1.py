@@ -68,6 +68,14 @@ def test_voice_and_round_direct_constructors_reject_private_data():
     with pytest.raises(DomainSchemaError) as e: VoiceActivityCue(r"C:\private", "player", TimeRange(1, 2), 1, ("anchor",), 0)
     assert e.value.code == "domain_private_data_forbidden"
     with pytest.raises(DomainSchemaError): RoundUnderstandingDocument("round", "a" * 64, r"C:\cfg", None, ())
+
+@pytest.mark.parametrize("field", ["evidence", "warnings"])
+def test_understanding_direct_constructor_rejects_private_data_in_all_durable_text_fields(field):
+    kwargs = {"evidence": ("e",), "warnings": ()}
+    kwargs[field] = (r"C:\private\evidence.txt",) if field == "evidence" else ("https://private.example/warn",)
+    with pytest.raises(DomainSchemaError) as caught:
+        UnderstandingResult("cue-b-callout", "round-002", "be be be", "B, B, B", "B点，B点，B点", .86, kwargs["evidence"], kwargs["warnings"], "invoke-round-002")
+    assert caught.value.code == "domain_private_data_forbidden"
 @pytest.mark.parametrize("factory", [lambda: VoiceActivityCue("a", "p", TimeRange(1, 2), 1, (), 0), lambda: TranscriptCue("c", "p", "r", TimeRange(1, 2), SourceClock.COMPACT_AUDIO_SAMPLE, "p", 0, 1, "x", "en", None, ("a",), (), "i")])
 def test_empty_reference_collections_are_invalid(factory):
     with pytest.raises(DomainSchemaError): factory()

@@ -27,9 +27,6 @@ class UnderstandingResult:
     model_invocation_record_id: str
 
     def __post_init__(self):
-        reject_private_data({"asr_original": self.asr_original,
-                             "interpreted_source": self.interpreted_source,
-                             "translated_zh": self.translated_zh}, "result")
         for v, p in (
             (self.cue_id, "cue_id"),
             (self.round_id, "round_id"),
@@ -61,6 +58,9 @@ class UnderstandingResult:
             raise DomainSchemaError(
                 "domain_field_invalid", "证据无效。", "请修正后重试。"
             )
+        # Scan the complete normalized durable representation, including all
+        # evidence and warning strings, at the same boundary as from_dict.
+        reject_private_data(self.to_dict(), "result")
 
     def to_dict(self):
         return {

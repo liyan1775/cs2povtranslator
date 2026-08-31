@@ -340,7 +340,7 @@ def test_reviewed_time_edit_must_remain_inside_declared_round() -> None:
     )
     reviewed = compose_reviewed_timeline(draft, (decision,))
     with pytest.raises(DomainSchemaError) as caught:
-        validate_reviewed_timeline_graph(reviewed, draft, timeline)
+        validate_reviewed_timeline_graph(reviewed, draft, timeline, (decision,))
     assert caught.value.code == "cue_reference_invalid"
 
 
@@ -403,12 +403,12 @@ def test_reviewed_graph_rejects_stale_source_hash_and_preserves_round_order() ->
         None,
     )
     reviewed = compose_reviewed_timeline(draft, (decision,))
-    validate_reviewed_timeline_graph(reviewed, draft, timeline)
+    validate_reviewed_timeline_graph(reviewed, draft, timeline, (decision,))
     payload = reviewed.to_dict()
     payload["source_draft_fingerprint"] = "0" * 64
     with pytest.raises(DomainSchemaError) as caught:
         validate_reviewed_timeline_graph(
-            type(reviewed).from_dict(payload), draft, timeline
+            type(reviewed).from_dict(payload), draft, timeline, (decision,)
         )
     assert caught.value.code == "domain_fingerprint_mismatch"
 
@@ -534,9 +534,16 @@ def test_reviewed_graph_rejects_missing_cue_without_exclusion() -> None:
     reviewed = ReviewedCommsTimeline(
         draft.demo_asset_id, draft.timebase, draft.content_fingerprint(), (), ()
     )
+    decision = ReviewDecision(
+        "decision-001", draft.cues[0].cue_id,
+        draft.cues[0].understanding_result_fingerprint,
+        ReviewAction.ACCEPT, "2026-08-31T12:00:00Z", "local-user", None,
+        None, None, None,
+    )
     with pytest.raises(DomainSchemaError) as caught:
-        validate_reviewed_timeline_graph(reviewed, draft, timeline)
-    assert caught.value.code == "cue_reference_invalid"
+        validate_reviewed_timeline_graph(reviewed, draft, timeline, (decision,))
+    assert caught.value.code == "domain_fingerprint_mismatch"
+    assert caught.value.path == "reviewed_timeline"
 
 
 def test_reviewed_graph_rejects_duplicate_review_decision_ids() -> None:
@@ -627,6 +634,86 @@ def test_voice_activity_validation_rejects_uncertainty_below_anchor() -> None:
             VoiceActivityCue.from_dict(payload), timeline
         )
     assert caught.value.code == "cue_reference_invalid"
+
+
+def _reviewed_graph_fixture():
+    timeline, _, transcript, _, _, configuration, invocation, document = _understanding_graph()
+    draft = compose_draft_timeline(
+        timeline, (transcript,), (document,), (configuration,), (invocation,)
+    )
+    decision = ReviewDecision(
+        "decision-001", transcript.cue_id, draft.cues[0].understanding_result_fingerprint,
+        ReviewAction.ACCEPT, "2026-08-31T12:00:00Z", "local-user", None, None, None, None,
+    )
+    return timeline, draft, decision, compose_reviewed_timeline(draft, (decision,))
+
+
+def test_reopened_reviewed_graph_rejects_accept_final_translation_tampering() -> None:
+    timeline, draft, decision, reviewed = _reviewed_graph_fixture()
+    payload = reviewed.to_dict()
+    payload["cues"][0]["final_translated_zh"] = "被篡改的翻译"
+    tampered = type(reviewed).from_dict(payload)
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_reviewed_timeline_graph(tampered, draft, timeline, (decision,))
+    assert caught.value.code == "domain_fingerprint_mismatch"
+    assert caught.value.path == "reviewed_timeline"
+
+
+def test_reopened_reviewed_graph_rejects_forged_excluded_decision_id() -> None:
+    timeline, draft, decision, reviewed = _reviewed_graph_fixture()
+    payload = reviewed.to_dict()
+    payload["excluded_decision_ids"] = ["forged-exclusion"]
+    tampered = type(reviewed).from_dict(payload)
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_reviewed_timeline_graph(tampered, draft, timeline, (decision,))
+    assert caught.value.code == "domain_fingerprint_mismatch"
+    assert caught.value.path == "reviewed_timeline"
+
+
+def test_reopened_reviewed_graph_rejects_omitted_cue() -> None:
+    timeline, draft, decision, reviewed = _reviewed_graph_fixture()
+    payload = reviewed.to_dict()
+    payload["cues"] = []
+    tampered = type(reviewed).from_dict(payload)
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_reviewed_timeline_graph(tampered, draft, timeline, (decision,))
+    assert caught.value.code == "domain_fingerprint_mismatch"
+    assert caught.value.path == "reviewed_timeline"
+
+
+def test_transcript_and_draft_composition_reject_demo_discontinuous_source_mapping() -> None:
+    timeline, _, transcript, asr_configuration, asr_invocation, configuration, invocation, document = _understanding_graph()
+    first = TimeAnchor(
+        "anchor-gap-a", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 0, 12_000,
+        TimeRange(10_000_000, 10_500_000), 16_000, "voice-extractor-v1",
+    )
+    second = TimeAnchor(
+        "anchor-gap-b", SourceClock.COMPACT_AUDIO_SAMPLE, "player-alpha", 12_000, 24_000,
+        TimeRange(10_700_000, 11_200_000), 16_000, "voice-extractor-v1",
+    )
+    gap_timeline = DemoTimeline(
+        timeline.descriptor,
+        RoundCollection((Round("round-001", 1, TimeRange(10_000_000, 11_200_000), None, None,
+                               MatchPhase.REGULATION_FIRST_HALF, "round-parser-v1", RoundBoundaryConfidence.EXACT, 0),)),
+        (first, second),
+    )
+    payload = transcript.to_dict()
+    payload.update({
+        "start_us": 10_000_000, "end_us": 11_200_000,
+        "source_start": 0, "source_end": 24_000,
+        "anchor_ids": ["anchor-gap-a", "anchor-gap-b"],
+    })
+    discontinuous = TranscriptCue.from_dict(payload)
+    with pytest.raises(DomainSchemaError) as caught:
+        validate_transcript_against_timeline(
+            discontinuous, gap_timeline, (), (asr_configuration,), (asr_invocation,)
+        )
+    assert caught.value.code == "cue_time_discontinuous"
+    with pytest.raises(DomainSchemaError) as caught:
+        compose_draft_timeline(
+            gap_timeline, (discontinuous,), (document,), (configuration,), (invocation,)
+        )
+    assert caught.value.code == "cue_time_discontinuous"
 
 
 def _dummy_draft_for_review_graph() -> DraftCommsTimeline:

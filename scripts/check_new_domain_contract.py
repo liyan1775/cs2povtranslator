@@ -233,7 +233,7 @@ def _validate_payload(payload: dict[str, Any]) -> None:
     stored_reviewed = ReviewedCommsTimeline.from_dict(payload["reviewed_timeline"])
     if reviewed != stored_reviewed:
         raise ValueError("reviewed timeline recomposition mismatch")
-    validate_reviewed_timeline_graph(stored_reviewed, stored_draft, timeline)
+    validate_reviewed_timeline_graph(stored_reviewed, stored_draft, timeline, decisions)
 
     b_callout_id = expected.get("b_callout_cue_id")
     b_result = next(

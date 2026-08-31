@@ -10,7 +10,12 @@ from .invocation import (
     ModelConfigurationSnapshot,
     ModelInvocationRecord,
 )
-from .review import DraftCommsCue, DraftCommsTimeline, ReviewedCommsTimeline
+from .review import (
+    DraftCommsCue,
+    DraftCommsTimeline,
+    ReviewedCommsTimeline,
+    compose_reviewed_timeline,
+)
 from .timebase import SourceClock, TimeRange, map_source_range
 from .timeline import DemoTimeline
 from .transcript import TranscriptCue
@@ -133,27 +138,8 @@ def validate_transcript_against_timeline(
             and transcript.time_range.end_us <= round_value.time_range.end_us
         ):
             _error("cue_reference_invalid", "time_range")
+    _validate_transcript_source_mapping(transcript, timeline)
     anchors = _items(timeline.anchors, "anchors")
-    if (
-        transcript.source_clock is SourceClock.COMPACT_AUDIO_SAMPLE
-        and transcript.source_stream_id != transcript.player_id
-    ):
-        _error("cue_reference_invalid", "source_stream_id")
-    try:
-        mapped = map_source_range(
-            anchors,
-            transcript.source_clock,
-            transcript.source_stream_id,
-            transcript.source_start,
-            transcript.source_end,
-        )
-    except DomainSchemaError as exc:
-        raise exc
-    if (
-        mapped.anchor_ids != transcript.anchor_ids
-        or mapped.envelope != transcript.time_range
-    ):
-        _error("cue_reference_invalid", "source_mapping")
     activity_map = _index(activities, "activities", "activity_id", VoiceActivityCue)
     for activity_id in transcript.voice_activity_ids:
         activity = activity_map.get(activity_id)
@@ -185,6 +171,32 @@ def validate_transcript_against_timeline(
     configuration = configuration_map.get(invocation.configuration_snapshot_id)
     if configuration is None or configuration.capability is not ModelCapability.ASR:
         _error("invocation_reference_invalid", "configuration_snapshot_id")
+
+
+def _validate_transcript_source_mapping(
+    transcript: TranscriptCue, timeline: DemoTimeline
+) -> None:
+    """Validate the production source-to-demo mapping invariant for a cue."""
+    anchors = _items(timeline.anchors, "anchors")
+    if (
+        transcript.source_clock is SourceClock.COMPACT_AUDIO_SAMPLE
+        and transcript.source_stream_id != transcript.player_id
+    ):
+        _error("cue_reference_invalid", "source_stream_id")
+    mapped = map_source_range(
+        anchors,
+        transcript.source_clock,
+        transcript.source_stream_id,
+        transcript.source_start,
+        transcript.source_end,
+    )
+    if not mapped.is_contiguous:
+        _error("cue_time_discontinuous", "source_mapping")
+    if (
+        mapped.anchor_ids != transcript.anchor_ids
+        or mapped.envelope != transcript.time_range
+    ):
+        _error("cue_reference_invalid", "source_mapping")
 
 
 def validate_understanding_document_graph(
@@ -306,6 +318,11 @@ def compose_draft_timeline(
     transcript_values = _items(transcripts, "transcripts")
     if any(not isinstance(cue, TranscriptCue) for cue in transcript_values):
         _error("domain_field_invalid", "transcripts")
+    # Validate every transcript, including unassigned cues, before deriving any
+    # draft result. This keeps reopened/from_dict discontinuities out of drafts
+    # even though draft composition has no activity collection parameter.
+    for transcript in transcript_values:
+        _validate_transcript_source_mapping(transcript, timeline)
     for document in document_values:
         validate_understanding_document_graph(
             document, transcript_values, configurations, invocations
@@ -354,6 +371,7 @@ def validate_reviewed_timeline_graph(
     reviewed: ReviewedCommsTimeline,
     draft: DraftCommsTimeline,
     timeline: DemoTimeline,
+    decisions: object,
 ) -> None:
     if (
         not isinstance(reviewed, ReviewedCommsTimeline)
@@ -361,6 +379,9 @@ def validate_reviewed_timeline_graph(
         or not isinstance(timeline, DemoTimeline)
     ):
         _error("domain_field_invalid", "reviewed_timeline")
+    expected = compose_reviewed_timeline(draft, decisions)
+    if expected != reviewed:
+        _error("domain_fingerprint_mismatch", "reviewed_timeline")
     if reviewed.source_draft_fingerprint != draft.content_fingerprint():
         _error("domain_fingerprint_mismatch", "source_draft_fingerprint")
     if (

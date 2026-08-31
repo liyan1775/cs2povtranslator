@@ -9,9 +9,11 @@ from cs2pov.domain.review import (
     DraftCommsTimeline,
     ReviewAction,
     ReviewDecision,
+    ReviewedCommsCue,
     ReviewedCommsTimeline,
     compose_reviewed_timeline,
 )
+from cs2pov.domain.schema import MAX_DEMO_TIME_US
 from cs2pov.domain.timebase import SourceClock, TimeRange
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.understanding import UnderstandingResult
@@ -308,3 +310,66 @@ def test_timeline_rejects_malformed_member_with_domain_error() -> None:
             PERSISTENCE_TEST_INPUT_FINGERPRINT,
             (AlmostCue(),),
         )
+
+
+def test_nested_timeline_cues_use_exact_schema_without_schema_version() -> None:
+    draft = _draft()
+    timeline = _source((draft,))
+    expected_draft_keys = {
+        "cue_id", "round_id", "player_id", "start_us", "end_us", "asr_original",
+        "interpreted_source", "translated_zh", "confidence", "evidence",
+        "understanding_result_fingerprint",
+    }
+    assert set(timeline.to_dict()["cues"][0]) == expected_draft_keys
+    assert DraftCommsTimeline.from_dict(timeline.to_dict()) == timeline
+    nested = timeline.to_dict()
+    nested["cues"][0]["schema_version"] = 1
+    with pytest.raises(DomainSchemaError):
+        DraftCommsTimeline.from_dict(nested)
+
+    reviewed = compose_reviewed_timeline(timeline, (_decision(draft),))
+    expected_reviewed_keys = {
+        "cue_id", "round_id", "player_id", "start_us", "end_us", "asr_original",
+        "interpreted_source", "model_translated_zh", "model_confidence", "evidence",
+        "final_interpreted_source", "final_translated_zh", "review_decision_id",
+    }
+    assert set(reviewed.to_dict()["cues"][0]) == expected_reviewed_keys
+    assert ReviewedCommsTimeline.from_dict(reviewed.to_dict()) == reviewed
+    nested_reviewed = reviewed.to_dict()
+    nested_reviewed["cues"][0]["schema_version"] = 1
+    with pytest.raises(DomainSchemaError):
+        ReviewedCommsTimeline.from_dict(nested_reviewed)
+
+
+def test_draft_cue_enforces_bounded_demo_time_direct_and_from_dict() -> None:
+    valid = DraftCommsCue(
+        "cue-boundary", "round-002", "player-bravo", MAX_DEMO_TIME_US - 1,
+        MAX_DEMO_TIME_US, "asr", "source", "翻译", .5, ("e",), "a" * 64,
+    )
+    assert DraftCommsCue.from_dict(valid.to_dict()) == valid
+    with pytest.raises(DomainSchemaError):
+        DraftCommsCue(
+            "cue-over", "round-002", "player-bravo", MAX_DEMO_TIME_US,
+            MAX_DEMO_TIME_US + 1, "asr", "source", "翻译", .5, ("e",), "a" * 64,
+        )
+    payload = valid.to_dict()
+    payload["end_us"] = MAX_DEMO_TIME_US + 1
+    with pytest.raises(DomainSchemaError):
+        DraftCommsCue.from_dict(payload)
+
+
+def test_reviewed_cue_enforces_bounded_demo_time_direct_and_from_dict() -> None:
+    valid = ReviewedCommsCue(
+        "cue-boundary", "round-002", "player-bravo", MAX_DEMO_TIME_US - 1,
+        MAX_DEMO_TIME_US, "asr", "source", "模型翻译", .5, ("e",), "source", "最终翻译", "decision-boundary",
+    )
+    assert ReviewedCommsCue.from_dict(valid.to_dict()) == valid
+    with pytest.raises(DomainSchemaError):
+        ReviewedCommsCue(
+            "cue-over", "round-002", "player-bravo", MAX_DEMO_TIME_US,
+            MAX_DEMO_TIME_US + 1, "asr", "source", "模型翻译", .5, ("e",), "source", "最终翻译", "decision-over",
+        )
+    payload = valid.to_dict()
+    payload["start_us"] = MAX_DEMO_TIME_US + 1
+    with pytest.raises(DomainSchemaError):
+        ReviewedCommsCue.from_dict(payload)
