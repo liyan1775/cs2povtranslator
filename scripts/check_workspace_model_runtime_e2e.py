@@ -13,8 +13,14 @@ from pathlib import Path
 def snapshot(root: Path) -> tuple[tuple[str, ...], dict[str, str]]:
     if not root.exists():
         return (), {}
-    directories = tuple(sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_dir()))
-    files = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*") if path.is_file()}
+    directories = tuple(
+        sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_dir())
+    )
+    files = {
+        str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
     return directories, files
 
 
@@ -48,10 +54,32 @@ def main() -> int:
             (model / "marker.bin").write_bytes(b"legacy")
         before_legacy = {"configured": snapshot(configured), "env": snapshot(env_cache)}
         env = dict(os.environ)
-        env.update({"PYTHONUTF8": "1", "PYTHONPATH": os.pathsep.join((str(base / "fake-modules"), str(source / "src"))), "CS2POV_STATE_FILE": str(state), "HOME": str(home), "USERPROFILE": str(home), "LOCALAPPDATA": str(local), "XDG_STATE_HOME": str(xdg), "HF_HOME": str(env_cache), "HF_HUB_CACHE": str(env_cache), "FAKE_RECORD": str(record)})
+        env.update(
+            {
+                "PYTHONUTF8": "1",
+                "PYTHONPATH": os.pathsep.join(
+                    (str(base / "fake-modules"), str(source / "src"))
+                ),
+                "CS2POV_STATE_FILE": str(state),
+                "HOME": str(home),
+                "USERPROFILE": str(home),
+                "LOCALAPPDATA": str(local),
+                "XDG_STATE_HOME": str(xdg),
+                "HF_HOME": str(env_cache),
+                "HF_HUB_CACHE": str(env_cache),
+                "FAKE_RECORD": str(record),
+            }
+        )
 
         def run(*args: str) -> tuple[int, dict]:
-            result = subprocess.run([sys.executable, "-m", "cs2pov.cli.commands", *args], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-m", "cs2pov.cli.commands", *args],
+                cwd=cwd,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
             assert "Traceback" not in result.stderr, result.stderr
             try:
                 document = json.loads(result.stdout)
@@ -64,11 +92,19 @@ def main() -> int:
         code, document = run("workspace", "init", str(workspace), "--json")
         assert code == 0 and document["ok"]
         (home / ".cs2pov").mkdir()
-        (home / ".cs2pov" / "config.json").write_text(json.dumps({"whisper_cache_dir": str(configured)}), encoding="utf-8")
+        (home / ".cs2pov" / "config.json").write_text(
+            json.dumps({"whisper_cache_dir": str(configured)}),
+            encoding="utf-8",
+        )
+        expected_home = snapshot(home)
         code, info = run("models", "info", "--json")
         assert code == 0
-        assert info["workspace_cache"] == {"whisper": str((workspace / "cache/whisper").resolve()), "huggingface_hub": str((workspace / "cache/huggingface/hub").resolve())}
-        assert info["deprecated_config"]["present"] is True and info["deprecated_config"]["deprecated"] is True
+        assert info["workspace_cache"] == {
+            "whisper": str((workspace / "cache/whisper").resolve()),
+            "huggingface_hub": str((workspace / "cache/huggingface/hub").resolve()),
+        }
+        assert info["deprecated_config"]["present"] is True
+        assert info["deprecated_config"]["deprecated"] is True
         legacy = {(row["source"], row["path"]): row for row in info["legacy_candidates"]}
         assert ("configured", str(configured.resolve())) in legacy
         assert ("HF_HUB_CACHE", str(env_cache.resolve())) in legacy
@@ -95,10 +131,15 @@ def main() -> int:
                 child.rmdir()
         whisper.rmdir()
         code, failed = run("models", "test", "--model", "base", "--json")
-        assert code == 1 and failed["error"]["code"] == "workspace_unhealthy" and failed.get("diagnostic") and failed["diagnostic"]["ok"] is False
+        assert code == 1
+        assert failed["error"]["code"] == "workspace_unhealthy"
+        assert failed.get("diagnostic")
+        assert failed["diagnostic"]["ok"] is False
         assert not record.exists() and not whisper.exists()
+        assert snapshot(configured) == before_legacy["configured"]
+        assert snapshot(env_cache) == before_legacy["env"]
         assert not any(cwd.iterdir()) and not any(local.iterdir()) and not any(xdg.iterdir())
-        assert sorted(path.name for path in home.iterdir()) == [".cs2pov"]
+        assert snapshot(home) == expected_home
     print("workspace model runtime E2E passed: isolated subprocess cache binding and legacy rejection")
     return 0
 
