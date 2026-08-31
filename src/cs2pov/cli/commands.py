@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from cs2pov.cli.job_ops import (
     resume_job,
     retranslate_job,
     warn_external_job,
+    resolve_write_runtime,
+    require_write_job,
 )
 from cs2pov.domain.models import PipelineConfig, StageName
 from cs2pov.pipeline.engine import PipelineEngine
@@ -278,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except Exception as exc:
         print(f"处理失败：{type(exc).__name__}: {exc}")
-        print("建议运行：cs2pov feedback output，把生成的 zip 发给开发者。")
+        print("建议运行：cs2pov feedback，把生成的 zip 发给开发者。")
         raise
 
 
@@ -319,14 +322,11 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "clean":
         runtime = _resolve_write_runtime() if args.yes else (_resolve_read_runtime() if args.path is None else None)
         args.path = _resolve_job_argument(args.path, write=args.yes, runtime=runtime)
-        if args.yes:
-            _warn_for_job_path(args.path, runtime, json_mode=getattr(args, "json", False))
         return run_clean(args.path, delete=args.yes, clean_voice=args.voice, clean_temp=args.temp, runtime=runtime)
 
     if args.cmd == "feedback":
         runtime = _resolve_write_runtime()
         args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
-        _warn_for_job_path(args.path, runtime, json_mode=getattr(args, "json", False))
         return run_feedback(args.path, out=Path(args.out) if args.out else None, runtime=runtime)
 
     if args.cmd == "inspect-job":
@@ -348,11 +348,11 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "export":
         runtime = _resolve_write_runtime()
         args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
-        _warn_for_job_path(args.path, runtime, json_mode=getattr(args, "json", False))
         outputs = export_job(
             args.path, fmt=args.format, team_number=args.team_number, pov_steamid=args.pov_steamid,
             export_scope=args.export_scope, bilingual_format=args.bilingual_format, preset=args.preset,
             overlap_policy=args.overlap_policy, max_duration_seconds=args.max_duration, min_duration_seconds=args.min_duration,
+            runtime=runtime,
         )
         print("导出完成：")
         for key, value in outputs.items():
@@ -363,7 +363,6 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "retranslate":
         runtime = _resolve_write_runtime()
         args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
-        _warn_for_job_path(args.path, runtime)
         outputs = retranslate_job(args.path, dry_run=args.dry_run, skip_translation=args.skip_translation, model=args.model, base_url=args.base_url, export_after=not args.no_export, runtime=runtime)
         print("重新翻译完成：")
         for key, value in outputs.items():
@@ -374,7 +373,6 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.cmd == "resume":
         runtime = _resolve_write_runtime()
         args.path = _resolve_job_argument(args.path, write=True, runtime=runtime)
-        _warn_for_job_path(args.path, runtime)
         job = resume_job(args.path, from_stage=StageName(args.from_stage), to_stage=StageName(args.to_stage) if args.to_stage else None, demo_path=Path(args.demo) if args.demo else None, runtime=runtime)
         print(f"恢复执行完成：{job}")
         print("你可以运行 cs2pov inspect-job 查看最新状态，或 cs2pov export 重新导出字幕。")
@@ -405,16 +403,6 @@ def _resolve_job_argument(path: str | Path | None, *, write: bool, runtime: Work
     return runtime.paths.jobs_dir
 
 
-def _warn_for_job_path(path: Path, runtime: WorkspaceRuntime | None = None, *, json_mode: bool = False) -> None:
-    from cs2pov.cli.job_ops import resolve_job_dir
-    runtime = runtime or _resolve_write_runtime()
-    job_dir = resolve_job_dir(path)
-    if job_dir is not None:
-        import sys
-        warn_external_job(job_dir, runtime, stream=sys.stderr if json_mode else None)
-
-
-
 def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     from cs2pov.cli.job_ops import _load_job_config_with_runtime_secrets, _require_job, _update_manifest_config_and_artifacts
     from cs2pov.services.comms_service import CommsRenderOptions, CommsService
@@ -426,8 +414,6 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     runtime = _resolve_write_runtime()
     path = _resolve_job_argument(args.path, write=True, runtime=runtime)
     job_dir = _require_job(path)
-    import sys
-    warn_external_job(job_dir, runtime, stream=sys.stderr if getattr(args, "json", False) else None)
     store = ArtifactStore(job_dir)
     cfg = _load_job_config_with_runtime_secrets(job_dir)
     rounds = _parse_rounds_arg(getattr(args, "rounds", None))
@@ -449,6 +435,8 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             round_clock_end=args.round_clock_end,
             freeze_seconds=args.freeze_seconds,
             time_display=args.time_display.replace("-", "_"),
+            runtime=runtime,
+            warning_stream=sys.stderr if getattr(args, "json", False) else None,
         )
         _update_manifest_config_and_artifacts(store, cfg, outputs)
         if args.json:
@@ -477,7 +465,12 @@ def run_comms(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             freeze_seconds=args.freeze_seconds,
             time_display=args.time_display.replace("-", "_"),
         )
-        outputs = CommsService().render(store, rounds=rounds, formats=args.formats.split(","), options=options, temp_root=runtime.paths.temp_dir)
+        outputs = CommsService().render(
+            store, rounds=rounds, formats=args.formats.split(","), options=options,
+            temp_root=runtime.paths.temp_dir, runtime=runtime,
+            subprocess_env=runtime.subprocess_environment(),
+            warning_stream=sys.stderr if getattr(args, "json", False) else None,
+        )
         _update_manifest_config_and_artifacts(store, cfg, outputs)
         if args.json:
             print(json.dumps(outputs, ensure_ascii=False, indent=2))
@@ -525,8 +518,8 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser, *, ru
         return 0
     if args.players_cmd == "alias":
         runtime = runtime or _resolve_write_runtime()
-        _warn_for_job_path(Path(args.path), runtime, json_mode=getattr(args, "json", False))
-        report = set_player_alias(Path(args.path), steamid=args.steamid, name=args.name, display_name=args.display_name)
+        report = set_player_alias(Path(args.path), steamid=args.steamid, name=args.name, display_name=args.display_name,
+                                  runtime=runtime, warning_stream=sys.stderr if getattr(args, "json", False) else None)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -536,8 +529,8 @@ def run_players(args: argparse.Namespace, parser: argparse.ArgumentParser, *, ru
         return 0
     if args.players_cmd == "clear-alias":
         runtime = runtime or _resolve_write_runtime()
-        _warn_for_job_path(Path(args.path), runtime, json_mode=getattr(args, "json", False))
-        report = clear_player_alias(Path(args.path), steamid=args.steamid, name=args.name, all_aliases=args.all)
+        report = clear_player_alias(Path(args.path), steamid=args.steamid, name=args.name, all_aliases=args.all,
+                                    runtime=runtime, warning_stream=sys.stderr if getattr(args, "json", False) else None)
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))
         else:
@@ -1000,6 +993,8 @@ def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bo
     import shutil
     from cs2pov.storage.artifact_store import directory_size_bytes
 
+    if delete:
+        runtime = resolve_write_runtime(runtime)
     targets: list[Path] = []
     path = Path(path)
     if not path.exists():
@@ -1008,6 +1003,8 @@ def run_clean(path: Path, delete: bool, clean_voice: bool = True, clean_temp: bo
 
     candidate_jobs = [path] if (path / "manifest.json").exists() else [p for p in path.iterdir() if p.is_dir() and (p / "manifest.json").exists()]
     for job in candidate_jobs:
+        if delete:
+            warn_external_job(job, runtime)
         if clean_voice:
             targets.append(job / "artifacts" / "voice")
         if clean_temp:
@@ -1049,12 +1046,7 @@ def run_feedback(path: Path | None, out: Path | None = None, *, runtime: Workspa
     import zipfile
     from datetime import datetime
 
-    job_dir = resolve_job_dir(path)
-    if job_dir is None:
-        print(f"找不到 Job 目录：{path}")
-        print("请传入包含 manifest.json 的 Job 目录，或包含多个 Job 的工作区 jobs 根目录。")
-        return 1
-
+    job_dir, runtime = require_write_job(path, runtime)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = out or job_dir / "debug" / "feedback" / f"cs2pov_feedback_{job_dir.name}_{stamp}.zip"
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -8,9 +8,11 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from cs2pov.domain.models import Round, TranslationSegment, round_from_dict, translation_from_dict
+from cs2pov.application.workspace_runtime import WorkspaceRuntime, WorkspaceRuntimeResolver
+from cs2pov.storage.workspace_selection_store import JsonWorkspaceSelectionStore, default_state_file
 from cs2pov.services.player_alias_service import apply_player_aliases
 from cs2pov.storage.artifact_store import ArtifactStore
 from cs2pov.storage.jsonl import read_json, read_jsonl, write_json
@@ -65,7 +67,11 @@ class CommsService:
         round_clock_end: str = DEFAULT_ROUND_CLOCK_END,
         freeze_seconds: float = DEFAULT_FREEZE_SECONDS,
         time_display: str = "none",
+        runtime: WorkspaceRuntime | None = None,
+        warning_stream=None,
     ) -> dict[str, str]:
+        runtime = _resolve_write_runtime(runtime)
+        _warn_external_job(store.job_dir, runtime, warning_stream=warning_stream)
         store.ensure_dirs()
         comms_final_dir = store.final_dir / "comms_feed"
         comms_review_dir = store.review_dir / "comms_rounds"
@@ -123,7 +129,12 @@ class CommsService:
         formats: Iterable[str] = ("preview", "green"),
         options: CommsRenderOptions | None = None,
         temp_root: Path | None = None,
+        subprocess_env: Mapping[str, str] | None = None,
+        runtime: WorkspaceRuntime | None = None,
+        warning_stream=None,
     ) -> dict[str, str]:
+        runtime = _resolve_write_runtime(runtime)
+        _warn_external_job(store.job_dir, runtime, warning_stream=warning_stream)
         store.ensure_dirs()
         options = options or CommsRenderOptions()
         review_dir = store.review_dir / "comms_rounds"
@@ -142,7 +153,7 @@ class CommsService:
         # Rendering must never inherit the machine's system temp directory.
         # The CLI supplies runtime.paths.temp_dir; the job-local fallback keeps
         # direct service callers isolated without changing global environment.
-        temp_base = Path(temp_root) if temp_root is not None else store.job_dir / "debug" / "comms_tmp"
+        temp_base = Path(temp_root) if temp_root is not None else runtime.paths.temp_dir
         task_dir = temp_base / f"comms_{uuid.uuid4().hex}"
         task_dir.mkdir(parents=True, exist_ok=False)
         try:
@@ -150,7 +161,10 @@ class CommsService:
                 doc = _read_yaml(round_file)
                 round_no = int(doc.get("round") or _round_number_from_path(round_file) or 0)
                 for fmt in normalized_formats:
-                    out_path = _render_round_video(round_file, doc, out_dir, fmt, options, temp_root=task_dir)
+                    out_path = _render_round_video(
+                        round_file, doc, out_dir, fmt, options, temp_root=task_dir,
+                        subprocess_env=subprocess_env if subprocess_env is not None else runtime.subprocess_environment(),
+                    )
                     outputs[f"round_{round_no:02d}_{fmt}"] = str(out_path)
             return outputs
         finally:
@@ -538,7 +552,16 @@ def _round_number_from_path(path: Path) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fmt: str, options: CommsRenderOptions, *, temp_root: Path) -> Path:
+def _render_round_video(
+    round_file: Path,
+    doc: dict[str, Any],
+    out_dir: Path,
+    fmt: str,
+    options: CommsRenderOptions,
+    *,
+    temp_root: Path,
+    subprocess_env: Mapping[str, str] | None = None,
+) -> Path:
     if fmt == "png":
         return _render_round_png_state(round_file, doc, out_dir, options)
     ffmpeg = shutil.which("ffmpeg")
@@ -575,12 +598,26 @@ def _render_round_video(round_file: Path, doc: dict[str, Any], out_dir: Path, fm
             cmd += ["-c:v", "qtrle", "-pix_fmt", "argb", str(out_path)]
         else:
             cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_path)]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        env = dict(subprocess_env or {})
+        env.update({"TMP": str(temp_root), "TEMP": str(temp_root), "TMPDIR": str(temp_root)})
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         if proc.returncode != 0:
             raise RuntimeError(f"ffmpeg 渲染失败：{proc.stderr[-1200:]}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return out_path
+
+
+def _resolve_write_runtime(runtime: WorkspaceRuntime | None) -> WorkspaceRuntime:
+    return runtime or WorkspaceRuntimeResolver(JsonWorkspaceSelectionStore(default_state_file())).resolve_for_write()
+
+
+def _warn_external_job(job_dir: Path, runtime: WorkspaceRuntime, *, warning_stream=None) -> None:
+    try:
+        job_dir.resolve().relative_to(runtime.paths.jobs_dir.resolve())
+    except ValueError:
+        import sys
+        print("警告：正在原位置修改外部旧 Job；不会自动迁移 Job 路径。", file=warning_stream if warning_stream is not None else sys.stdout)
 
 
 def _render_round_png_state(round_file: Path, doc: dict[str, Any], out_dir: Path, options: CommsRenderOptions) -> Path:

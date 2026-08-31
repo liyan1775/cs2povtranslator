@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"错误类型：{type(exc).__name__}")
         print(f"错误信息：{exc}")
         print("\n请优先打包最近的 Job 反馈包：")
-        print("  cs2pov feedback output")
+        print("  cs2pov feedback")
         print("然后把生成的 zip 发给开发者。")
         raise
 
@@ -142,6 +142,7 @@ def run_wizard(args: argparse.Namespace) -> int:
         selected_team_number=config.selected_team_number,
         selected_pov_steamid=config.selected_pov_steamid,
         export_scope=config.export_scope,
+        runtime=runtime,
     )
     _update_manifest_config_and_artifacts(engine.store, config, comms_outputs)
 

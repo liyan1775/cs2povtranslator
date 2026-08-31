@@ -46,7 +46,7 @@ def test_clock_helpers():
 def test_build_review_outputs_editable_round_yaml_and_feed(tmp_path: Path):
     store = _fake_job(tmp_path)
 
-    outputs = CommsService().build_review(store, selected_team_number=2, selected_pov_steamid=None, export_scope="pov_team")
+    outputs = CommsService().build_review(store, selected_team_number=2, selected_pov_steamid=None, export_scope="pov_team", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
 
     feed = read_json(Path(outputs["comms_feed_json"]))
     assert feed["schema_version"] == 1
@@ -63,13 +63,14 @@ def test_build_review_outputs_editable_round_yaml_and_feed(tmp_path: Path):
 
 def test_render_png_from_review_yaml(tmp_path: Path):
     store = _fake_job(tmp_path)
-    CommsService().build_review(store, selected_team_number=2, selected_pov_steamid=None, export_scope="pov_team")
+    CommsService().build_review(store, selected_team_number=2, selected_pov_steamid=None, export_scope="pov_team", runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1))
 
     outputs = CommsService().render(
         store,
         rounds={1},
         formats=["png"],
         options=CommsRenderOptions(width=640, height=360, panel_width=260, panel_height=220, right_margin=16, max_messages=2),
+        runtime=WorkspaceRuntime(tmp_path / "workspace", "ws", 1, 1),
     )
 
     path = Path(outputs["round_01_png"])
@@ -84,8 +85,9 @@ def test_comms_cli_build_review_json(tmp_path: Path, capsys, monkeypatch):
     code = main(["comms", "build-review", str(store.job_dir), "--rounds", "1", "--json"])
 
     assert code == 0
-    captured = capsys.readouterr().out
-    assert "comms_feed_json" in captured
+    captured = capsys.readouterr()
+    assert "comms_feed_json" in captured.out
+    assert captured.err.count("警告：正在原位置修改外部旧 Job") == 1
     assert (store.review_dir / "comms_rounds" / "round_01.yaml").exists()
 
 
