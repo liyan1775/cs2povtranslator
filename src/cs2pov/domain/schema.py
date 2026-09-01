@@ -9,6 +9,7 @@ MAX_DEMO_TIME_US = 2_592_000_000_000
 MAX_SOURCE_POSITION = 9_223_372_036_854_775_807
 MAX_COUNT = 2_147_483_647
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PATH_IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_SECRET_KEYS = frozenset(
     {
@@ -102,6 +103,23 @@ def require_identifier(value, path):
         or value.split(".")[0].upper() in WINDOWS_RESERVED_STEMS
     ):
         _err("domain_identifier_invalid", path, "标识符无效。")
+    return value
+
+
+def require_path_identifier(value, path):
+    """Validate an identifier which will become a filesystem path segment.
+
+    This deliberately stays stricter than ``require_identifier`` so legacy
+    domain values keep their historical acceptance rules.
+    """
+    if (
+        not isinstance(value, str)
+        or PATH_IDENTIFIER_RE.fullmatch(value) is None
+        or value.rstrip(" .") != value
+        or value in {".", ".."}
+        or value.split(".")[0].upper() in WINDOWS_RESERVED_STEMS
+    ):
+        _err("domain_identifier_invalid", path, "路径标识符无效。")
     return value
 
 
