@@ -29,4 +29,9 @@ python scripts/check_golden_baseline.py --local-fixture "authorized-demo-anubis-
 
 校验器只输出匿名夹具 ID，不回显文件路径或哈希；它也不会复制、移动或修改 Demo。
 
-`be be be → B, B, B` 当前只是金标准候选，不能改写 v0.9.8 原始 ASR。阶段 5 才会实现“原始转录 / 理解文本 / 中文翻译 / 证据 / 置信度”的正式契约。
+在冻结 v0.9.8 基线中，`be be be → B, B, B` 仍只是候选，不能改写旧 ASR；在
+`new_domain_contract_v1.json` 中，它已作为新契约的三层文本示例。
+
+`structured_timeline_v1.json` 仍是冻结的 v0.9.8 基线；`new_domain_contract_v1.json`
+校验当前版本的新领域契约。后者不是旧版输出等价性的证明，不得作为 legacy
+输出等价来介绍。

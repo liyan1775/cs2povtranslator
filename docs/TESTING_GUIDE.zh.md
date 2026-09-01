@@ -18,6 +18,17 @@ cs2pov config show
 - `config show` 不显示 API key 明文。
 - `doctor/setup-check` 中文不乱码。
 
+## 新版领域契约重放（02A）
+
+使用固定的匿名三回合 JSON，在全新 Python 子进程中重建对象图并验证时间、引用、
+指纹、draft 与 review 的确定性聚合：
+
+```powershell
+py -3.12 scripts/check_new_domain_contract.py
+```
+
+该命令只使用仓库内匿名 JSON，不需要 CS2、GPU、模型或 API。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：
