@@ -12,7 +12,6 @@ from .errors import DomainSchemaError
 from .fingerprint import content_fingerprint
 from .schema import (
     MAX_COUNT,
-    MAX_DEMO_TIME_US,
     require_current_schema,
     require_exact_keys,
     require_identifier,
@@ -20,6 +19,8 @@ from .schema import (
     require_mapping,
     require_optional_str,
     require_path_identifier,
+    require_artifact_relative_path,
+    require_logical_path,
     require_sha256,
     require_str,
     reject_private_data,
@@ -153,19 +154,7 @@ class FinalArtifactEntry:
         require_path_identifier(self.artifact_id, "artifact_id")
         _enum(FinalArtifactKind, self.kind, "kind")
         require_sha256(self.content_sha256, "content_sha256")
-        if not isinstance(self.relative_path, str) or "\\" in self.relative_path:
-            _invalid("relative_path")
-        parts = self.relative_path.split("/")
-        roots = {
-            FinalArtifactKind.TIMELINE: ("final", "timelines"),
-            FinalArtifactKind.SUBTITLE: ("final", "subtitles"),
-            FinalArtifactKind.GREEN_SCREEN: ("final", "green_screen"),
-            FinalArtifactKind.VIDEO: ("final", "video"),
-        }[self.kind]
-        if len(parts) < 3 or tuple(parts[:2]) != roots or any(not part or part in {".", ".."} for part in parts):
-            _invalid("relative_path", message="产物路径不在对应目录中。")
-        for part in parts[2:]:
-            require_path_identifier(part.rsplit(".", 1)[0], "relative_path")
+        require_artifact_relative_path(self.relative_path, self.kind)
         if self.round_id is not None:
             require_path_identifier(self.round_id, "round_id")
         if self.timebase is not None:
@@ -302,7 +291,7 @@ class JobDemoSource:
     display_name: str
 
     def __post_init__(self) -> None:
-        ref = DemoAssetRef(self.asset_id, self.asset_manifest_relative_path)
+        DemoAssetRef(self.asset_id, self.asset_manifest_relative_path)
         _name(self.display_name, "display_name")
         reject_private_data(self.to_dict(), "demo_source")
 
@@ -421,8 +410,10 @@ class JobIssue:
         require_str(self.message_zh, "message_zh")
         require_str(self.suggestion_zh, "suggestion_zh")
         if self.logical_path is not None:
-            if not isinstance(self.logical_path, str) or self.logical_path.startswith(("/", "\\")) or "\\" in self.logical_path:
-                _invalid("logical_path")
+            try:
+                require_logical_path(self.logical_path)
+            except ValueError as exc:
+                raise DomainSchemaError("domain_field_invalid", "诊断路径无效。", "请修正后重试。", "logical_path") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +435,31 @@ class JobCatalogEntry:
     healthy: bool
     issues: tuple[JobIssue, ...]
 
+    def __post_init__(self) -> None:
+        require_path_identifier(self.discovery_id, "discovery_id")
+        if self.job_id is not None:
+            require_path_identifier(self.job_id, "job_id")
+        if self.phase is not None:
+            _enum(JobPhase, self.phase, "phase")
+        if self.durable_run_status is not None:
+            _enum(JobRunStatus, self.durable_run_status, "durable_run_status")
+        if self.effective_run_status is not None:
+            _enum(JobRunStatus, self.effective_run_status, "effective_run_status")
+        if self.round_progress is not None and not isinstance(self.round_progress, RoundProgressSummary):
+            _invalid("round_progress")
+        kinds = _tuple(self.final_artifact_kinds, "final_artifact_kinds")
+        if any(not isinstance(kind, FinalArtifactKind) for kind in kinds):
+            _invalid("final_artifact_kinds")
+        object.__setattr__(self, "final_artifact_kinds", kinds)
+        if type(self.healthy) is not bool:
+            _invalid("healthy")
+        issues = _tuple(self.issues, "issues")
+        if any(not isinstance(issue, JobIssue) for issue in issues):
+            _invalid("issues")
+        if not self.healthy and not issues:
+            _invalid("issues", message="不健康 Job 必须带诊断。")
+        object.__setattr__(self, "issues", issues)
+
 
 @dataclass(frozen=True, slots=True)
 class JobInspection:
@@ -453,3 +469,19 @@ class JobInspection:
     source: JobDemoSource | None
     events: tuple[JobEvent, ...]
     event_tail_incomplete: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entry, JobCatalogEntry):
+            _invalid("entry")
+        if self.marker is not None and not isinstance(self.marker, JobRepositoryMarker):
+            _invalid("marker")
+        if self.manifest is not None and not isinstance(self.manifest, JobManifest):
+            _invalid("manifest")
+        if self.source is not None and not isinstance(self.source, JobDemoSource):
+            _invalid("source")
+        events = _tuple(self.events, "events")
+        if any(not isinstance(event, JobEvent) for event in events):
+            _invalid("events")
+        object.__setattr__(self, "events", events)
+        if type(self.event_tail_incomplete) is not bool:
+            _invalid("event_tail_incomplete")

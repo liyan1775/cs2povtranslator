@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 import pytest
 
 from cs2pov.domain.errors import DomainSchemaError

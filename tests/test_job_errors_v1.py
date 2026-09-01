@@ -1,3 +1,5 @@
+import pytest
+
 from cs2pov.storage.job_errors import JobRepositoryError
 
 
@@ -10,3 +12,9 @@ def test_repository_error_exposes_stable_diagnostic_and_issue():
     issue = error.to_issue()
     assert issue.code == error.code
     assert issue.logical_path == "job.json"
+
+
+@pytest.mark.parametrize("logical_path", ["C:/secret", "/etc/passwd", "\\\\server\\share", "https://example.test/a", "../job.json", "job//x", "job/./x", ""])
+def test_repository_diagnostics_reject_absolute_or_non_posix_paths(logical_path):
+    with pytest.raises(ValueError):
+        JobRepositoryError("job_manifest_invalid", "无效。", "修复。", logical_path)

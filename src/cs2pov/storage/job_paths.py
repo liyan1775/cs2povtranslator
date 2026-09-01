@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from cs2pov.domain.job import FinalArtifactKind
-from cs2pov.domain.schema import require_path_identifier
+from cs2pov.domain.schema import require_path_identifier, require_artifact_relative_path
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.errors import WorkspacePathOutsideRootError
 
@@ -200,19 +200,8 @@ class JobPaths:
     def artifact_path(self, kind: FinalArtifactKind, relative_path: str) -> Path:
         if not isinstance(kind, FinalArtifactKind):
             raise ValueError("kind must be FinalArtifactKind")
-        if not isinstance(relative_path, str) or "\\" in relative_path:
-            raise ValueError("artifact path must use POSIX separators")
-        roots = {
-            FinalArtifactKind.TIMELINE: ("final", "timelines"),
-            FinalArtifactKind.SUBTITLE: ("final", "subtitles"),
-            FinalArtifactKind.GREEN_SCREEN: ("final", "green_screen"),
-            FinalArtifactKind.VIDEO: ("final", "video"),
-        }[kind]
+        require_artifact_relative_path(relative_path, kind)
         parts = relative_path.split("/")
-        if len(parts) < 3 or tuple(parts[:2]) != roots or any(p in {"", ".", ".."} for p in parts):
-            raise ValueError("artifact path is outside its final subtree")
-        for segment in parts[2:]:
-            require_path_identifier(segment.rsplit(".", 1)[0], "relative_path")
         candidate = self.job_dir.joinpath(*parts)
         self._assert_safe_existing_components(candidate.parent)
         self._assert_inside(candidate.parent)

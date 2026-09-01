@@ -1,5 +1,7 @@
 from __future__ import annotations
-import math, re
+
+import math
+import re
 from collections.abc import Mapping
 from typing import Final
 from .errors import DomainSchemaError
@@ -10,6 +12,7 @@ MAX_SOURCE_POSITION = 9_223_372_036_854_775_807
 MAX_COUNT = 2_147_483_647
 SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 PATH_IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+WINDOWS_INVALID_FILENAME_CHARS = frozenset('<>:"/\\|?*')
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FORBIDDEN_SECRET_KEYS = frozenset(
     {
@@ -120,6 +123,49 @@ def require_path_identifier(value, path):
         or value.split(".")[0].upper() in WINDOWS_RESERVED_STEMS
     ):
         _err("domain_identifier_invalid", path, "路径标识符无效。")
+    return value
+
+
+def require_artifact_segment(value, path):
+    """Validate one persisted artifact filename segment (extension allowed)."""
+    if not isinstance(value, str) or not value or value in {".", ".."}:
+        _err("domain_identifier_invalid", path, "产物路径段无效。")
+    if value.rstrip(" .") != value or any(ord(c) < 32 or c in WINDOWS_INVALID_FILENAME_CHARS for c in value):
+        _err("domain_identifier_invalid", path, "产物路径段含有 Windows 非法字符。")
+    stem = value.split(".", 1)[0]
+    if stem.upper() in WINDOWS_RESERVED_STEMS:
+        _err("domain_identifier_invalid", path, "产物路径段不能使用 Windows 设备名。")
+    return value
+
+
+def require_artifact_relative_path(value, kind, path="relative_path"):
+    """Validate and return an artifact path beneath its kind-specific final tree."""
+    if not isinstance(value, str) or "\\" in value:
+        _err("domain_identifier_invalid", path, "产物路径无效。")
+    kind_value = getattr(kind, "value", kind)
+    roots = {
+        "timeline": ("final", "timelines"),
+        "subtitle": ("final", "subtitles"),
+        "green_screen": ("final", "green_screen"),
+        "video": ("final", "video"),
+    }
+    root = roots.get(kind_value)
+    parts = value.split("/")
+    if root is None or len(parts) < 3 or tuple(parts[:2]) != root or any(not part or part in {".", ".."} for part in parts):
+        _err("domain_identifier_invalid", path, "产物路径不在对应目录中。")
+    for part in parts[2:]:
+        require_artifact_segment(part, path)
+    return value
+
+
+def require_logical_path(value, path="logical_path"):
+    if not isinstance(value, str) or not value or "\\" in value or ":" in value or "://" in value:
+        raise ValueError("logical_path must be a non-empty relative POSIX path")
+    if value.startswith("/") or value.startswith("~"):
+        raise ValueError("logical_path must be relative")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("logical_path must be normalized")
     return value
 
 

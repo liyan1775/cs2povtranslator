@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import enum
+import errno
 import json
 import os
 import stat
@@ -24,17 +25,6 @@ class SchemaClassification(enum.Enum):
 @dataclass(frozen=True, slots=True)
 class SchemaExpectation:
     pointer: str
-
-
-@dataclass(frozen=True, slots=True)
-class SchemaClassificationResult:
-    classification: SchemaClassification
-    pointer: str | None = None
-
-    def __eq__(self, other):
-        if isinstance(other, SchemaClassification):
-            return self.classification is other
-        return super().__eq__(other)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,8 +84,14 @@ def _validate_regular(path: Path, logical_path: str, *, missing_code: str = "job
         raise _repo_error(missing_code, "Job 文档不存在。", logical_path, exc) from exc
     except OSError as exc:
         raise _repo_error("job_shard_invalid", "无法检查 Job 文档。", logical_path, exc) from exc
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+    if _is_link_or_reparse(st) or not stat.S_ISREG(st.st_mode):
         raise _repo_error("job_shard_invalid", "Job 文档必须是普通文件。", logical_path)
+
+
+def _is_link_or_reparse(st) -> bool:
+    attrs = getattr(st, "st_file_attributes", 0)
+    reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(st.st_mode) or bool(attrs & reparse)
 
 
 def _validate_parent(path: Path, logical_path: str) -> None:
@@ -109,11 +105,62 @@ def _validate_parent(path: Path, logical_path: str) -> None:
             if current == parent:
                 break
             continue
-        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        if _is_link_or_reparse(st) or not stat.S_ISDIR(st.st_mode):
             raise _repo_error("job_path_escape", "Job 文档目录包含链接或不是目录。", logical_path)
         if current == current.parent:
             break
         current = current.parent
+
+
+def _read_verified_bytes(path: Path, logical_path: str) -> bytes:
+    _validate_parent(path, logical_path)
+    _validate_regular(path, logical_path)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise _repo_error("job_shard_invalid", "无法打开 Job 文档。", logical_path, exc) from exc
+    try:
+        opened = os.fstat(fd)
+        current = os.lstat(path)
+        if _is_link_or_reparse(current) or not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+            raise _repo_error("job_shard_invalid", "Job 文档在读取期间发生变化。", logical_path)
+        chunks = []
+        while True:
+            try:
+                chunk = os.read(fd, 1024 * 1024)
+            except OSError as exc:
+                if exc.errno == errno.EINTR:
+                    continue
+                raise
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks)
+    except JobRepositoryError:
+        raise
+    except OSError as exc:
+        raise _repo_error("job_shard_invalid", "无法读取 Job 文档。", logical_path, exc) from exc
+    finally:
+        os.close(fd)
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            written = os.write(fd, payload[offset:])
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                continue
+            raise
+        if written <= 0:
+            raise OSError(errno.EIO, "zero-progress write")
+        offset += written
 
 
 def _serialize(value, serializer, logical_path: str) -> bytes:
@@ -129,9 +176,8 @@ def _serialize(value, serializer, logical_path: str) -> bytes:
 
 
 def read_strict_json(path: Path, *, logical_path: str, parser: Callable[[object], object]):
-    _validate_regular(path, logical_path)
     try:
-        raw = path.read_bytes()
+        raw = _read_verified_bytes(path, logical_path)
         value = _loads(raw, logical_path)
         if not isinstance(value, Mapping):
             raise _repo_error("job_shard_invalid", "JSON 顶层必须是对象。", logical_path)
@@ -165,7 +211,7 @@ def atomic_write_json(path: Path, value, *, logical_path: str, serializer: Calla
     try:
         fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(fd, payload)
+            _write_all(fd, payload)
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -200,9 +246,8 @@ def _fsync_directory(path: Path, logical_path: str) -> None:
 
 
 def read_strict_jsonl(path: Path, *, logical_path: str, parser: Callable[[object], object], allow_incomplete_tail: bool = False) -> JsonlReadResult:
-    _validate_regular(path, logical_path)
     try:
-        raw = path.read_bytes()
+        raw = _read_verified_bytes(path, logical_path)
         if raw.startswith(b"\xef\xbb\xbf"):
             raise _repo_error("job_shard_invalid", "JSONL 不得包含 BOM。", logical_path)
         records: list[object] = []
@@ -268,7 +313,7 @@ def atomic_write_bytes(path: Path, payload: bytes, *, logical_path: str):
     try:
         fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            os.write(fd, payload)
+            _write_all(fd, payload)
             os.fsync(fd)
         finally:
             os.close(fd)
@@ -298,18 +343,27 @@ def append_jsonl_record(path: Path, value, *, logical_path: str, serializer: Cal
     except _EXPECTED_PARSE_ERRORS as exc:
         raise _map_exception(exc, logical_path) from exc
     _validate_parent(path, logical_path)
-    if path.exists() or path.is_symlink():
-        _validate_regular(path, logical_path, missing_code="job_shard_invalid")
-        try:
-            if path.stat().st_size and not path.read_bytes().endswith(b"\n"):
-                raise _repo_error("job_shard_invalid", "JSONL 末行不完整，不能追加。", logical_path)
-        except OSError as exc:
-            raise _repo_error("job_write_failed", "无法读取 JSONL。", logical_path, exc) from exc
     try:
-        with open(path, "ab", buffering=0) as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
+        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags, 0o600)
+        try:
+            opened = os.fstat(fd)
+            current = os.lstat(path)
+            if _is_link_or_reparse(current) or not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+                raise _repo_error("job_shard_invalid", "JSONL 文件在打开期间发生变化。", logical_path)
+            if opened.st_size:
+                os.lseek(fd, -1, os.SEEK_END)
+                tail = os.read(fd, 1)
+                if tail != b"\n":
+                    raise _repo_error("job_shard_invalid", "JSONL 末行不完整，不能追加。", logical_path)
+            _write_all(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
     except OSError as exc:
         raise _repo_error("job_write_failed", "JSONL 追加失败。", logical_path, exc) from exc
 
@@ -320,7 +374,7 @@ def classify_schema_versions(raw_value: object, expectations: tuple[SchemaExpect
 
     def values_at(pointer: str):
         if pointer in {"", "/"}:
-            return [raw_value]
+            return True, [raw_value]
         current = [raw_value]
         for segment in pointer.strip("/").split("/"):
             nxt = []
@@ -331,21 +385,21 @@ def classify_schema_versions(raw_value: object, expectations: tuple[SchemaExpect
                     elif isinstance(value, Mapping):
                         nxt.extend(value.values())
                     else:
-                        return []
+                        return False, []
                 elif isinstance(value, Mapping) and segment in value:
                     nxt.append(value[segment])
                 else:
-                    return []
+                    return False, []
             current = nxt
-        return current
+        return True, current
 
     for expectation in expectations:
         pointer = expectation.pointer if isinstance(expectation, SchemaExpectation) else expectation
         if not isinstance(pointer, str):
             found_malformed = True
             continue
-        selected = values_at(pointer)
-        if not selected:
+        found, selected = values_at(pointer)
+        if not found:
             found_malformed = True
             continue
         for value in selected:

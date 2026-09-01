@@ -373,3 +373,14 @@ def test_reviewed_cue_enforces_bounded_demo_time_direct_and_from_dict() -> None:
     payload["start_us"] = MAX_DEMO_TIME_US + 1
     with pytest.raises(DomainSchemaError):
         ReviewedCommsCue.from_dict(payload)
+import pytest
+
+from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.review import ReviewRevisionManifest, RoundReviewDocument
+
+
+def test_review_revision_requires_canonical_utc_timestamp_and_typed_round_ids():
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00+00:00", ("round-1",))
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", (True,))

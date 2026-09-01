@@ -37,3 +37,15 @@ def test_job_paths_rejects_jobs_symlink_outside_workspace(tmp_path):
         pytest.skip("symlink privileges unavailable")
     with pytest.raises(Exception):
         JobPaths(WorkspacePaths(tmp_path), "job-1")
+
+
+@pytest.mark.parametrize("relative", [
+    "final/subtitles/file.txt:evil",
+    "final/subtitles/file.txt ",
+    "final/subtitles/file?.txt",
+    "final/subtitles/CON.txt",
+])
+def test_artifact_segments_reject_windows_unsafe_names(relative, tmp_path):
+    paths = JobPaths(WorkspacePaths(tmp_path), "job-1")
+    with pytest.raises(Exception):
+        paths.final_artifact_path(relative)

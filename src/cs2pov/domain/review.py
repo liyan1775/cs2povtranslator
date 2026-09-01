@@ -47,6 +47,18 @@ def _timestamp(value: object) -> str:
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _strict_timestamp(value: object, path: str) -> str:
+    import re
+
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", value) is None:
+        raise DomainSchemaError("domain_field_invalid", "时间必须是带 6 位微秒的 UTC 时间。", "请修正后重试。", path)
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as exc:
+        raise DomainSchemaError("domain_field_invalid", "时间无效。", "请修正后重试。", path) from exc
+    return value
+
+
 class ReviewAction(Enum):
     ACCEPT = "accept"
     EDIT = "edit"
@@ -193,16 +205,16 @@ class ReviewRevisionManifest:
     round_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        reject_private_data(self.to_dict(), "review_revision")
         require_path_identifier(self.review_id, "review_id")
         require_sha256(self.source_draft_fingerprint, "source_draft_fingerprint")
-        object.__setattr__(self, "created_at", _timestamp(self.created_at))
+        object.__setattr__(self, "created_at", _strict_timestamp(self.created_at, "created_at"))
         if not isinstance(self.round_ids, (tuple, list)):
             _error("domain_field_invalid", "round_ids")
         ids = tuple(require_path_identifier(x, "round_ids[]") for x in self.round_ids)
         if len({x.casefold() for x in ids}) != len(ids):
             _error("domain_field_invalid", "round_ids")
         object.__setattr__(self, "round_ids", ids)
+        reject_private_data(self.to_dict(), "review_revision")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -224,6 +236,8 @@ class ReviewRevisionManifest:
             set(),
             "review_revision",
         )
+        if not isinstance(d["round_ids"], (list, tuple)):
+            _error("domain_field_invalid", "round_ids")
         return cls(d["review_id"], d["source_draft_fingerprint"], d["created_at"], tuple(d["round_ids"]))
 
 
@@ -235,7 +249,6 @@ class RoundReviewDocument:
     decisions: tuple[ReviewDecision, ...]
 
     def __post_init__(self) -> None:
-        reject_private_data(self.to_dict(), "round_review")
         require_path_identifier(self.review_id, "review_id")
         require_path_identifier(self.round_id, "round_id")
         require_sha256(self.source_draft_fingerprint, "source_draft_fingerprint")
@@ -249,6 +262,7 @@ class RoundReviewDocument:
         if len({d.cue_id.casefold() for d in decisions}) != len(decisions):
             _error("review_decision_invalid", "decisions")
         object.__setattr__(self, "decisions", decisions)
+        reject_private_data(self.to_dict(), "round_review")
 
     def to_dict(self) -> dict[str, object]:
         return {

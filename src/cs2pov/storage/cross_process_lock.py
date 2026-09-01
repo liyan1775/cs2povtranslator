@@ -12,6 +12,20 @@ from .job_errors import JobRepositoryError
 _HELD: set[str] = set()
 
 
+def _write_all(fd: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        try:
+            count = os.write(fd, payload[offset:])
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                continue
+            raise
+        if count <= 0:
+            raise OSError(errno.EIO, "zero-progress write")
+        offset += count
+
+
 def _error(code: str, message: str, path: Path, cause: BaseException | None = None):
     exc = JobRepositoryError(code, message, "请稍后重试或检查仓储锁。", path.name)
     if cause is not None:
@@ -28,19 +42,24 @@ class _LockedContext:
         self._key = None
 
     def __enter__(self):
-        if not isinstance(self.timeout_ms, int) or self.timeout_ms < 0:
+        if type(self.timeout_ms) is not int or self.timeout_ms < 0:
             raise _error("job_write_failed", "锁超时时间无效。", self.path)
-        self._validate_path(create=self.bootstrap)
+        self._validate_parent()
         key = os.path.normcase(str(self.path.absolute()))
         if key in _HELD:
             raise _error("job_write_busy", "当前进程重复获取同一写锁。", self.path)
         try:
-            self._file = open(self.path, "r+b", buffering=0)
+            self._file = self._open_descriptor()
         except OSError as exc:
             raise _error("job_write_failed", "无法打开仓储锁。", self.path, exc) from exc
         try:
+            self._validate_descriptor(require_nonempty=False)
+            if self.bootstrap and os.fstat(self._file.fileno()).st_size == 0:
+                _write_all(self._file.fileno(), b"0")
+                os.fsync(self._file.fileno())
             self._validate_descriptor()
             self._acquire()
+            self._validate_descriptor()
         except BaseException:
             self._file.close()
             self._file = None
@@ -53,41 +72,52 @@ class _LockedContext:
     def file(self):
         return self._file
 
-    def _validate_path(self, *, create: bool) -> None:
-        if create:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+    def _validate_parent(self) -> None:
+        current = self.path.parent
+        while True:
             try:
-                if self.path.is_symlink():
-                    raise _error("job_write_failed", "仓储锁不能是链接。", self.path)
-                fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-                try:
-                    st = os.fstat(fd)
-                    if not stat.S_ISREG(st.st_mode):
-                        raise _error("job_write_failed", "仓储锁必须是普通文件。", self.path)
-                    if st.st_size == 0:
-                        os.write(fd, b"0")
-                        os.fsync(fd)
-                finally:
-                    os.close(fd)
-            except JobRepositoryError:
-                raise
-            except OSError as exc:
-                raise _error("job_write_failed", "无法初始化仓储锁。", self.path, exc) from exc
-        if not self.path.exists() or self.path.is_symlink():
-            raise _error("job_write_failed", "仓储锁不存在或是链接。", self.path)
-        try:
-            st = os.lstat(self.path)
-        except OSError as exc:
-            raise _error("job_write_failed", "无法检查仓储锁。", self.path, exc) from exc
-        if not stat.S_ISREG(st.st_mode) or st.st_size < 1:
-            raise _error("job_write_failed", "仓储锁必须是至少一个字节的普通文件。", self.path)
+                st = os.lstat(current)
+            except FileNotFoundError:
+                current = current.parent
+                if current == current.parent:
+                    break
+                continue
+            attrs = getattr(st, "st_file_attributes", 0)
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if stat.S_ISLNK(st.st_mode) or bool(attrs & reparse) or not stat.S_ISDIR(st.st_mode):
+                raise _error("job_write_failed", "仓储锁父目录不能是链接。", self.path)
+            if current == current.parent:
+                break
+            current = current.parent
 
-    def _validate_descriptor(self) -> None:
+    def _open_descriptor(self):
+        flags = os.O_RDWR
+        if self.bootstrap:
+            flags |= os.O_CREAT
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            handle = os.fdopen(os.open(self.path, flags, 0o600), "r+b", buffering=0)
+        except FileNotFoundError as exc:
+            raise _error("job_write_failed", "仓储锁不存在。", self.path, exc) from exc
+        st = os.fstat(handle.fileno())
+        attrs = getattr(st, "st_file_attributes", 0)
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if stat.S_ISLNK(st.st_mode) or bool(attrs & reparse) or not stat.S_ISREG(st.st_mode):
+            handle.close()
+            raise _error("job_write_failed", "仓储锁必须是普通文件。", self.path)
+        return handle
+
+    def _validate_descriptor(self, *, require_nonempty: bool = True) -> None:
         st = os.fstat(self._file.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size < 1:
+        attrs = getattr(st, "st_file_attributes", 0)
+        reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        if not stat.S_ISREG(st.st_mode) or bool(attrs & reparse) or (require_nonempty and st.st_size < 1):
             raise _error("job_write_failed", "仓储锁描述符无效。", self.path)
         current = os.lstat(self.path)
-        if (st.st_dev, st.st_ino) != (current.st_dev, current.st_ino):
+        if stat.S_ISLNK(current.st_mode) or bool(getattr(current, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)) or (st.st_dev, st.st_ino) != (current.st_dev, current.st_ino):
             raise _error("job_write_interrupted", "仓储锁在打开期间发生变化。", self.path)
 
     def _acquire(self) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from cs2pov.domain.schema import require_logical_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +29,7 @@ class JobRepositoryError(RuntimeError):
         self.code = code
         self.message_zh = message_zh
         self.suggestion_zh = suggestion_zh
-        self.logical_path = logical_path
+        self.logical_path = None if logical_path is None else require_logical_path(logical_path)
         self.severity = severity
 
     def to_issue(self):
