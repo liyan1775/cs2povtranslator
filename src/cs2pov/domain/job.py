@@ -191,12 +191,12 @@ class FinalArtifactEntry:
 class CreateJobRequest:
     job_id: str
     display_name: str
-    source: DemoAssetRef
+    source: "JobDemoSource"
 
     def __post_init__(self) -> None:
         require_path_identifier(self.job_id, "job_id")
         _name(self.display_name, "display_name")
-        if not isinstance(self.source, DemoAssetRef):
+        if not isinstance(self.source, JobDemoSource):
             _invalid("source")
         reject_private_data(self.to_dict(), "create_job_request")
 
@@ -235,7 +235,7 @@ class JobManifest:
         if self.map_name is not None:
             require_identifier(self.map_name, "map_name")
         if self.target_player_id is not None:
-            require_path_identifier(self.target_player_id, "target_player_id")
+            require_identifier(self.target_player_id, "target_player_id")
         _enum(JobPhase, self.phase, "phase")
         _enum(JobRunStatus, self.run_status, "run_status")
         if not isinstance(self.round_progress, RoundProgressSummary):

@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 
 import pytest
 
-from cs2pov.domain.assets import DemoAssetRef
 from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.domain.job import (
     CreateJobRequest,
@@ -16,6 +15,7 @@ from cs2pov.domain.job import (
     JobRunStatus,
     JobWriteClaim,
     RoundProgressSummary,
+    JobDemoSource,
 )
 
 
@@ -23,7 +23,7 @@ HASH = "a" * 64
 
 
 def source():
-    return DemoAssetRef(HASH, f"library/demos/{HASH}/asset.json")
+    return JobDemoSource(HASH, f"library/demos/{HASH}/asset.json", "match.dem")
 
 
 def test_job_manifest_round_trips_and_fingerprint_is_order_independent():
