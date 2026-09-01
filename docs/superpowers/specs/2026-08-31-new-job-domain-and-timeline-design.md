@@ -160,6 +160,7 @@ Job 使用按领域、按回合拆分的普通版本化文件，不在每个 Job
 
 ```text
 jobs/<job_id>/
+  repository.json
   job.json
   source/
     demo_ref.json
@@ -167,17 +168,30 @@ jobs/<job_id>/
     demo.json
     rounds.json
     time_anchors.jsonl
+  voice/
+    activities.jsonl
+  models/
+    snapshots/
+      snapshot_<snapshot_id>.json
+    invocations/
+      task_<task_id>.jsonl
   transcript/
     round_<round_id>.jsonl
     unassigned.jsonl
   understanding/
     round_<round_id>.json
   review/
-    round_<round_id>.json
+    revisions/
+      review_<review_id>/
+        revision.json
+        round_<round_id>.json
   tasks/
     round_<round_id>.json
   events/
     job_events.jsonl
+    .write.lock
+    .writer_claim/              # 仅存在于明确写会话期间
+      claim.json
   final/
     timelines/
     subtitles/
@@ -195,8 +209,13 @@ jobs/<job_id>/
 6. Job 内不保存 Demo 副本、外部绝对路径、系统临时路径或 API Key。
 7. Job 数据使用普通文件以便检查、打包和局部恢复；需要大量查询、审批和修订历史的全局知识库在后续阶段单独使用 SQLite。
 8. 每个顶层 JSON 文档都带 `schema_version`；JSONL 的每条独立记录都带 `schema_version`，使单条损坏或不匹配可以精确定位。
-9. `round_<round_id>` 文件名只能由领域层生成的安全 ID 构造，不能直接使用玩家名、地图名或其他用户文本。
+9. 所有进入文件名的 Job/Round/Task/Snapshot/Review ID 使用更严格的小写 ASCII 路径 ID（字母、数字、`-`、`_`，最多 64 字符），拒绝尾随点/空格、Windows 设备名和大小写折叠碰撞；不能直接使用玩家名、地图名或其他用户文本。
 10. `job_events.jsonl` 是单协调器追加日志；崩溃留下的不完整末行会被报告并隔离，不能让此前完整事件失效。
+11. `voice/` 和 `models/` 保存 02A 领域图所引用的语音活动、模型配置快照和逐调用记录；否则重新打开后的 Transcript/Understanding 无法验证来源引用。快照文件名和调用分片文件名只使用领域安全 ID。
+12. `.write.lock` 与 `.writer_claim/` 是协调器运行状态，不是业务结果。所有 claim 变更以及“验证 claim 后发布分片”必须位于同一个跨进程独占锁临界区，避免过期接管与旧 writer 写入交错。
+13. `repository.json` 是新版仓储原子创建的版本化标记。Job 列表只发现带此标记的直接子目录；只有旧版 `manifest.json` 而没有标记的目录不进入新版列表，也不会被误报为损坏的新版 Job。
+14. `job.json.active_review_id` 只引用 `review/revisions/review_<review_id>/revision.json`。每个复核版本保存自己的回合决定分片；完整闭合但未激活的版本是合法历史版本。激活新版本时先完整发布版本目录，并在 POSIX 持久化其父目录，最后才原子更新 Job manifest，不能产生指向缺失版本的 manifest。
+15. `jobs/.repository.lock` 只供写操作初始化并锁定，用于串行化合作仓储进程的初始 Job 发布；列表、检查和只读打开在该文件缺失时也不得创建它。
 
 ### 6.1 规范内容指纹
 
@@ -232,7 +251,7 @@ DraftCommsTimeline 的 `input_fingerprint` 也必须由生产合成器从按规�
 - 程序退出后遗留的 `RUNNING` 在只读打开时根据 claim/租约**在内存中显示**为 `INTERRUPTED`，不改盘；只有用户明确继续或修复时，协调器才原子持久化状态转换。
 - 当前只接受当前 `schema_version`。不匹配返回 `job_schema_unsupported`，不扫描旧目录、不迁移、不改写。
 
-02A 领域对象内部返回 `domain_schema_unsupported`；后续 02B Job 仓储在打开 Job 的边界将其翻译为 `job_schema_unsupported`，并保留原始 cause 供诊断。
+02A 领域对象内部对版本问题统一返回 `domain_schema_unsupported`。02B Job 仓储按每种文档已声明的 Schema 位置检查原始值：精确整数且不等于当前版本才翻译为 `job_schema_unsupported`；缺失、布尔、字符串、空值等畸形版本属于 `job_manifest_invalid` 或 `job_shard_invalid`。两类映射都保留原始 cause 供诊断，不能递归猜测普通业务字典是否应带 Schema。
 
 ### 7.3 工作区范围
 
