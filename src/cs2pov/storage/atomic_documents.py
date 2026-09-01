@@ -29,6 +29,25 @@ class SchemaExpectation:
 
 
 @dataclass(frozen=True, slots=True)
+class SchemaAwareParser:
+    parser: Callable[[object], object]
+    expectations: tuple[SchemaExpectation | str, ...]
+    invalid_code: str = "job_shard_invalid"
+
+    def __call__(self, raw: object):
+        try:
+            return self.parser(raw)
+        except DomainSchemaError as exc:
+            classification = classify_schema_versions(raw, self.expectations)
+            code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else self.invalid_code
+            raise _repo_error(code, "Job 文档校验失败。", "document", exc) from exc
+
+
+def schema_aware_parser(parser: Callable[[object], object], *, expectations: tuple[SchemaExpectation | str, ...], invalid_code: str = "job_shard_invalid") -> SchemaAwareParser:
+    return SchemaAwareParser(parser, expectations, invalid_code)
+
+
+@dataclass(frozen=True, slots=True)
 class JsonlReadResult:
     records: tuple[object, ...]
     incomplete_tail: bool = False
@@ -54,6 +73,20 @@ def _map_domain_error(exc: DomainSchemaError, raw: object, logical_path: str):
     classification = classify_schema_versions(raw, ("",))
     code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else "job_shard_invalid"
     return _repo_error(code, "Job 文档校验失败。", logical_path, exc)
+
+
+def _invoke_parser(parser: Callable[[object], object], raw: object, logical_path: str):
+    target = parser.parser if isinstance(parser, SchemaAwareParser) else parser
+    expectations = parser.expectations if isinstance(parser, SchemaAwareParser) else ("",)
+    invalid_code = parser.invalid_code if isinstance(parser, SchemaAwareParser) else "job_shard_invalid"
+    try:
+        return target(raw)
+    except JobRepositoryError:
+        raise
+    except DomainSchemaError as exc:
+        classification = classify_schema_versions(raw, expectations)
+        code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else invalid_code
+        raise _repo_error(code, "Job 文档校验失败。", logical_path, exc) from exc
 
 
 _EXPECTED_PARSE_ERRORS = (DomainSchemaError, ValueError, TypeError, OSError, UnicodeError, OverflowError)
@@ -201,9 +234,7 @@ def read_strict_json(path: Path, *, logical_path: str, parser: Callable[[object]
         raw_value = _loads(raw, logical_path)
         if not isinstance(raw_value, Mapping):
             raise _repo_error("job_shard_invalid", "JSON 顶层必须是对象。", logical_path)
-        return parser(raw_value)
-    except DomainSchemaError as exc:
-        raise _map_domain_error(exc, raw_value, logical_path) from exc
+        return _invoke_parser(parser, raw_value, logical_path)
     except _EXPECTED_PARSE_ERRORS as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -217,9 +248,7 @@ def atomic_write_json(path: Path, value, *, logical_path: str, serializer: Calla
     if not isinstance(parsed, Mapping):
         raise _repo_error("job_shard_invalid", "JSON 顶层必须是对象。", logical_path)
     try:
-        parser(parsed)
-    except DomainSchemaError as exc:
-        raise _map_domain_error(exc, parsed, logical_path) from exc
+        _invoke_parser(parser, parsed, logical_path)
     except _EXPECTED_PARSE_ERRORS as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -287,7 +316,7 @@ def read_strict_jsonl(path: Path, *, logical_path: str, parser: Callable[[object
             if not isinstance(value, Mapping):
                 raise _repo_error("job_shard_invalid", "JSONL 记录必须是对象。", f"{logical_path}#{index}")
             try:
-                value = parser(value)
+                value = _invoke_parser(parser, value, f"{logical_path}#{index}")
             except _EXPECTED_PARSE_ERRORS as exc:
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
@@ -310,9 +339,7 @@ def atomic_write_jsonl(path: Path, values: Iterable[object], *, logical_path: st
         if not isinstance(parsed, Mapping):
             raise _repo_error("job_shard_invalid", "JSONL 记录必须是对象。", logical_path)
         try:
-            parser(parsed)
-        except DomainSchemaError as exc:
-            raise _map_domain_error(exc, parsed, logical_path) from exc
+            _invoke_parser(parser, parsed, logical_path)
         except _EXPECTED_PARSE_ERRORS as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -357,7 +384,7 @@ def append_jsonl_record(path: Path, value, *, logical_path: str, serializer: Cal
     if not isinstance(parsed, Mapping):
         raise _repo_error("job_shard_invalid", "JSONL 记录必须是对象。", logical_path)
     try:
-        parser(parsed)
+        _invoke_parser(parser, parsed, logical_path)
     except _EXPECTED_PARSE_ERRORS as exc:
         raise _map_exception(exc, logical_path) from exc
     _validate_parent(path, logical_path)

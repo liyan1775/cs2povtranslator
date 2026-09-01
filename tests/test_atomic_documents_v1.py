@@ -9,6 +9,7 @@ from cs2pov.storage.atomic_documents import (
     classify_schema_versions,
     read_strict_json,
     read_strict_jsonl,
+    schema_aware_parser,
 )
 from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.storage.job_errors import JobRepositoryError
@@ -70,6 +71,20 @@ def test_jsonl_parser_schema_error_reports_record_number_and_cause(tmp_path):
         read_strict_jsonl(p, logical_path="records.jsonl", parser=parser)
     assert exc.value.logical_path == "records.jsonl#1"
     assert isinstance(exc.value.__cause__, DomainSchemaError)
+
+
+def test_jsonl_schema_aware_parser_reports_second_record_and_malformed_version(tmp_path):
+    p = tmp_path / "records.jsonl"
+    p.write_bytes(b'{"schema_version":1}\n{"schema_version":true}\n')
+    def parser(value):
+        if value["schema_version"] is True:
+            raise DomainSchemaError("domain_schema_unsupported", "bad", "fix")
+        return value
+    parser = schema_aware_parser(parser, expectations=("",))
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_jsonl(p, logical_path="records.jsonl", parser=parser)
+    assert exc.value.code == "job_shard_invalid"
+    assert exc.value.logical_path == "records.jsonl#2"
 
 
 def test_atomic_jsonl_and_schema_locations(tmp_path):
@@ -202,6 +217,26 @@ def test_reader_maps_exact_non_current_root_schema_to_unsupported(tmp_path):
     with pytest.raises(JobRepositoryError) as exc:
         read_strict_json(p, logical_path="doc.json", parser=lambda value: (_ for _ in ()).throw(DomainSchemaError("domain_schema_unsupported", "bad", "fix")))
     assert exc.value.code == "job_schema_unsupported"
+
+
+@pytest.mark.parametrize("version, expected", [(2, "job_schema_unsupported"), (True, "job_manifest_invalid"), ("1", "job_manifest_invalid"), (None, "job_manifest_invalid")])
+def test_schema_aware_parser_maps_root_versions_with_declared_invalid_code(version, expected, tmp_path):
+    p = tmp_path / "doc.json"
+    p.write_text(json.dumps({"schema_version": version}), encoding="utf-8")
+    parser = schema_aware_parser(lambda value: (_ for _ in ()).throw(DomainSchemaError("domain_schema_unsupported", "bad", "fix")), expectations=("",), invalid_code="job_manifest_invalid")
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_json(p, logical_path="job.json", parser=parser)
+    assert exc.value.code == expected
+    assert exc.value.logical_path == "job.json"
+    assert isinstance(exc.value.__cause__, DomainSchemaError)
+
+
+def test_schema_aware_parser_checks_nested_declared_locations_but_not_payload():
+    parser = schema_aware_parser(lambda value: (_ for _ in ()).throw(DomainSchemaError("domain_schema_unsupported", "bad", "fix")), expectations=("", "/decisions/*"))
+    with pytest.raises(JobRepositoryError) as exc:
+        parser({"schema_version": 1, "decisions": [{"schema_version": 2}], "parameters": {"schema_version": 2}})
+    assert exc.value.code == "job_schema_unsupported"
+    assert classify_schema_versions({"schema_version": 1, "decisions": [], "parameters": {"schema_version": 2}}, ("", "/decisions/*")) is SchemaClassification.CURRENT
 
 
 def test_append_does_not_create_missing_journal(tmp_path):

@@ -36,6 +36,14 @@ def _crash_worker(path, ready):
         __import__("os")._exit(7)
 
 
+def _timeout_worker(path, queue):
+    try:
+        with CrossProcessFileLock.open_existing(path, timeout_ms=50):
+            queue.put("entered")
+    except JobRepositoryError as exc:
+        queue.put(exc.code)
+
+
 def test_lock_requires_existing_regular_nonempty_file(tmp_path):
     p = tmp_path / "lock"
     with pytest.raises(JobRepositoryError):
@@ -136,7 +144,6 @@ def test_absent_lock_bootstrap_is_single_file_and_serialized(tmp_path):
     assert all(child.exitcode == 0 for child in children)
 
 
-@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX crash release test")
 def test_lock_releases_after_abnormal_process_exit(tmp_path):
     p = tmp_path / "crash.lock"
     p.write_bytes(b"0")
@@ -149,3 +156,17 @@ def test_lock_releases_after_abnormal_process_exit(tmp_path):
     assert child.exitcode == 7
     with CrossProcessFileLock.open_existing(p, timeout_ms=1000):
         pass
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX timeout semantics")
+def test_held_lock_times_out_as_busy(tmp_path):
+    p = tmp_path / "timeout.lock"
+    p.write_bytes(b"0")
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    with CrossProcessFileLock.open_existing(p, timeout_ms=1000):
+        child = ctx.Process(target=_timeout_worker, args=(p, queue))
+        child.start()
+        assert queue.get(timeout=3) == "job_write_busy"
+    child.join(3)
+    assert child.exitcode == 0

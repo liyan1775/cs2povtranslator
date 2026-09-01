@@ -37,6 +37,18 @@ def test_job_paths_rejects_jobs_symlink_outside_workspace(tmp_path):
         JobPaths(WorkspacePaths(tmp_path), "job-1")
 
 
+def test_job_paths_rejects_windows_junction_outside_workspace(tmp_path):
+    import subprocess
+    outside = tmp_path.parent / "junction-job-paths"
+    outside.mkdir()
+    junction = tmp_path / "jobs"
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside)], capture_output=True, text=True)
+    if result.returncode != 0:
+        pytest.skip(f"mklink /J unavailable: {result.stderr.strip() or result.stdout.strip()}")
+    with pytest.raises(Exception):
+        JobPaths(WorkspacePaths(tmp_path), "job-1")
+
+
 @pytest.mark.parametrize("relative", [
     "final/subtitles/file.txt:evil",
     "final/subtitles/file.txt ",

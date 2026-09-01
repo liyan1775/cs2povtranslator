@@ -408,6 +408,7 @@ class JobIssue:
             _invalid("issue")
         require_str(self.message_zh, "message_zh")
         require_str(self.suggestion_zh, "suggestion_zh")
+        reject_private_data({"code": self.code, "message_zh": self.message_zh, "suggestion_zh": self.suggestion_zh, "logical_path": self.logical_path}, "issue")
         if self.logical_path is not None:
             try:
                 require_logical_path(self.logical_path)
@@ -438,6 +439,25 @@ class JobCatalogEntry:
         require_path_identifier(self.discovery_id, "discovery_id")
         if self.job_id is not None:
             require_path_identifier(self.job_id, "job_id")
+        if self.display_name is not None:
+            _name(self.display_name, "display_name")
+        if self.demo_display_name is not None:
+            _name(self.demo_display_name, "demo_display_name")
+        if (self.created_at is None) != (self.updated_at is None):
+            _invalid("created_at", message="创建和更新时间必须同时存在。")
+        if self.created_at is not None:
+            created = _timestamp(self.created_at, "created_at")
+            updated = _timestamp(self.updated_at, "updated_at")
+            if updated < created:
+                _invalid("updated_at", message="更新时间不能早于创建时间。")
+            object.__setattr__(self, "created_at", created)
+            object.__setattr__(self, "updated_at", updated)
+        if self.demo_asset_id is not None:
+            require_sha256(self.demo_asset_id, "demo_asset_id")
+        if self.map_name is not None:
+            require_identifier(self.map_name, "map_name")
+        if self.target_player_id is not None:
+            require_identifier(self.target_player_id, "target_player_id")
         if self.phase is not None:
             _enum(JobPhase, self.phase, "phase")
         if self.durable_run_status is not None:
@@ -455,8 +475,13 @@ class JobCatalogEntry:
         issues = _tuple(self.issues, "issues")
         if any(not isinstance(issue, JobIssue) for issue in issues):
             _invalid("issues")
-        if not self.healthy and not issues:
-            _invalid("issues", message="不健康 Job 必须带诊断。")
+        if len(set(kinds)) != len(kinds):
+            _invalid("final_artifact_kinds", message="产物类型不能重复。")
+        if self.healthy and any(issue.severity == "error" for issue in issues):
+            _invalid("issues", message="健康 Job 不能带错误诊断。")
+        if not self.healthy and not any(issue.severity == "error" for issue in issues):
+            _invalid("issues", message="不健康 Job 必须带错误诊断。")
+        reject_private_data({"display_name": self.display_name, "demo_display_name": self.demo_display_name, "logical_path": [issue.logical_path for issue in issues]}, "catalog")
         object.__setattr__(self, "issues", issues)
 
 
@@ -484,3 +509,12 @@ class JobInspection:
         object.__setattr__(self, "events", events)
         if type(self.event_tail_incomplete) is not bool:
             _invalid("event_tail_incomplete")
+        reject_private_data(
+            {
+                "marker": None if self.marker is None else self.marker.to_dict(),
+                "manifest": None if self.manifest is None else self.manifest.to_dict(),
+                "source": None if self.source is None else self.source.to_dict(),
+                "events": [event.to_dict() for event in events],
+            },
+            "inspection",
+        )
