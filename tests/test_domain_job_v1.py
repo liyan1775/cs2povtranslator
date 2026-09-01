@@ -80,3 +80,54 @@ def test_claim_and_marker_have_exact_versioned_shapes():
 def test_artifact_path_must_match_kind_subtree():
     with pytest.raises(DomainSchemaError):
         FinalArtifactEntry("artifact-1", FinalArtifactKind.SUBTITLE, "final/video/out.mp4", HASH, None, FinalArtifactTimebase.DEMO_GLOBAL)
+
+
+def test_catalog_and_inspection_normalize_tuples_and_validate_projection():
+    from cs2pov.domain.job import JobCatalogEntry, JobInspection, JobIssue
+    issue = JobIssue("job_manifest_invalid", "error", "清单无效", "修复", "job.json")
+    entry = JobCatalogEntry("job-1", "job-1", "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z", HASH, "match.dem", "de_nuke", "target", JobPhase.CREATED, JobRunStatus.PENDING, JobRunStatus.PENDING, RoundProgressSummary(0, 0, 0, 0), [FinalArtifactKind.SUBTITLE], False, [issue])
+    assert isinstance(entry.final_artifact_kinds, tuple)
+    assert isinstance(entry.issues, tuple)
+    inspection = JobInspection(entry, None, None, None, [], False)
+    assert inspection.events == ()
+
+
+@pytest.mark.parametrize("identifier", ["A", "a" * 65, "foo.", "foo ", "CON", ".", "..", True])
+def test_path_identifiers_reject_case_dot_device_and_overlong_values(identifier):
+    with pytest.raises(DomainSchemaError):
+        JobManifest(
+            identifier, "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z",
+            HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING,
+            RoundProgressSummary(0, 0, 0, 0), (), None, (),
+        )
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-08-31T16:00:00Z", "2026-08-31T16:00:00.1Z", "2026-08-31T16:00:00.000000+00:00",
+    "2026-02-30T16:00:00.000000Z", "2026-08-31T16:00:00.000000+08:00",
+])
+def test_manifest_rejects_noncanonical_or_impossible_timestamps(timestamp):
+    with pytest.raises(DomainSchemaError):
+        JobManifest(
+            "job-1", "name", timestamp, timestamp, HASH, "match.dem", None, None,
+            JobPhase.CREATED, JobRunStatus.PENDING, RoundProgressSummary(0, 0, 0, 0), (), None, (),
+        )
+
+
+def test_manifest_rejects_progress_arithmetic_and_nested_extra_keys():
+    with pytest.raises(DomainSchemaError):
+        RoundProgressSummary(1, 1, 1, 0)
+    payload = JobManifest(
+        "job-1", "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z",
+        HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING,
+        RoundProgressSummary(0, 0, 0, 0), (), None, (),
+    ).to_dict()
+    payload["round_progress"]["extra"] = 1
+    with pytest.raises(DomainSchemaError):
+        JobManifest.from_dict(payload)
+
+
+@pytest.mark.parametrize("payload", [{"api_key": "secret"}, {"value": "https://example.test"}, {1: "non-string-key"}, {"value": float("nan")}, {"value": float("inf")}])
+def test_event_payload_is_json_only_and_private_free(payload):
+    with pytest.raises(DomainSchemaError):
+        JobEvent("event-1", "job-1", "run-1", "2026-08-31T16:00:00.000000Z", "job_created", payload)

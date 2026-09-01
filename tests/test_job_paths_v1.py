@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from cs2pov.workspace.paths import WorkspacePaths
@@ -49,3 +47,26 @@ def test_artifact_segments_reject_windows_unsafe_names(relative, tmp_path):
     paths = JobPaths(WorkspacePaths(tmp_path), "job-1")
     with pytest.raises(Exception):
         paths.final_artifact_path(relative)
+
+
+def test_job_paths_rejects_regular_jobs_or_job_directory(tmp_path):
+    jobs = tmp_path / "jobs"
+    jobs.write_text("not a directory")
+    with pytest.raises(Exception):
+        JobPaths(WorkspacePaths(tmp_path), "job-1")
+    jobs.unlink()
+    jobs.mkdir()
+    (jobs / "job-1").write_text("not a directory")
+    with pytest.raises(Exception):
+        JobPaths(WorkspacePaths(tmp_path), "job-1")
+
+
+def test_job_paths_exposes_every_dynamic_shard_path(tmp_path):
+    paths = JobPaths(WorkspacePaths(tmp_path), "job-1")
+    assert paths.snapshot("snap-1").name == "snapshot_snap-1.json"
+    assert paths.task_invocations("task-1").name == "task_task-1.jsonl"
+    assert paths.unassigned_transcript().name == "unassigned.jsonl"
+    assert paths.review_revision_manifest("review-1").name == "revision.json"
+    assert paths.task_round("round-1").name == "round_round-1.json"
+    assert paths.final_artifact_path("final/video/movie.mp4").name == "movie.mp4"
+    assert paths.final_artifact_path("final/timelines/full.json", kind=None).parent.name == "timelines"

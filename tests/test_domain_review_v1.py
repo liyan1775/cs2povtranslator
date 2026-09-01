@@ -9,6 +9,8 @@ from cs2pov.domain.review import (
     DraftCommsTimeline,
     ReviewAction,
     ReviewDecision,
+    ReviewRevisionManifest,
+    RoundReviewDocument,
     ReviewedCommsCue,
     ReviewedCommsTimeline,
     compose_reviewed_timeline,
@@ -373,14 +375,24 @@ def test_reviewed_cue_enforces_bounded_demo_time_direct_and_from_dict() -> None:
     payload["start_us"] = MAX_DEMO_TIME_US + 1
     with pytest.raises(DomainSchemaError):
         ReviewedCommsCue.from_dict(payload)
-import pytest
-
-from cs2pov.domain.errors import DomainSchemaError
-from cs2pov.domain.review import ReviewRevisionManifest, RoundReviewDocument
-
-
 def test_review_revision_requires_canonical_utc_timestamp_and_typed_round_ids():
     with pytest.raises(DomainSchemaError):
         ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00+00:00", ("round-1",))
     with pytest.raises(DomainSchemaError):
         ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", (True,))
+    document = RoundReviewDocument("review-1", "round-1", "a" * 64, (_decision(_draft()),))
+    assert RoundReviewDocument.from_dict(document.to_dict()) == document
+
+
+def test_review_revision_and_round_document_reject_exact_key_and_casefold_collisions():
+    revision = ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", ("round-1",))
+    payload = revision.to_dict()
+    payload["extra"] = True
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest.from_dict(payload)
+    first = _decision(_draft(), decision_id="decision-1")
+    second = _decision(_draft(), decision_id="decision-2")
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument("review-1", "round-1", "a" * 64, (first, second))
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", ("https://private",))

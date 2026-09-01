@@ -5,6 +5,7 @@ import errno
 import json
 import os
 import stat
+import sys
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,12 @@ def _map_exception(exc: BaseException, logical_path: str):
         code = "job_schema_unsupported" if exc.code == "domain_schema_unsupported" else "job_shard_invalid"
         return _repo_error(code, "Job 文档校验失败。", logical_path, exc)
     return _repo_error("job_shard_invalid", "Job 文档格式无效。", logical_path, exc)
+
+
+def _map_domain_error(exc: DomainSchemaError, raw: object, logical_path: str):
+    classification = classify_schema_versions(raw, ("",))
+    code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else "job_shard_invalid"
+    return _repo_error(code, "Job 文档校验失败。", logical_path, exc)
 
 
 _EXPECTED_PARSE_ERRORS = (DomainSchemaError, ValueError, TypeError, OSError, UnicodeError, OverflowError)
@@ -163,6 +170,18 @@ def _write_all(fd: int, payload: bytes) -> None:
         offset += written
 
 
+def _cleanup_staging(staging: Path, logical_path: str, primary: BaseException | None) -> None:
+    try:
+        staging.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as cleanup_error:
+        if primary is not None:
+            primary.add_note(f"staging cleanup failed: {type(cleanup_error).__name__}")
+            return
+        raise _repo_error("job_write_failed", "无法清理 staging 文件。", logical_path, cleanup_error) from cleanup_error
+
+
 def _serialize(value, serializer, logical_path: str) -> bytes:
     try:
         payload = serializer(value)
@@ -176,12 +195,15 @@ def _serialize(value, serializer, logical_path: str) -> bytes:
 
 
 def read_strict_json(path: Path, *, logical_path: str, parser: Callable[[object], object]):
+    raw_value = None
     try:
         raw = _read_verified_bytes(path, logical_path)
-        value = _loads(raw, logical_path)
-        if not isinstance(value, Mapping):
+        raw_value = _loads(raw, logical_path)
+        if not isinstance(raw_value, Mapping):
             raise _repo_error("job_shard_invalid", "JSON 顶层必须是对象。", logical_path)
-        return parser(value)
+        return parser(raw_value)
+    except DomainSchemaError as exc:
+        raise _map_domain_error(exc, raw_value, logical_path) from exc
     except _EXPECTED_PARSE_ERRORS as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -196,6 +218,8 @@ def atomic_write_json(path: Path, value, *, logical_path: str, serializer: Calla
         raise _repo_error("job_shard_invalid", "JSON 顶层必须是对象。", logical_path)
     try:
         parser(parsed)
+    except DomainSchemaError as exc:
+        raise _map_domain_error(exc, parsed, logical_path) from exc
     except _EXPECTED_PARSE_ERRORS as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise
@@ -226,12 +250,7 @@ def atomic_write_json(path: Path, value, *, logical_path: str, serializer: Calla
             raise _repo_error("job_write_durability_uncertain", "文档已可见但目录持久化状态不确定。", logical_path, exc) from exc
         raise _repo_error("job_write_failed", "Job 文档写入失败。", logical_path, exc) from exc
     finally:
-        try:
-            staging.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+        _cleanup_staging(staging, logical_path, sys.exc_info()[1])
     return None
 
 
@@ -292,6 +311,8 @@ def atomic_write_jsonl(path: Path, values: Iterable[object], *, logical_path: st
             raise _repo_error("job_shard_invalid", "JSONL 记录必须是对象。", logical_path)
         try:
             parser(parsed)
+        except DomainSchemaError as exc:
+            raise _map_domain_error(exc, parsed, logical_path) from exc
         except _EXPECTED_PARSE_ERRORS as exc:
             if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                 raise
@@ -327,10 +348,7 @@ def atomic_write_bytes(path: Path, payload: bytes, *, logical_path: str):
         code = "job_write_durability_uncertain" if replaced else "job_write_failed"
         raise _repo_error(code, "文档写入失败。", logical_path, exc) from exc
     finally:
-        try:
-            staging.unlink()
-        except (FileNotFoundError, OSError):
-            pass
+        _cleanup_staging(staging, logical_path, sys.exc_info()[1])
 
 
 def append_jsonl_record(path: Path, value, *, logical_path: str, serializer: Callable[[object], object], parser: Callable[[object], object]):
@@ -343,8 +361,12 @@ def append_jsonl_record(path: Path, value, *, logical_path: str, serializer: Cal
     except _EXPECTED_PARSE_ERRORS as exc:
         raise _map_exception(exc, logical_path) from exc
     _validate_parent(path, logical_path)
+    if not path.exists() and not path.is_symlink():
+        _validate_regular(path, logical_path, missing_code="job_shard_missing")
+    else:
+        _validate_regular(path, logical_path, missing_code="job_shard_invalid")
     try:
-        flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+        flags = os.O_RDWR | os.O_APPEND
         if hasattr(os, "O_BINARY"):
             flags |= os.O_BINARY
         if hasattr(os, "O_NOFOLLOW"):

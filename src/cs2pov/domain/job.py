@@ -17,7 +17,6 @@ from .schema import (
     require_identifier,
     require_int,
     require_mapping,
-    require_optional_str,
     require_path_identifier,
     require_artifact_relative_path,
     require_logical_path,

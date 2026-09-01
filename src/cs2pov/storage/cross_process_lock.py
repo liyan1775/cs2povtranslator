@@ -116,7 +116,10 @@ class _LockedContext:
         reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
         if not stat.S_ISREG(st.st_mode) or bool(attrs & reparse) or (require_nonempty and st.st_size < 1):
             raise _error("job_write_failed", "仓储锁描述符无效。", self.path)
-        current = os.lstat(self.path)
+        try:
+            current = os.lstat(self.path)
+        except OSError as exc:
+            raise _error("job_write_interrupted", "仓储锁路径在校验期间发生变化。", self.path, exc) from exc
         if stat.S_ISLNK(current.st_mode) or bool(getattr(current, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)) or (st.st_dev, st.st_ino) != (current.st_dev, current.st_ino):
             raise _error("job_write_interrupted", "仓储锁在打开期间发生变化。", self.path)
 

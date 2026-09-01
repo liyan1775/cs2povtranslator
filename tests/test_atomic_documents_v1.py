@@ -10,6 +10,7 @@ from cs2pov.storage.atomic_documents import (
     read_strict_json,
     read_strict_jsonl,
 )
+from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.storage.job_errors import JobRepositoryError
 
 
@@ -48,6 +49,27 @@ def test_jsonl_incomplete_tail(tmp_path):
     result = read_strict_jsonl(p, logical_path="records.jsonl", parser=lambda x: x, allow_incomplete_tail=True)
     assert result.records == ({"schema_version": 1, "n": 1},)
     assert result.incomplete_tail is True
+
+
+@pytest.mark.parametrize("raw", [b"{\"schema_version\":1}\n\n{\"schema_version\":1}\n", b"[]\n", b"{\"schema_version\":1\n", b"\xff\n"])
+def test_jsonl_rejects_blank_nonobject_malformed_and_invalid_utf8(raw, tmp_path):
+    p = tmp_path / "records.jsonl"
+    p.write_bytes(raw)
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_jsonl(p, logical_path="records.jsonl", parser=lambda x: x)
+    assert exc.value.code == "job_shard_invalid"
+
+
+def test_jsonl_parser_schema_error_reports_record_number_and_cause(tmp_path):
+    p = tmp_path / "records.jsonl"
+    p.write_bytes(b'{"schema_version":1}\n{"schema_version":1}\n')
+    def parser(value):
+        if value["schema_version"] == 1:
+            raise DomainSchemaError("domain_field_invalid", "bad", "fix")
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_jsonl(p, logical_path="records.jsonl", parser=parser)
+    assert exc.value.logical_path == "records.jsonl#1"
+    assert isinstance(exc.value.__cause__, DomainSchemaError)
 
 
 def test_atomic_jsonl_and_schema_locations(tmp_path):
@@ -128,6 +150,7 @@ def test_append_jsonl_short_write_is_completed(tmp_path, monkeypatch):
     from cs2pov.storage.atomic_documents import append_jsonl_record
     import cs2pov.storage.atomic_documents as module
     p = tmp_path / "events.jsonl"
+    p.write_bytes(b"")
     real_write = module.os.write
     calls = {"n": 0}
 
@@ -159,3 +182,42 @@ def test_atomic_replace_failure_preserves_old_target_and_cleans_stage(tmp_path, 
 def test_schema_empty_wildcard_is_current_but_missing_container_is_malformed():
     assert classify_schema_versions({"schema_version": 1, "results": []}, ("", "/results/*")) is SchemaClassification.CURRENT
     assert classify_schema_versions({"schema_version": 1}, ("", "/results/*")) is SchemaClassification.MALFORMED
+
+
+@pytest.mark.parametrize("version", [None, True, "1"])
+def test_reader_maps_malformed_root_schema_to_shard_invalid(version, tmp_path):
+    p = tmp_path / "doc.json"
+    p.write_text(json.dumps({"schema_version": version}), encoding="utf-8")
+    def parser(value):
+        raise DomainSchemaError("domain_schema_unsupported", "bad", "fix")
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_json(p, logical_path="doc.json", parser=parser)
+    assert exc.value.code == "job_shard_invalid"
+    assert isinstance(exc.value.__cause__, DomainSchemaError)
+
+
+def test_reader_maps_exact_non_current_root_schema_to_unsupported(tmp_path):
+    p = tmp_path / "doc.json"
+    p.write_text('{"schema_version":2}', encoding="utf-8")
+    with pytest.raises(JobRepositoryError) as exc:
+        read_strict_json(p, logical_path="doc.json", parser=lambda value: (_ for _ in ()).throw(DomainSchemaError("domain_schema_unsupported", "bad", "fix")))
+    assert exc.value.code == "job_schema_unsupported"
+
+
+def test_append_does_not_create_missing_journal(tmp_path):
+    from cs2pov.storage.atomic_documents import append_jsonl_record
+    p = tmp_path / "missing.jsonl"
+    with pytest.raises(JobRepositoryError) as exc:
+        append_jsonl_record(p, {"schema_version": 1}, logical_path="missing.jsonl", serializer=lambda x: x, parser=lambda x: x)
+    assert exc.value.code == "job_shard_missing"
+    assert not p.exists()
+
+
+def test_staging_cleanup_failure_is_exposed(tmp_path, monkeypatch):
+    p = tmp_path / "doc.json"
+    def fail_unlink(self, *args, **kwargs):
+        raise OSError("cannot remove staging")
+    monkeypatch.setattr("pathlib.Path.unlink", fail_unlink)
+    with pytest.raises(JobRepositoryError) as exc:
+        atomic_write_json(p, {"schema_version": 1}, logical_path="doc.json", serializer=lambda x: x, parser=parser)
+    assert exc.value.code == "job_write_failed"

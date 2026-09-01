@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 from cs2pov.domain.job import FinalArtifactKind
@@ -47,7 +48,9 @@ class JobPaths:
                 st = os.lstat(current)
             except FileNotFoundError:
                 break
-            if os.path.islink(current) or not (os.path.isdir(current) or os.path.isfile(current)):
+            attrs = getattr(st, "st_file_attributes", 0)
+            reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+            if os.path.islink(current) or bool(attrs & reparse) or not os.path.isdir(current):
                 raise WorkspacePathOutsideRootError("路径包含链接或无效文件系统节点。")
 
     @property
