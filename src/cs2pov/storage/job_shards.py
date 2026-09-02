@@ -5,6 +5,12 @@ from cs2pov.domain.invocation import (
     ModelConfigurationSnapshot,
     ModelInvocationRecord,
 )
+from cs2pov.domain.review import (
+    DraftCommsTimeline,
+    ReviewRevisionManifest,
+    ReviewedCommsTimeline,
+    RoundReviewDocument,
+)
 from cs2pov.domain.timebase import TimeAnchor
 from cs2pov.domain.timeline import DemoDescriptor, RoundCollection
 from cs2pov.domain.transcript import TranscriptCue
@@ -45,6 +51,22 @@ TRANSCRIPT_CUE_PARSER = schema_aware_parser(
 ROUND_UNDERSTANDING_PARSER = schema_aware_parser(
     RoundUnderstandingDocument.from_dict,
     expectations=("", "/results/*"),
+)
+REVIEW_REVISION_PARSER = schema_aware_parser(
+    ReviewRevisionManifest.from_dict,
+    expectations=("",),
+)
+ROUND_REVIEW_PARSER = schema_aware_parser(
+    RoundReviewDocument.from_dict,
+    expectations=("", "/decisions/*"),
+)
+DRAFT_TIMELINE_PARSER = schema_aware_parser(
+    DraftCommsTimeline.from_dict,
+    expectations=("",),
+)
+REVIEWED_TIMELINE_PARSER = schema_aware_parser(
+    ReviewedCommsTimeline.from_dict,
+    expectations=("",),
 )
 
 

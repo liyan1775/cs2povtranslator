@@ -31,11 +31,20 @@ from cs2pov.domain.invocation import (
     ModelConfigurationSnapshot,
     ModelInvocationRecord,
 )
+from cs2pov.domain.review import (
+    DraftCommsTimeline,
+    ReviewRevisionManifest,
+    ReviewedCommsTimeline,
+    RoundReviewDocument,
+    compose_reviewed_timeline,
+)
 from cs2pov.domain.schema import require_path_identifier
 from cs2pov.domain.timeline import DemoTimeline
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.understanding import RoundUnderstandingDocument
 from cs2pov.domain.validation import (
+    validate_draft_timeline_graph,
+    validate_reviewed_timeline_graph,
     validate_transcript_against_timeline,
     validate_understanding_document_graph,
     validate_voice_activity_against_timeline,
@@ -62,10 +71,14 @@ from .cross_process_lock import CrossProcessFileLock
 from .job_claim import CLAIM_INITIALIZATION_GRACE_US, JobWriteSession
 from .job_shards import (
     DEMO_DESCRIPTOR_PARSER,
+    DRAFT_TIMELINE_PARSER,
     MODEL_CONFIGURATION_PARSER,
     MODEL_INVOCATION_PARSER,
     ROUND_COLLECTION_PARSER,
+    ROUND_REVIEW_PARSER,
     ROUND_UNDERSTANDING_PARSER,
+    REVIEWED_TIMELINE_PARSER,
+    REVIEW_REVISION_PARSER,
     TIME_ANCHOR_PARSER,
     TRANSCRIPT_CUE_PARSER,
     VOICE_ACTIVITY_PARSER,
@@ -99,6 +112,20 @@ class LanguageGraph:
     invocations: tuple[ModelInvocationRecord, ...]
     transcripts: tuple[TranscriptCue, ...]
     understanding_documents: tuple[RoundUnderstandingDocument, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewRevisionBundle:
+    revision: ReviewRevisionManifest
+    round_documents: tuple[RoundReviewDocument, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CompleteDomainGraph:
+    language: LanguageGraph
+    draft: DraftCommsTimeline
+    active_review: ReviewRevisionBundle
+    reviewed: ReviewedCommsTimeline
 
 
 _MARKER_PARSER = schema_aware_parser(
@@ -537,6 +564,12 @@ class FileSystemJobRepository:
         )
         if issues:
             raise self._error_from_issue(issues[0])
+        if manifest.active_review_id is not None:
+            self._read_review_revision_locked(
+                paths,
+                manifest,
+                manifest.active_review_id,
+            )
         return OpenedJob(marker, manifest, source, paths, manifest.run_status)
 
     def _read_job_core(
@@ -1193,6 +1226,241 @@ class FileSystemJobRepository:
             opened = self._load_job_durable(job_id, write_lock_already_held=True)
             return self._read_language_graph_locked(opened.paths, opened.manifest)
 
+    def register_review_revision(
+        self,
+        job_id: str,
+        revision: ReviewRevisionManifest,
+        round_documents: tuple[RoundReviewDocument, ...],
+        expected_manifest_fingerprint: str,
+        activate: bool,
+        claim: JobWriteClaim,
+    ) -> ReviewRevisionBundle:
+        if type(revision) is not ReviewRevisionManifest:
+            raise self._invalid_shard_input(
+                "复核版本清单无效。", "review/revisions"
+            )
+        if not isinstance(round_documents, (tuple, list)) or any(
+            type(value) is not RoundReviewDocument for value in round_documents
+        ):
+            raise self._invalid_shard_input(
+                "复核回合文档集合无效。", "review/revisions"
+            )
+        if not isinstance(expected_manifest_fingerprint, str):
+            raise TypeError("expected_manifest_fingerprint must be a string")
+        if type(activate) is not bool:
+            raise TypeError("activate must be a bool")
+        review_id = self._persisted_path_id(revision.review_id, "review_id")
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            current = opened.manifest
+            if current.content_fingerprint() != expected_manifest_fingerprint:
+                raise self._manifest_conflict()
+            language = self._read_language_graph_locked(paths, current)
+            draft = self._read_validated_draft_locked(paths, current, language)
+            bundle = self._validate_review_bundle(
+                language.timeline,
+                draft,
+                revision,
+                tuple(round_documents),
+                logical_path=f"review/revisions/review_{review_id}",
+            )
+            target = paths.review_revision(review_id)
+            target_state = _lstat_optional(
+                target,
+                logical_path=f"review/revisions/review_{review_id}",
+            )
+            if target_state is None:
+                self._publish_review_revision(paths, bundle)
+                persisted = self._read_review_revision_directory(
+                    target,
+                    logical_directory=f"review/revisions/review_{review_id}",
+                    expected_review_id=review_id,
+                    timeline=language.timeline,
+                    draft=draft,
+                )
+                if persisted != bundle:
+                    raise self._invalid_shard_input(
+                        "复核版本发布后的回读内容不一致。",
+                        f"review/revisions/review_{review_id}",
+                    )
+            else:
+                if _is_link_or_reparse(target_state) or not stat.S_ISDIR(
+                    target_state.st_mode
+                ):
+                    raise self._invalid_shard_input(
+                        "复核版本路径不是安全目录。",
+                        f"review/revisions/review_{review_id}",
+                    )
+                persisted = self._read_review_revision_directory(
+                    target,
+                    logical_directory=f"review/revisions/review_{review_id}",
+                    expected_review_id=review_id,
+                    timeline=language.timeline,
+                    draft=draft,
+                )
+                if persisted != bundle:
+                    raise self._invalid_shard_input(
+                        "同一复核版本 ID 已存在不同内容。",
+                        f"review/revisions/review_{review_id}",
+                    )
+            if not activate or current.active_review_id == review_id:
+                return bundle
+            timestamp = _canonical_timestamp(self.clock)
+            if timestamp <= current.updated_at:
+                raise self._manifest_conflict(
+                    "Job 更新时间没有向前推进，复核版本尚未激活。"
+                )
+            new_manifest = replace(
+                current,
+                updated_at=timestamp,
+                active_review_id=review_id,
+            )
+            self._replace_manifest_locked(
+                locked_file,
+                job_id,
+                expected_manifest_fingerprint,
+                new_manifest,
+                claim,
+            )
+            return bundle
+
+    def load_review_revision(
+        self, job_id: str, review_id: str
+    ) -> ReviewRevisionBundle:
+        persisted_id = self._persisted_path_id(review_id, "review_id")
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            return self._read_review_revision_locked(
+                paths,
+                opened.manifest,
+                persisted_id,
+            )
+
+    def save_draft_timeline(
+        self,
+        job_id: str,
+        timeline: DraftCommsTimeline,
+        claim: JobWriteClaim,
+    ) -> None:
+        if type(timeline) is not DraftCommsTimeline:
+            raise self._invalid_shard_input(
+                "Draft 通讯时间线无效。", "final/timelines/draft.json"
+            )
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            language = self._read_language_graph_locked(paths, opened.manifest)
+            self._validate_draft(timeline, language)
+            atomic_write_json(
+                paths.final_timelines_dir / "draft.json",
+                timeline,
+                logical_path="final/timelines/draft.json",
+                serializer=lambda value: value.to_dict(),
+                parser=DRAFT_TIMELINE_PARSER,
+            )
+
+    def load_draft_timeline(self, job_id: str) -> DraftCommsTimeline:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            language = self._read_language_graph_locked(paths, opened.manifest)
+            return self._read_validated_draft_locked(
+                paths, opened.manifest, language
+            )
+
+    def save_reviewed_timeline(
+        self,
+        job_id: str,
+        timeline: ReviewedCommsTimeline,
+        claim: JobWriteClaim,
+    ) -> None:
+        if type(timeline) is not ReviewedCommsTimeline:
+            raise self._invalid_shard_input(
+                "Reviewed 通讯时间线无效。", "final/timelines/reviewed.json"
+            )
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            language = self._read_language_graph_locked(paths, opened.manifest)
+            draft = self._read_validated_draft_locked(
+                paths, opened.manifest, language
+            )
+            active = self._read_active_review_locked(paths, opened.manifest)
+            self._validate_reviewed(timeline, language, draft, active)
+            atomic_write_json(
+                paths.final_timelines_dir / "reviewed.json",
+                timeline,
+                logical_path="final/timelines/reviewed.json",
+                serializer=lambda value: value.to_dict(),
+                parser=REVIEWED_TIMELINE_PARSER,
+            )
+
+    def load_reviewed_timeline(self, job_id: str) -> ReviewedCommsTimeline:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            language = self._read_language_graph_locked(paths, opened.manifest)
+            draft = self._read_validated_draft_locked(
+                paths, opened.manifest, language
+            )
+            active = self._read_active_review_locked(paths, opened.manifest)
+            return self._read_validated_reviewed_locked(
+                paths,
+                language,
+                draft,
+                active,
+            )
+
+    def load_complete_domain_graph(self, job_id: str) -> CompleteDomainGraph:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            language = self._read_language_graph_locked(paths, opened.manifest)
+            draft = self._read_validated_draft_locked(
+                paths, opened.manifest, language
+            )
+            active = self._read_active_review_locked(paths, opened.manifest)
+            reviewed = self._read_validated_reviewed_locked(
+                paths,
+                language,
+                draft,
+                active,
+            )
+            return CompleteDomainGraph(language, draft, active, reviewed)
+
     def _heartbeat_write(
         self, job_id: str, claim: JobWriteClaim
     ) -> JobWriteClaim:
@@ -1683,6 +1951,7 @@ class FileSystemJobRepository:
                     missing_code="job_shard_missing",
                     invalid_code="job_shard_invalid",
                 )
+                self._read_review_revision_locked(paths, manifest, review_id)
             except FileNotFoundError as exc:
                 self._append_issue(
                     issues,
@@ -2021,6 +2290,8 @@ class FileSystemJobRepository:
                     self._assert_read_lock_locked(paths, locked_file)
                     for issue in self._inspect_language_shards(paths, manifest):
                         self._append_issue(issues, issue)
+                    for issue in self._inspect_review_shards(paths, manifest):
+                        self._append_issue(issues, issue)
             except JobRepositoryError as exc:
                 self._append_issue(issues, exc.to_issue())
         else:
@@ -2163,6 +2434,92 @@ class FileSystemJobRepository:
 
         if timeline_complete and timeline_ok and not issues:
             capture(lambda: self._read_language_graph_locked(paths, manifest))
+        return tuple(issues)
+
+    def _inspect_review_shards(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+    ) -> tuple[JobIssue, ...]:
+        issues: list[JobIssue] = []
+
+        def capture(operation) -> bool:
+            try:
+                operation()
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+                return False
+            return True
+
+        try:
+            children = tuple(os.scandir(paths.review_revisions_dir))
+        except OSError as exc:
+            return (
+                self._invalid_shard_input(
+                    "无法读取复核历史目录。", "review/revisions", exc
+                ).to_issue(),
+            )
+        for child in children:
+            logical_path = f"review/revisions/{child.name}"
+            if child.name.startswith(".review_") and child.name.endswith(
+                ".staging"
+            ):
+                self._append_issue(
+                    issues,
+                    self._invalid_shard_input(
+                        "存在未完成发布的复核版本 staging。", logical_path
+                    ).to_issue(),
+                )
+                continue
+            match = _REVIEW_DIRECTORY.fullmatch(child.name)
+            if match is None:
+                if child.name.startswith("review_"):
+                    self._append_issue(
+                        issues,
+                        _repository_error(
+                            "job_path_escape",
+                            "复核版本目录名不是安全的小写标识。",
+                            "请检查复核历史目录。",
+                            logical_path,
+                        ).to_issue(),
+                    )
+                continue
+            review_id = child.name[len("review_") :]
+            capture(
+                lambda review_id=review_id: self._read_review_revision_locked(
+                    paths,
+                    manifest,
+                    review_id,
+                )
+            )
+
+        draft_state = _lstat_optional(
+            paths.final_timelines_dir / "draft.json",
+            logical_path="final/timelines/draft.json",
+        )
+        if draft_state is not None:
+            def inspect_draft() -> None:
+                language = self._read_language_graph_locked(paths, manifest)
+                self._read_validated_draft_locked(paths, manifest, language)
+
+            capture(inspect_draft)
+
+        reviewed_state = _lstat_optional(
+            paths.final_timelines_dir / "reviewed.json",
+            logical_path="final/timelines/reviewed.json",
+        )
+        if reviewed_state is not None:
+            def inspect_reviewed() -> None:
+                language = self._read_language_graph_locked(paths, manifest)
+                draft = self._read_validated_draft_locked(
+                    paths, manifest, language
+                )
+                active = self._read_active_review_locked(paths, manifest)
+                self._read_validated_reviewed_locked(
+                    paths, language, draft, active
+                )
+
+            capture(inspect_reviewed)
         return tuple(issues)
 
     def _manifest_conflict(
@@ -2614,6 +2971,493 @@ class FileSystemJobRepository:
             transcripts,
             documents,
         )
+
+    def _validate_draft(
+        self,
+        draft: DraftCommsTimeline,
+        language: LanguageGraph,
+    ) -> None:
+        try:
+            validate_draft_timeline_graph(
+                draft,
+                language.timeline,
+                language.transcripts,
+                language.understanding_documents,
+                language.configurations,
+                language.invocations,
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "Draft 通讯时间线与语言数据图不一致。",
+                "final/timelines/draft.json",
+                exc,
+            ) from exc
+
+    def _read_draft_timeline(
+        self,
+        paths: JobPaths,
+        *,
+        expected_asset_id: str,
+    ) -> DraftCommsTimeline:
+        logical_path = "final/timelines/draft.json"
+        value = read_strict_json(
+            paths.final_timelines_dir / "draft.json",
+            logical_path=logical_path,
+            parser=DRAFT_TIMELINE_PARSER,
+        )
+        if value.demo_asset_id != expected_asset_id:
+            raise self._invalid_shard_input(
+                "Draft 通讯时间线与 Job 素材身份不一致。", logical_path
+            )
+        return value
+
+    def _read_validated_draft_locked(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+        language: LanguageGraph,
+    ) -> DraftCommsTimeline:
+        draft = self._read_draft_timeline(
+            paths,
+            expected_asset_id=manifest.demo_asset_id,
+        )
+        self._validate_draft(draft, language)
+        return draft
+
+    def _validate_review_bundle(
+        self,
+        timeline: DemoTimeline,
+        draft: DraftCommsTimeline,
+        revision: ReviewRevisionManifest,
+        documents: tuple[RoundReviewDocument, ...],
+        *,
+        logical_path: str,
+    ) -> ReviewRevisionBundle:
+        document_ids = tuple(document.round_id for document in documents)
+        if len({value.casefold() for value in document_ids}) != len(document_ids):
+            raise self._invalid_shard_input(
+                "复核版本中的回合文档 ID 重复。", logical_path
+            )
+        authoritative_ids = tuple(
+            value.round_id for value in timeline.rounds.rounds
+        )
+        selected = set(document_ids)
+        expected_order = tuple(
+            round_id for round_id in authoritative_ids if round_id in selected
+        )
+        if (
+            set(document_ids) - set(authoritative_ids)
+            or revision.round_ids != expected_order
+            or set(revision.round_ids) != set(document_ids)
+        ):
+            raise self._invalid_shard_input(
+                "复核版本回合顺序与 Demo 时间线不一致。", logical_path
+            )
+        if revision.source_draft_fingerprint != draft.content_fingerprint():
+            raise self._invalid_shard_input(
+                "复核版本引用了不同的 Draft 时间线。", logical_path
+            )
+        by_round = {document.round_id: document for document in documents}
+        ordered = tuple(by_round[round_id] for round_id in revision.round_ids)
+        decision_ids: list[str] = []
+        try:
+            for document in ordered:
+                if (
+                    document.review_id != revision.review_id
+                    or document.source_draft_fingerprint
+                    != revision.source_draft_fingerprint
+                ):
+                    raise self._invalid_shard_input(
+                        "复核回合文档与版本清单身份不一致。",
+                        f"{logical_path}/round_{document.round_id}.json",
+                    )
+                round_cues = tuple(
+                    cue for cue in draft.cues if cue.round_id == document.round_id
+                )
+                selected_draft = DraftCommsTimeline(
+                    draft.demo_asset_id,
+                    draft.timebase,
+                    draft.input_fingerprint,
+                    round_cues,
+                )
+                compose_reviewed_timeline(selected_draft, document.decisions)
+                decision_ids.extend(
+                    decision.decision_id for decision in document.decisions
+                )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "复核决策与 Draft 回合内容不一致。", logical_path, exc
+            ) from exc
+        if len({value.casefold() for value in decision_ids}) != len(decision_ids):
+            raise self._invalid_shard_input(
+                "复核版本中的决策 ID 重复。", logical_path
+            )
+        return ReviewRevisionBundle(revision, ordered)
+
+    def _read_review_revision_directory(
+        self,
+        directory: Path,
+        *,
+        logical_directory: str,
+        expected_review_id: str,
+        timeline: DemoTimeline,
+        draft: DraftCommsTimeline,
+    ) -> ReviewRevisionBundle:
+        try:
+            state = os.lstat(directory)
+        except FileNotFoundError as exc:
+            raise _repository_error(
+                "job_shard_missing",
+                "复核版本目录不存在。",
+                "请恢复该复核版本。",
+                logical_directory,
+                exc,
+            ) from exc
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法检查复核版本目录。", logical_directory, exc
+            ) from exc
+        if _is_link_or_reparse(state) or not stat.S_ISDIR(state.st_mode):
+            raise self._invalid_shard_input(
+                "复核版本路径不是安全目录。", logical_directory
+            )
+        revision_path = directory / "revision.json"
+        revision = read_strict_json(
+            revision_path,
+            logical_path=f"{logical_directory}/revision.json",
+            parser=REVIEW_REVISION_PARSER,
+        )
+        if revision.review_id != expected_review_id:
+            raise self._invalid_shard_input(
+                "复核版本目录与清单身份不一致。",
+                f"{logical_directory}/revision.json",
+            )
+        try:
+            children = tuple(os.scandir(directory))
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法读取复核版本目录。", logical_directory, exc
+            ) from exc
+        round_ids: list[str] = []
+        for child in children:
+            if child.name == "revision.json":
+                continue
+            if not child.name.startswith("round_") or not child.name.endswith(
+                ".json"
+            ):
+                raise self._invalid_shard_input(
+                    "复核版本目录包含未声明文件。",
+                    f"{logical_directory}/{child.name}",
+                )
+            raw_id = child.name[len("round_") : -len(".json")]
+            round_id = self._persisted_path_id(raw_id, "round_id")
+            self._assert_safe_regular(
+                Path(child.path),
+                logical_path=f"{logical_directory}/{child.name}",
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            round_ids.append(round_id)
+        if len({value.casefold() for value in round_ids}) != len(round_ids):
+            raise self._invalid_shard_input(
+                "复核回合文件名发生大小写折叠冲突。", logical_directory
+            )
+        missing = set(revision.round_ids) - set(round_ids)
+        if missing:
+            missing_id = next(
+                value for value in revision.round_ids if value in missing
+            )
+            raise _repository_error(
+                "job_shard_missing",
+                "复核版本声明的回合文档不存在。",
+                "请恢复该回合文档。",
+                f"{logical_directory}/round_{missing_id}.json",
+            )
+        if set(round_ids) - set(revision.round_ids):
+            raise self._invalid_shard_input(
+                "复核版本目录包含未声明的回合文档。", logical_directory
+            )
+        documents = tuple(
+            read_strict_json(
+                directory / f"round_{round_id}.json",
+                logical_path=f"{logical_directory}/round_{round_id}.json",
+                parser=ROUND_REVIEW_PARSER,
+            )
+            for round_id in revision.round_ids
+        )
+        return self._validate_review_bundle(
+            timeline,
+            draft,
+            revision,
+            documents,
+            logical_path=logical_directory,
+        )
+
+    def _read_review_revision_locked(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+        review_id: str,
+    ) -> ReviewRevisionBundle:
+        language = self._read_language_graph_locked(paths, manifest)
+        draft = self._read_validated_draft_locked(paths, manifest, language)
+        return self._read_review_revision_directory(
+            paths.review_revision(review_id),
+            logical_directory=f"review/revisions/review_{review_id}",
+            expected_review_id=review_id,
+            timeline=language.timeline,
+            draft=draft,
+        )
+
+    def _new_review_staging_path(
+        self,
+        paths: JobPaths,
+        review_id: str,
+    ) -> Path:
+        try:
+            value = self.staging_id_factory()
+        except Exception as exc:
+            raise _repository_error(
+                "job_write_failed",
+                "无法生成复核版本 staging 标识。",
+                "请重试发布复核版本。",
+                "review/revisions",
+                exc,
+            ) from exc
+        if not isinstance(value, UUID):
+            raise _repository_error(
+                "job_write_failed",
+                "复核版本 staging 标识无效。",
+                "请修复 staging ID 配置。",
+                "review/revisions",
+            )
+        return (
+            paths.review_revisions_dir
+            / f".review_{review_id}.{value.hex}.staging"
+        )
+
+    def _publish_review_revision(
+        self,
+        paths: JobPaths,
+        bundle: ReviewRevisionBundle,
+    ) -> None:
+        review_id = bundle.revision.review_id
+        target = paths.review_revision(review_id)
+        logical_directory = f"review/revisions/review_{review_id}"
+        staging = self._new_review_staging_path(paths, review_id)
+        staging_identity: tuple[int, int] | None = None
+        try:
+            try:
+                os.mkdir(staging, 0o700)
+            except OSError as exc:
+                raise _repository_error(
+                    "job_write_failed",
+                    "无法创建复核版本 staging 目录。",
+                    "请检查磁盘空间和目录权限。",
+                    logical_directory,
+                    exc,
+                ) from exc
+            staging_state = os.lstat(staging)
+            if _is_link_or_reparse(staging_state) or not stat.S_ISDIR(
+                staging_state.st_mode
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本 staging 目录不安全。",
+                    "请检查 review/revisions 目录。",
+                    logical_directory,
+                )
+            staging_identity = (staging_state.st_dev, staging_state.st_ino)
+            atomic_write_json(
+                staging / "revision.json",
+                bundle.revision,
+                logical_path=f"{logical_directory}/revision.json",
+                serializer=lambda value: value.to_dict(),
+                parser=REVIEW_REVISION_PARSER,
+            )
+            for document in bundle.round_documents:
+                atomic_write_json(
+                    staging / f"round_{document.round_id}.json",
+                    document,
+                    logical_path=(
+                        f"{logical_directory}/round_{document.round_id}.json"
+                    ),
+                    serializer=lambda value: value.to_dict(),
+                    parser=ROUND_REVIEW_PARSER,
+                )
+            _fsync_metadata_directory(staging, logical_directory)
+            if _lstat_optional(target, logical_path=logical_directory) is not None:
+                raise self._invalid_shard_input(
+                    "同一复核版本 ID 已存在。", logical_directory
+                )
+            try:
+                os.rename(staging, target)
+            except OSError as exc:
+                raise _repository_error(
+                    "job_write_failed",
+                    "无法发布复核版本目录。",
+                    "请检查磁盘空间和目录权限。",
+                    logical_directory,
+                    exc,
+                ) from exc
+            published_state = os.lstat(target)
+            if (
+                _is_link_or_reparse(published_state)
+                or not stat.S_ISDIR(published_state.st_mode)
+                or (published_state.st_dev, published_state.st_ino)
+                != staging_identity
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本目录在发布期间发生变化。",
+                    "请停止其他程序修改该 Job 后检查复核历史。",
+                    logical_directory,
+                )
+            _fsync_metadata_directory(paths.review_revisions_dir, "review/revisions")
+        finally:
+            if staging_identity is not None:
+                self._cleanup_owned_review_staging(
+                    staging,
+                    staging_identity,
+                    sys.exc_info()[1],
+                )
+
+    def _cleanup_owned_review_staging(
+        self,
+        staging: Path,
+        identity: tuple[int, int],
+        primary: BaseException | None,
+    ) -> None:
+        try:
+            current = os.lstat(staging)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            if primary is not None:
+                primary.add_note(
+                    f"review staging cleanup check failed: {type(exc).__name__}"
+                )
+                return
+            raise _repository_error(
+                "job_write_failed",
+                "无法检查复核版本 staging 目录。",
+                "请检查 review/revisions 中的隐藏 staging。",
+                "review/revisions",
+                exc,
+            ) from exc
+        safe = (
+            not _is_link_or_reparse(current)
+            and stat.S_ISDIR(current.st_mode)
+            and (current.st_dev, current.st_ino) == identity
+        )
+        if not safe:
+            if primary is not None:
+                primary.add_note(
+                    "review staging cleanup skipped because ownership changed"
+                )
+                return
+            raise _repository_error(
+                "job_path_escape",
+                "复核版本 staging 目录所有权发生变化。",
+                "请检查 review/revisions 中的隐藏 staging。",
+                "review/revisions",
+            )
+        try:
+            shutil.rmtree(staging)
+        except OSError as exc:
+            if primary is not None:
+                primary.add_note(
+                    f"review staging cleanup failed: {type(exc).__name__}"
+                )
+                return
+            raise _repository_error(
+                "job_write_failed",
+                "无法清理复核版本 staging 目录。",
+                "请检查 review/revisions 中的隐藏 staging。",
+                "review/revisions",
+                exc,
+            ) from exc
+
+    def _read_active_review_locked(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+    ) -> ReviewRevisionBundle:
+        if manifest.active_review_id is None:
+            raise _repository_error(
+                "job_shard_missing",
+                "Job 尚未激活复核版本。",
+                "请先完整发布并激活一个复核版本。",
+                "job.json",
+            )
+        return self._read_review_revision_locked(
+            paths,
+            manifest,
+            manifest.active_review_id,
+        )
+
+    def _review_decisions(
+        self,
+        bundle: ReviewRevisionBundle,
+    ) -> tuple:
+        return tuple(
+            decision
+            for document in bundle.round_documents
+            for decision in document.decisions
+        )
+
+    def _validate_reviewed(
+        self,
+        reviewed: ReviewedCommsTimeline,
+        language: LanguageGraph,
+        draft: DraftCommsTimeline,
+        active: ReviewRevisionBundle,
+    ) -> None:
+        try:
+            validate_reviewed_timeline_graph(
+                reviewed,
+                draft,
+                language.timeline,
+                self._review_decisions(active),
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "Reviewed 通讯时间线与活动复核版本不一致。",
+                "final/timelines/reviewed.json",
+                exc,
+            ) from exc
+
+    def _read_reviewed_timeline(
+        self,
+        paths: JobPaths,
+        *,
+        expected_asset_id: str,
+    ) -> ReviewedCommsTimeline:
+        logical_path = "final/timelines/reviewed.json"
+        value = read_strict_json(
+            paths.final_timelines_dir / "reviewed.json",
+            logical_path=logical_path,
+            parser=REVIEWED_TIMELINE_PARSER,
+        )
+        if value.demo_asset_id != expected_asset_id:
+            raise self._invalid_shard_input(
+                "Reviewed 通讯时间线与 Job 素材身份不一致。", logical_path
+            )
+        return value
+
+    def _read_validated_reviewed_locked(
+        self,
+        paths: JobPaths,
+        language: LanguageGraph,
+        draft: DraftCommsTimeline,
+        active: ReviewRevisionBundle,
+    ) -> ReviewedCommsTimeline:
+        reviewed = self._read_reviewed_timeline(
+            paths,
+            expected_asset_id=language.timeline.descriptor.demo_asset_id,
+        )
+        self._validate_reviewed(reviewed, language, draft, active)
+        return reviewed
 
     def _paths_for(self, job_id: str) -> JobPaths:
         try:
