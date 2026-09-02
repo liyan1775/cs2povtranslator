@@ -23,6 +23,7 @@ from cs2pov.domain.timeline import (
 from cs2pov.domain.understanding import RoundUnderstandingDocument
 from cs2pov.domain.validation import compose_draft_timeline
 from cs2pov.storage.job_errors import JobRepositoryError
+from cs2pov.storage import job_repository as job_repository_module
 from test_job_repository_language_shards_v1 import (
     _persist_closed_language_graph,
     _snapshot_tree,
@@ -189,6 +190,46 @@ def test_review_registration_checks_manifest_cas_before_creating_staging(tmp_pat
     )
 
 
+def test_raced_revision_directory_is_never_replaced_or_activated(
+    tmp_path, monkeypatch
+):
+    values = _review_values(tmp_path)
+    workspace, repository, _, _, _, _, _, _ = values
+    target = (
+        workspace.jobs_dir / "job-language/review/revisions/review_review-001"
+    )
+    real_lstat_optional = job_repository_module._lstat_optional
+    raced_identity: tuple[int, int] | None = None
+    target_absence_checks = 0
+
+    def create_target_after_absence_check(path, logical_path=None):
+        nonlocal raced_identity, target_absence_checks
+        result = real_lstat_optional(path, logical_path=logical_path)
+        if Path(path) == target and result is None:
+            target_absence_checks += 1
+            if target_absence_checks == 2:
+                target.mkdir()
+                state = target.stat()
+                raced_identity = (state.st_dev, state.st_ino)
+        return result
+
+    monkeypatch.setattr(
+        job_repository_module,
+        "_lstat_optional",
+        create_target_after_absence_check,
+    )
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        _register(values, activate=True)
+
+    assert exc_info.value.code == "job_shard_invalid"
+    assert raced_identity is not None
+    surviving = target.stat()
+    assert (surviving.st_dev, surviving.st_ino) == raced_identity
+    assert not any(target.iterdir())
+    assert repository.load_job("job-language").manifest.active_review_id is None
+
+
 def test_review_round_ids_must_follow_authoritative_demo_order(tmp_path):
     values = _review_values(tmp_path, two_rounds=True)
     workspace, repository, claim, _, _, revision, documents, _ = values
@@ -307,7 +348,7 @@ def test_revision_parent_fsync_failure_leaves_complete_revision_inactive(
     workspace, repository, _, _, _, revision, _, _ = values
     manifest_before = repository.load_job("job-language").manifest
 
-    def fail_parent_fsync(path, logical_path):
+    def fail_parent_fsync(path, logical_path, **_kwargs):
         if logical_path == "review/revisions":
             raise JobRepositoryError(
                 "job_write_durability_uncertain",

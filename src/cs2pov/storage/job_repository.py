@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+import ctypes
 import errno
 import hashlib
 import os
@@ -270,15 +271,39 @@ def _duration_us(start: datetime, end: datetime) -> int:
     return delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
 
 
-def _fsync_metadata_directory(path: Path, logical_path: str) -> None:
+def _fsync_metadata_directory(
+    path: Path,
+    logical_path: str,
+    *,
+    expected_identity: tuple[int, int] | None = None,
+) -> None:
     if os.name == "nt":
         return
     try:
-        descriptor = os.open(path, os.O_RDONLY)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
         try:
+            opened = os.fstat(descriptor)
+            current = os.lstat(path)
+            identity = (opened.st_dev, opened.st_ino)
+            if (
+                _is_link_or_reparse(current)
+                or not stat.S_ISDIR(opened.st_mode)
+                or identity != (current.st_dev, current.st_ino)
+                or (expected_identity is not None and identity != expected_identity)
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "Job 目录在持久化期间发生变化。",
+                    "请停止其他程序修改该 Job 后重试。",
+                    logical_path,
+                )
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+    except JobRepositoryError:
+        raise
     except OSError as exc:
         raise _repository_error(
             "job_write_durability_uncertain",
@@ -287,6 +312,209 @@ def _fsync_metadata_directory(path: Path, logical_path: str) -> None:
             logical_path,
             exc,
         ) from exc
+
+
+def _rename_directory_no_replace(
+    source: Path,
+    target: Path,
+    *,
+    expected_source_identity: tuple[int, int],
+    logical_path: str,
+) -> tuple[int, int]:
+    if source.parent != target.parent:
+        raise _repository_error(
+            "job_write_failed",
+            "复核版本 staging 与目标不在同一目录。",
+            "请检查 Job 仓储实现。",
+            logical_path,
+        )
+    parent = source.parent
+    try:
+        parent_before = os.lstat(parent)
+    except OSError as exc:
+        raise _repository_error(
+            "job_path_escape",
+            "无法安全打开复核版本父目录。",
+            "请检查 review/revisions 目录。",
+            logical_path,
+            exc,
+        ) from exc
+    if _is_link_or_reparse(parent_before) or not stat.S_ISDIR(parent_before.st_mode):
+        raise _repository_error(
+            "job_path_escape",
+            "复核版本父目录不是安全目录。",
+            "请检查 review/revisions 目录。",
+            logical_path,
+        )
+    parent_identity = (parent_before.st_dev, parent_before.st_ino)
+
+    if os.name == "nt":
+        try:
+            source_state = os.lstat(source)
+            if (
+                _is_link_or_reparse(source_state)
+                or not stat.S_ISDIR(source_state.st_mode)
+                or (source_state.st_dev, source_state.st_ino)
+                != expected_source_identity
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本 staging 目录在发布前发生变化。",
+                    "请停止其他程序修改该 Job 后重试。",
+                    logical_path,
+                )
+            os.rename(source, target)
+        except JobRepositoryError:
+            raise
+        except OSError as exc:
+            try:
+                collision = os.lstat(target)
+            except OSError:
+                collision = None
+            if collision is not None:
+                raise _repository_error(
+                    "job_shard_invalid",
+                    "同一复核版本 ID 已存在，未覆盖原目录。",
+                    "请改用新的复核版本 ID，或加载已有版本。",
+                    logical_path,
+                    exc,
+                ) from exc
+            raise _repository_error(
+                "job_write_failed",
+                "无法发布复核版本目录。",
+                "请检查磁盘空间和目录权限。",
+                logical_path,
+                exc,
+            ) from exc
+        parent_after = os.lstat(parent)
+        target_state = os.lstat(target)
+        if (
+            _is_link_or_reparse(parent_after)
+            or (parent_after.st_dev, parent_after.st_ino) != parent_identity
+            or _is_link_or_reparse(target_state)
+            or not stat.S_ISDIR(target_state.st_mode)
+            or (target_state.st_dev, target_state.st_ino)
+            != expected_source_identity
+        ):
+            raise _repository_error(
+                "job_path_escape",
+                "复核版本目录在发布期间发生变化。",
+                "请停止其他程序修改该 Job 后检查复核历史。",
+                logical_path,
+            )
+        return parent_identity
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        parent_descriptor = os.open(parent, flags)
+        try:
+            opened_parent = os.fstat(parent_descriptor)
+            current_parent = os.lstat(parent)
+            if (
+                _is_link_or_reparse(current_parent)
+                or not stat.S_ISDIR(opened_parent.st_mode)
+                or (opened_parent.st_dev, opened_parent.st_ino) != parent_identity
+                or (current_parent.st_dev, current_parent.st_ino) != parent_identity
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本父目录在发布前发生变化。",
+                    "请停止其他程序修改该 Job 后重试。",
+                    logical_path,
+                )
+            source_state = os.stat(
+                source.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(source_state.st_mode)
+                or (source_state.st_dev, source_state.st_ino)
+                != expected_source_identity
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本 staging 目录在发布前发生变化。",
+                    "请停止其他程序修改该 Job 后重试。",
+                    logical_path,
+                )
+
+            library = ctypes.CDLL(None, use_errno=True)
+            rename_no_replace = None
+            rename_flags = 0
+            if sys.platform.startswith("linux"):
+                rename_no_replace = getattr(library, "renameat2", None)
+                rename_flags = 1  # RENAME_NOREPLACE
+            elif sys.platform == "darwin":
+                rename_no_replace = getattr(library, "renameatx_np", None)
+                rename_flags = 0x00000004  # RENAME_EXCL
+            if rename_no_replace is None:
+                raise _repository_error(
+                    "job_write_failed",
+                    "当前 POSIX 平台不支持原子不可覆盖目录发布。",
+                    "请在支持 renameat2/renameatx_np 的平台运行。",
+                    logical_path,
+                )
+            rename_no_replace.argtypes = (
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            )
+            rename_no_replace.restype = ctypes.c_int
+            result = rename_no_replace(
+                parent_descriptor,
+                os.fsencode(source.name),
+                parent_descriptor,
+                os.fsencode(target.name),
+                rename_flags,
+            )
+            if result != 0:
+                error_number = ctypes.get_errno()
+                error = OSError(error_number, os.strerror(error_number))
+                if error_number in {errno.EEXIST, errno.ENOTEMPTY}:
+                    raise _repository_error(
+                        "job_shard_invalid",
+                        "同一复核版本 ID 已存在，未覆盖原目录。",
+                        "请改用新的复核版本 ID，或加载已有版本。",
+                        logical_path,
+                        error,
+                    ) from error
+                raise error
+            target_state = os.stat(
+                target.name,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+            current_parent = os.lstat(parent)
+            if (
+                not stat.S_ISDIR(target_state.st_mode)
+                or (target_state.st_dev, target_state.st_ino)
+                != expected_source_identity
+                or _is_link_or_reparse(current_parent)
+                or (current_parent.st_dev, current_parent.st_ino) != parent_identity
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "复核版本目录在发布期间发生变化。",
+                    "请停止其他程序修改该 Job 后检查复核历史。",
+                    logical_path,
+                )
+        finally:
+            os.close(parent_descriptor)
+    except JobRepositoryError:
+        raise
+    except OSError as exc:
+        raise _repository_error(
+            "job_write_failed",
+            "无法发布复核版本目录。",
+            "请检查平台能力、磁盘空间和目录权限。",
+            logical_path,
+            exc,
+        ) from exc
+    return parent_identity
 
 
 def _lstat_optional(
@@ -3285,21 +3513,21 @@ class FileSystemJobRepository:
                     serializer=lambda value: value.to_dict(),
                     parser=ROUND_REVIEW_PARSER,
                 )
-            _fsync_metadata_directory(staging, logical_directory)
+            _fsync_metadata_directory(
+                staging,
+                logical_directory,
+                expected_identity=staging_identity,
+            )
             if _lstat_optional(target, logical_path=logical_directory) is not None:
                 raise self._invalid_shard_input(
                     "同一复核版本 ID 已存在。", logical_directory
                 )
-            try:
-                os.rename(staging, target)
-            except OSError as exc:
-                raise _repository_error(
-                    "job_write_failed",
-                    "无法发布复核版本目录。",
-                    "请检查磁盘空间和目录权限。",
-                    logical_directory,
-                    exc,
-                ) from exc
+            parent_identity = _rename_directory_no_replace(
+                staging,
+                target,
+                expected_source_identity=staging_identity,
+                logical_path=logical_directory,
+            )
             published_state = os.lstat(target)
             if (
                 _is_link_or_reparse(published_state)
@@ -3313,7 +3541,11 @@ class FileSystemJobRepository:
                     "请停止其他程序修改该 Job 后检查复核历史。",
                     logical_directory,
                 )
-            _fsync_metadata_directory(paths.review_revisions_dir, "review/revisions")
+            _fsync_metadata_directory(
+                paths.review_revisions_dir,
+                "review/revisions",
+                expected_identity=parent_identity,
+            )
         finally:
             if staging_identity is not None:
                 self._cleanup_owned_review_staging(
