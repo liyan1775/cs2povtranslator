@@ -150,7 +150,8 @@ def test_create_job_inspects_persistent_source_without_resolving_it(tmp_path, mo
 
     repository.create_job(request)
 
-    assert calls == [("inspect", request.source.asset_id)]
+    assert calls
+    assert set(calls) == {("inspect", request.source.asset_id)}
 
 
 def test_create_job_rejects_unavailable_source_before_staging(tmp_path, monkeypatch):

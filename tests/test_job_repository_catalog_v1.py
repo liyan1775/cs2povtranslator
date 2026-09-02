@@ -1,0 +1,445 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+from cs2pov.domain.job import (
+    CreateJobRequest,
+    FinalArtifactKind,
+    JobDemoSource,
+    JobPhase,
+    JobRunStatus,
+)
+from cs2pov.storage.demo_asset_repository import FileSystemDemoAssetRepository
+from cs2pov.storage.job_errors import JobRepositoryError
+from cs2pov.storage.job_repository import FileSystemJobRepository
+from cs2pov.workspace.paths import WorkspacePaths
+
+
+def _seed(tmp_path: Path):
+    workspace = WorkspacePaths(tmp_path / "workspace")
+    source_file = tmp_path / "match.dem"
+    source_file.write_bytes(b"catalog-demo")
+    demo_assets = FileSystemDemoAssetRepository(
+        workspace,
+        clock=lambda: datetime(2026, 8, 31, tzinfo=timezone.utc),
+    )
+    asset = demo_assets.import_source(source_file).asset
+    source = JobDemoSource(
+        asset.asset_id,
+        f"library/demos/{asset.asset_id}/asset.json",
+        asset.display_name,
+    )
+    return workspace, demo_assets, source
+
+
+def _create(
+    workspace: WorkspacePaths,
+    demo_assets: FileSystemDemoAssetRepository,
+    source: JobDemoSource,
+    job_id: str,
+    hour: int,
+):
+    repository = FileSystemJobRepository(
+        workspace,
+        demo_assets,
+        clock=lambda: datetime(2026, 8, 31, hour, tzinfo=timezone.utc),
+    )
+    return repository.create_job(CreateJobRequest(job_id, f"Job {job_id}", source))
+
+
+def _filesystem_snapshot(root: Path) -> tuple[tuple[object, ...], ...]:
+    if not root.exists():
+        return ()
+    rows: list[tuple[object, ...]] = []
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        result = current.lstat()
+        relative = current.relative_to(root).as_posix()
+        if current.is_symlink():
+            payload: object = ("link", os.readlink(current))
+        elif current.is_file():
+            payload = ("file", current.read_bytes())
+        else:
+            payload = ("dir",)
+            pending.extend(sorted(current.iterdir(), key=lambda path: path.name, reverse=True))
+        rows.append((relative, result.st_mode, result.st_size, result.st_mtime_ns, payload))
+    return tuple(sorted(rows, key=lambda row: str(row[0])))
+
+
+def _rewrite(path: Path, change) -> None:
+    payload = json.loads(path.read_text("utf-8"))
+    change(payload)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_list_jobs_isolates_damaged_current_jobs_and_ignores_legacy_and_staging(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-old", 10)
+    _create(workspace, demo_assets, source, "job-new", 11)
+    _create(workspace, demo_assets, source, "job-invalid", 12)
+    _create(workspace, demo_assets, source, "job-missing", 13)
+    _create(workspace, demo_assets, source, "job-unsupported", 14)
+    _create(workspace, demo_assets, source, "job-mismatch", 15)
+    _create(workspace, demo_assets, source, "job-source-missing", 16)
+
+    (workspace.jobs_dir / "job-invalid/job.json").write_bytes(b"{not-json")
+    (workspace.jobs_dir / "job-missing/job.json").unlink()
+    _rewrite(
+        workspace.jobs_dir / "job-unsupported/job.json",
+        lambda payload: payload.__setitem__("schema_version", 2),
+    )
+    _rewrite(
+        workspace.jobs_dir / "job-mismatch/job.json",
+        lambda payload: payload.__setitem__("job_id", "other-job"),
+    )
+    (workspace.jobs_dir / "job-source-missing/source/demo_ref.json").unlink()
+
+    legacy = workspace.jobs_dir / "legacy-job"
+    legacy.mkdir()
+    (legacy / "manifest.json").write_text('{"schema_version": 1}', encoding="utf-8")
+    hidden = workspace.jobs_dir / ".job-hidden.deadbeef.staging"
+    hidden.mkdir()
+    (hidden / "repository.json").write_text("should not be read", encoding="utf-8")
+    (workspace.jobs_dir / "unrelated.txt").write_text("ignore", encoding="utf-8")
+
+    linked_expected = False
+    outside = tmp_path / "linked-current-job"
+    outside.mkdir()
+    (outside / "repository.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repository_kind": "cs2pov-current-job",
+                "job_id": "job-linked",
+            }
+        ),
+        encoding="utf-8",
+    )
+    try:
+        (workspace.jobs_dir / "job-linked").symlink_to(outside, target_is_directory=True)
+        linked_expected = True
+    except OSError:
+        pass
+
+    before = _filesystem_snapshot(workspace.jobs_dir)
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+    after = _filesystem_snapshot(workspace.jobs_dir)
+
+    by_id = {entry.discovery_id: entry for entry in entries}
+    expected_ids = {
+        "job-old",
+        "job-new",
+        "job-invalid",
+        "job-missing",
+        "job-unsupported",
+        "job-mismatch",
+        "job-source-missing",
+    }
+    if linked_expected:
+        expected_ids.add("job-linked")
+    assert set(by_id) == expected_ids
+    assert "legacy-job" not in by_id
+    assert ".job-hidden.deadbeef.staging" not in by_id
+    assert "unrelated.txt" not in by_id
+
+    healthy = [entry.discovery_id for entry in entries if entry.healthy]
+    assert healthy == ["job-new", "job-old"]
+    no_timestamp = [entry.discovery_id for entry in entries if entry.updated_at is None]
+    assert no_timestamp == sorted(no_timestamp)
+    assert by_id["job-new"].display_name == "Job job-new"
+    assert by_id["job-new"].demo_asset_id == source.asset_id
+    assert by_id["job-new"].demo_display_name == source.display_name
+    assert by_id["job-new"].phase is JobPhase.CREATED
+    assert by_id["job-new"].durable_run_status is JobRunStatus.PENDING
+    assert by_id["job-new"].effective_run_status is JobRunStatus.PENDING
+    assert by_id["job-new"].round_progress.total == 0
+    assert by_id["job-new"].final_artifact_kinds == ()
+
+    codes = {
+        discovery_id: {issue.code for issue in entry.issues}
+        for discovery_id, entry in by_id.items()
+    }
+    assert "job_manifest_invalid" in codes["job-invalid"]
+    assert "job_manifest_invalid" in codes["job-missing"]
+    assert "job_schema_unsupported" in codes["job-unsupported"]
+    assert "job_manifest_invalid" in codes["job-mismatch"]
+    assert "job_shard_missing" in codes["job-source-missing"]
+    if linked_expected:
+        assert codes["job-linked"] == {"job_path_escape"}
+
+    workspace_text = str(workspace.root)
+    for entry in entries:
+        for issue in entry.issues:
+            assert issue.message_zh
+            assert issue.suggestion_zh
+            assert workspace_text not in issue.message_zh
+            assert workspace_text not in issue.suggestion_zh
+    assert after == before
+
+
+def test_list_jobs_exposes_distinct_final_artifact_kinds_from_valid_manifest(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-artifacts", 10)
+    manifest = workspace.jobs_dir / "job-artifacts/job.json"
+    subtitle = b"subtitle"
+    green = b"green"
+    (workspace.jobs_dir / "job-artifacts/final/subtitles/a.ass").write_bytes(subtitle)
+    (workspace.jobs_dir / "job-artifacts/final/subtitles/b.srt").write_bytes(subtitle)
+    (workspace.jobs_dir / "job-artifacts/final/green_screen/a.mov").write_bytes(green)
+
+    def add_artifacts(payload):
+        payload["final_artifacts"] = [
+            {
+                "artifact_id": "subtitle-a",
+                "kind": "subtitle",
+                "relative_path": "final/subtitles/a.ass",
+                "content_sha256": hashlib.sha256(subtitle).hexdigest(),
+                "round_id": None,
+                "timebase": "demo_global",
+            },
+            {
+                "artifact_id": "subtitle-b",
+                "kind": "subtitle",
+                "relative_path": "final/subtitles/b.srt",
+                "content_sha256": hashlib.sha256(subtitle).hexdigest(),
+                "round_id": None,
+                "timebase": "demo_global",
+            },
+            {
+                "artifact_id": "green-a",
+                "kind": "green_screen",
+                "relative_path": "final/green_screen/a.mov",
+                "content_sha256": hashlib.sha256(green).hexdigest(),
+                "round_id": None,
+                "timebase": "demo_global",
+            },
+        ]
+
+    _rewrite(manifest, add_artifacts)
+
+    entry = FileSystemJobRepository(workspace, demo_assets).list_jobs()[0]
+
+    assert entry.final_artifact_kinds == (
+        FinalArtifactKind.SUBTITLE,
+        FinalArtifactKind.GREEN_SCREEN,
+    )
+    assert entry.healthy
+
+
+def test_list_jobs_preserves_microsecond_order_without_float_timestamp_rounding(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-a", 10)
+    _create(workspace, demo_assets, source, "job-z", 11)
+
+    def set_time(value):
+        def change(payload):
+            payload["created_at"] = value
+            payload["updated_at"] = value
+
+        return change
+
+    _rewrite(
+        workspace.jobs_dir / "job-a/job.json",
+        set_time("9999-01-01T00:00:00.000000Z"),
+    )
+    _rewrite(
+        workspace.jobs_dir / "job-z/job.json",
+        set_time("9999-01-01T00:00:00.000001Z"),
+    )
+
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+
+    assert [entry.discovery_id for entry in entries] == ["job-z", "job-a"]
+
+
+def test_inspect_job_reports_unavailable_demo_but_keeps_valid_artifact_metadata(tmp_path, monkeypatch):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-inspect", 10)
+    job_dir = workspace.jobs_dir / "job-inspect"
+    artifact = job_dir / "final/subtitles/final.ass"
+    artifact.write_bytes(b"valid-subtitle")
+    _rewrite(
+        job_dir / "job.json",
+        lambda payload: payload.__setitem__(
+            "final_artifacts",
+            [
+                {
+                    "artifact_id": "final-subtitle",
+                    "kind": "subtitle",
+                    "relative_path": "final/subtitles/final.ass",
+                    "content_sha256": hashlib.sha256(b"valid-subtitle").hexdigest(),
+                    "round_id": None,
+                    "timebase": "demo_global",
+                }
+            ],
+        ),
+    )
+    (job_dir / "future-extra.txt").write_text("ignored", encoding="utf-8")
+    (workspace.demo_library_dir / source.asset_id / "source.dem").unlink()
+
+    def forbidden_resolve(_ref):
+        raise AssertionError("inspect_job must never call resolve_asset")
+
+    monkeypatch.setattr(demo_assets, "resolve_asset", forbidden_resolve)
+    before = _filesystem_snapshot(workspace.root)
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job("job-inspect")
+
+    assert inspection.marker.job_id == "job-inspect"
+    assert inspection.manifest.job_id == "job-inspect"
+    assert inspection.source == source
+    assert inspection.events == ()
+    assert not inspection.event_tail_incomplete
+    assert inspection.entry.final_artifact_kinds == (FinalArtifactKind.SUBTITLE,)
+    assert {issue.code for issue in inspection.entry.issues} == {"job_source_unavailable"}
+    assert not inspection.entry.healthy
+    assert _filesystem_snapshot(workspace.root) == before
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        FileSystemJobRepository(workspace, demo_assets).load_job("job-inspect")
+    assert exc_info.value.code == "job_source_unavailable"
+
+
+def test_inspect_job_captures_missing_source_and_bad_artifact_without_hiding_manifest(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-damaged", 10)
+    job_dir = workspace.jobs_dir / "job-damaged"
+    (job_dir / "source/demo_ref.json").unlink()
+    artifact = job_dir / "final/subtitles/final.ass"
+    artifact.write_bytes(b"changed")
+    _rewrite(
+        job_dir / "job.json",
+        lambda payload: payload.__setitem__(
+            "final_artifacts",
+            [
+                {
+                    "artifact_id": "final-subtitle",
+                    "kind": "subtitle",
+                    "relative_path": "final/subtitles/final.ass",
+                    "content_sha256": hashlib.sha256(b"expected").hexdigest(),
+                    "round_id": None,
+                    "timebase": "demo_global",
+                }
+            ],
+        ),
+    )
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job("job-damaged")
+
+    assert inspection.manifest is not None
+    assert inspection.source is None
+    assert {issue.code for issue in inspection.entry.issues} == {
+        "job_shard_missing",
+        "job_shard_invalid",
+    }
+    artifact_issue = next(
+        issue for issue in inspection.entry.issues if issue.code == "job_shard_invalid"
+    )
+    assert artifact_issue.logical_path == "final/subtitles/final.ass"
+
+
+def test_inspect_job_rejects_linked_final_artifact_without_following_it(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-linked-artifact", 10)
+    job_dir = workspace.jobs_dir / "job-linked-artifact"
+    outside = tmp_path / "outside.ass"
+    outside.write_bytes(b"outside")
+    artifact = job_dir / "final/subtitles/final.ass"
+    try:
+        artifact.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink privileges unavailable")
+    _rewrite(
+        job_dir / "job.json",
+        lambda payload: payload.__setitem__(
+            "final_artifacts",
+            [
+                {
+                    "artifact_id": "linked-subtitle",
+                    "kind": "subtitle",
+                    "relative_path": "final/subtitles/final.ass",
+                    "content_sha256": hashlib.sha256(b"outside").hexdigest(),
+                    "round_id": None,
+                    "timebase": "demo_global",
+                }
+            ],
+        ),
+    )
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-linked-artifact"
+    )
+
+    assert "job_path_escape" in {issue.code for issue in inspection.entry.issues}
+    assert outside.read_bytes() == b"outside"
+
+
+def test_inspect_job_rejects_linked_optional_stage_shard_without_parsing_it(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-linked-shard", 10)
+    job_dir = workspace.jobs_dir / "job-linked-shard"
+    outside = tmp_path / "outside-timeline.json"
+    outside.write_text("not even valid json", encoding="utf-8")
+    shard = job_dir / "timeline/demo.json"
+    try:
+        shard.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink privileges unavailable")
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-linked-shard"
+    )
+
+    issue = next(issue for issue in inspection.entry.issues if issue.logical_path == "timeline/demo.json")
+    assert issue.code == "job_path_escape"
+    assert outside.read_text("utf-8") == "not even valid json"
+
+
+def test_inspect_job_rejects_optional_stage_shard_that_is_not_regular(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-directory-shard", 10)
+    shard = workspace.jobs_dir / "job-directory-shard/timeline/demo.json"
+    shard.mkdir()
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-directory-shard"
+    )
+
+    issue = next(issue for issue in inspection.entry.issues if issue.logical_path == "timeline/demo.json")
+    assert issue.code == "job_shard_invalid"
+
+
+def test_inspect_job_is_nonthrowing_for_manifest_identity_disagreement(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-identity", 10)
+    _rewrite(
+        workspace.jobs_dir / "job-identity/job.json",
+        lambda payload: payload.__setitem__("job_id", "different-job"),
+    )
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job("job-identity")
+
+    assert inspection.manifest.job_id == "different-job"
+    assert not inspection.entry.healthy
+    assert "job_manifest_invalid" in {issue.code for issue in inspection.entry.issues}
+
+
+def test_inspect_job_does_not_repair_missing_initial_lock_or_journal(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-no-events", 10)
+    job_dir = workspace.jobs_dir / "job-no-events"
+    (job_dir / "events/.write.lock").unlink()
+    (job_dir / "events/job_events.jsonl").unlink()
+    before = _filesystem_snapshot(job_dir)
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job("job-no-events")
+
+    assert "job_shard_missing" in {issue.code for issue in inspection.entry.issues}
+    assert _filesystem_snapshot(job_dir) == before

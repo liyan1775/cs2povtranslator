@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import errno
+import hashlib
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import sys
@@ -13,13 +15,18 @@ from uuid import UUID, uuid4
 from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.domain.job import (
     CreateJobRequest,
+    FinalArtifactKind,
     JobDemoSource,
+    JobCatalogEntry,
+    JobInspection,
+    JobIssue,
     JobManifest,
     JobPhase,
     JobRepositoryMarker,
     JobRunStatus,
     RoundProgressSummary,
 )
+from cs2pov.domain.schema import require_path_identifier
 from cs2pov.storage.demo_asset_repository import (
     DemoAssetRepositoryError,
     FileSystemDemoAssetRepository,
@@ -83,6 +90,27 @@ _INITIAL_DIRECTORIES = (
     "final/green_screen",
     "final/video",
 )
+
+_OPTIONAL_EXACT_FILES = (
+    "timeline/demo.json",
+    "timeline/rounds.json",
+    "timeline/time_anchors.jsonl",
+    "voice/activities.jsonl",
+    "transcript/unassigned.jsonl",
+    "final/timelines/draft.json",
+    "final/timelines/reviewed.json",
+)
+
+_OPTIONAL_DYNAMIC_FILES = (
+    ("models/snapshots", re.compile(r"snapshot_[a-z0-9][a-z0-9_-]{0,63}\.json\Z")),
+    ("models/invocations", re.compile(r"task_[a-z0-9][a-z0-9_-]{0,63}\.jsonl\Z")),
+    ("transcript", re.compile(r"round_[a-z0-9][a-z0-9_-]{0,63}\.jsonl\Z")),
+    ("understanding", re.compile(r"round_[a-z0-9][a-z0-9_-]{0,63}\.json\Z")),
+    ("tasks", re.compile(r"round_[a-z0-9][a-z0-9_-]{0,63}\.json\Z")),
+)
+
+_REVIEW_DIRECTORY = re.compile(r"review_[a-z0-9][a-z0-9_-]{0,63}\Z")
+_REVIEW_ROUND_FILE = re.compile(r"round_[a-z0-9][a-z0-9_-]{0,63}\.json\Z")
 
 
 def _repository_error(
@@ -285,6 +313,12 @@ class FileSystemJobRepository:
             logical_path="job.json",
             parser=_MANIFEST_PARSER,
         )
+        self._assert_safe_regular(
+            paths.demo_source,
+            logical_path="source/demo_ref.json",
+            missing_code="job_shard_missing",
+            invalid_code="job_shard_invalid",
+        )
         source = read_strict_json(
             paths.demo_source,
             logical_path="source/demo_ref.json",
@@ -308,7 +342,191 @@ class FileSystemJobRepository:
                 "请检查 Demo 来源引用。",
                 "source/demo_ref.json",
             )
+        issues = self._collect_integrity_issues(paths, manifest, source)
+        if issues:
+            raise self._error_from_issue(issues[0])
         return OpenedJob(marker, manifest, source, paths, manifest.run_status)
+
+    def list_jobs(self) -> tuple[JobCatalogEntry, ...]:
+        root_state = _lstat_optional(self.paths.jobs_dir)
+        if root_state is None:
+            return ()
+        if _is_link_or_reparse(root_state) or not stat.S_ISDIR(root_state.st_mode):
+            raise _repository_error(
+                "job_path_escape",
+                "当前工作区的 jobs 路径不是安全目录。",
+                "请移除链接或重新选择工作区。",
+            )
+
+        entries: list[JobCatalogEntry] = []
+        try:
+            children = tuple(os.scandir(self.paths.jobs_dir))
+        except OSError as exc:
+            raise _repository_error(
+                "job_path_escape",
+                "无法安全读取当前工作区的 Job 列表。",
+                "请检查工作区目录权限。",
+                None,
+                exc,
+            ) from exc
+        for child in children:
+            discovery_id = child.name
+            if discovery_id.startswith("."):
+                continue
+            try:
+                require_path_identifier(discovery_id, "discovery_id")
+            except DomainSchemaError:
+                continue
+            try:
+                child_state = child.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if _is_link_or_reparse(child_state):
+                entries.append(
+                    self._entry_from_parts(
+                        discovery_id,
+                        None,
+                        (
+                            JobIssue(
+                                "job_path_escape",
+                                "error",
+                                "Job 目录是链接或重解析点，未读取其内容。",
+                                "请移除链接，并从可信工作区恢复 Job。",
+                                None,
+                            ),
+                        ),
+                    )
+                )
+                continue
+            if not stat.S_ISDIR(child_state.st_mode):
+                continue
+
+            marker_path = Path(child.path) / "repository.json"
+            if _lstat_optional(marker_path) is None:
+                # Markerless directories, including v0.x manifest.json-only
+                # outputs, are outside this current-version repository.
+                continue
+            entries.append(self.inspect_job(discovery_id).entry)
+
+        valid_time = [entry for entry in entries if entry.updated_at is not None]
+        invalid_time = [entry for entry in entries if entry.updated_at is None]
+        # Canonical timestamps are fixed-width UTC strings, so lexical order is
+        # exact down to the microsecond and avoids lossy float timestamps.
+        valid_time.sort(key=lambda entry: entry.job_id or entry.discovery_id)
+        valid_time.sort(key=lambda entry: entry.updated_at or "", reverse=True)
+        invalid_time.sort(key=lambda entry: entry.discovery_id)
+        return tuple((*valid_time, *invalid_time))
+
+    def inspect_job(self, job_id: str) -> JobInspection:
+        try:
+            require_path_identifier(job_id, "job_id")
+        except DomainSchemaError as exc:
+            raise _repository_error(
+                "job_path_escape",
+                "Job ID 不能安全用作目录名。",
+                "请从 Job 列表重新选择。",
+                None,
+                exc,
+            ) from exc
+
+        try:
+            paths = self._paths_for(job_id)
+            self._validate_existing_job_dir(paths)
+        except JobRepositoryError as exc:
+            if exc.code != "job_path_escape" or _lstat_optional(
+                self.paths.jobs_dir / job_id
+            ) is None:
+                raise
+            entry = self._entry_from_parts(job_id, None, (exc.to_issue(),))
+            return JobInspection(entry, None, None, None, (), False)
+
+        issues: list[JobIssue] = []
+        marker = self._inspect_document(
+            paths.repository_marker,
+            logical_path="repository.json",
+            parser=_MARKER_PARSER,
+            missing_code="job_manifest_invalid",
+            invalid_code="job_manifest_invalid",
+            issues=issues,
+        )
+        manifest = self._inspect_document(
+            paths.manifest,
+            logical_path="job.json",
+            parser=_MANIFEST_PARSER,
+            missing_code="job_manifest_invalid",
+            invalid_code="job_manifest_invalid",
+            issues=issues,
+        )
+        source = self._inspect_document(
+            paths.demo_source,
+            logical_path="source/demo_ref.json",
+            parser=_SOURCE_PARSER,
+            missing_code="job_shard_missing",
+            invalid_code="job_shard_invalid",
+            issues=issues,
+        )
+
+        if marker is not None and marker.job_id != job_id:
+            self._append_issue(
+                issues,
+                JobIssue(
+                    "job_manifest_invalid",
+                    "error",
+                    "仓储标记与目录中的 Job ID 不一致。",
+                    "请检查 repository.json；不要重命名 Job 目录。",
+                    "repository.json",
+                ),
+            )
+        if manifest is not None and manifest.job_id != job_id:
+            self._append_issue(
+                issues,
+                JobIssue(
+                    "job_manifest_invalid",
+                    "error",
+                    "Job 清单身份与目录名不一致。",
+                    "请检查 job.json；不要重命名 Job 目录。",
+                    "job.json",
+                ),
+            )
+        if (
+            marker is not None
+            and manifest is not None
+            and marker.job_id != manifest.job_id
+        ):
+            self._append_issue(
+                issues,
+                JobIssue(
+                    "job_manifest_invalid",
+                    "error",
+                    "仓储标记与 Job 清单身份不一致。",
+                    "请检查 repository.json 和 job.json。",
+                    "job.json",
+                ),
+            )
+        if manifest is not None and source is not None and (
+            manifest.demo_asset_id != source.asset_id
+            or manifest.demo_display_name != source.display_name
+        ):
+            self._append_issue(
+                issues,
+                JobIssue(
+                    "job_shard_invalid",
+                    "error",
+                    "Job 清单与 Demo 来源身份不一致。",
+                    "请检查 source/demo_ref.json。",
+                    "source/demo_ref.json",
+                ),
+            )
+
+        if manifest is not None:
+            for issue in self._collect_integrity_issues(paths, manifest, source):
+                self._append_issue(issues, issue)
+        else:
+            for issue in self._inspect_static_layout(paths):
+                self._append_issue(issues, issue)
+
+        entry = self._entry_from_parts(job_id, manifest, tuple(issues), marker=marker)
+        return JobInspection(entry, marker, manifest, source, (), False)
 
     def _paths_for(self, job_id: str) -> JobPaths:
         try:
@@ -321,6 +539,425 @@ class FileSystemJobRepository:
                 None,
                 exc,
             ) from exc
+
+    def _entry_from_parts(
+        self,
+        discovery_id: str,
+        manifest: JobManifest | None,
+        issues: tuple[JobIssue, ...],
+        *,
+        marker: JobRepositoryMarker | None = None,
+    ) -> JobCatalogEntry:
+        kinds: list[FinalArtifactKind] = []
+        if manifest is not None:
+            for artifact in manifest.final_artifacts:
+                if artifact.kind not in kinds:
+                    kinds.append(artifact.kind)
+        job_id = manifest.job_id if manifest is not None else (
+            marker.job_id if marker is not None else None
+        )
+        return JobCatalogEntry(
+            discovery_id,
+            job_id,
+            None if manifest is None else manifest.display_name,
+            None if manifest is None else manifest.created_at,
+            None if manifest is None else manifest.updated_at,
+            None if manifest is None else manifest.demo_asset_id,
+            None if manifest is None else manifest.demo_display_name,
+            None if manifest is None else manifest.map_name,
+            None if manifest is None else manifest.target_player_id,
+            None if manifest is None else manifest.phase,
+            None if manifest is None else manifest.run_status,
+            None if manifest is None else manifest.run_status,
+            None if manifest is None else manifest.round_progress,
+            tuple(kinds),
+            not any(issue.severity == "error" for issue in issues),
+            issues,
+        )
+
+    def _inspect_document(
+        self,
+        path: Path,
+        *,
+        logical_path: str,
+        parser,
+        missing_code: str,
+        invalid_code: str,
+        issues: list[JobIssue],
+    ):
+        try:
+            self._assert_safe_regular(
+                path,
+                logical_path=logical_path,
+                missing_code=missing_code,
+                invalid_code=invalid_code,
+            )
+            return read_strict_json(path, logical_path=logical_path, parser=parser)
+        except JobRepositoryError as exc:
+            if invalid_code == "job_manifest_invalid" and exc.code in {
+                "job_shard_missing",
+                "job_shard_invalid",
+            }:
+                exc = _repository_error(
+                    "job_manifest_invalid",
+                    "Job 身份或清单文档无效。",
+                    "请检查该 Job 的身份文档。",
+                    logical_path,
+                    exc,
+                )
+            self._append_issue(issues, exc.to_issue())
+            return None
+
+    def _append_issue(self, issues: list[JobIssue], issue: JobIssue) -> None:
+        key = (issue.code, issue.severity, issue.logical_path, issue.message_zh)
+        if all(
+            (item.code, item.severity, item.logical_path, item.message_zh) != key
+            for item in issues
+        ):
+            issues.append(issue)
+
+    def _error_from_issue(self, issue: JobIssue) -> JobRepositoryError:
+        return JobRepositoryError(
+            issue.code,
+            issue.message_zh,
+            issue.suggestion_zh,
+            issue.logical_path,
+            severity=issue.severity,
+        )
+
+    def _collect_integrity_issues(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+        source: JobDemoSource | None,
+    ) -> tuple[JobIssue, ...]:
+        issues = list(self._inspect_static_layout(paths))
+        if source is not None:
+            try:
+                inspection = self.demo_assets.inspect_asset(source.asset_id)
+            except (DemoAssetRepositoryError, OSError, TypeError, ValueError):
+                inspection = None
+            if (
+                inspection is None
+                or not inspection.source_ok
+                or inspection.asset.asset_id != source.asset_id
+                or inspection.asset.display_name != source.display_name
+                or inspection.asset.to_ref().asset_manifest_relative_path
+                != source.asset_manifest_relative_path
+            ):
+                self._append_issue(
+                    issues,
+                    JobIssue(
+                        "job_source_unavailable",
+                        "error",
+                        "Job 引用的 Demo 持久源不可用。",
+                        "请在素材管理中检查或重新导入该 Demo；已有最终产物仍可查看。",
+                        "source/demo_ref.json",
+                    ),
+                )
+        for artifact in manifest.final_artifacts:
+            try:
+                path = paths.artifact_path(artifact.kind, artifact.relative_path)
+                digest = self._hash_safe_regular(path, artifact.relative_path)
+                if digest != artifact.content_sha256:
+                    raise _repository_error(
+                        "job_shard_invalid",
+                        "最终产物内容与清单哈希不一致。",
+                        "请重新生成或恢复该产物。",
+                        artifact.relative_path,
+                    )
+            except (WorkspacePathOutsideRootError, DomainSchemaError, ValueError) as exc:
+                error = _repository_error(
+                    "job_path_escape",
+                    "最终产物路径超出 Job 或包含不安全节点。",
+                    "请检查 job.json 中的最终产物路径。",
+                    artifact.relative_path,
+                    exc,
+                )
+                self._append_issue(issues, error.to_issue())
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+        return tuple(issues)
+
+    def _inspect_static_layout(self, paths: JobPaths) -> tuple[JobIssue, ...]:
+        issues: list[JobIssue] = []
+        for relative in _INITIAL_DIRECTORIES:
+            directory = paths.job_dir.joinpath(*relative.split("/"))
+            try:
+                state = os.lstat(directory)
+                if _is_link_or_reparse(state):
+                    raise _repository_error(
+                        "job_path_escape",
+                        "Job 布局目录包含链接或重解析点。",
+                        "请恢复该目录后重试。",
+                        relative,
+                    )
+                if not stat.S_ISDIR(state.st_mode):
+                    raise _repository_error(
+                        "job_shard_invalid",
+                        "Job 布局路径不是目录。",
+                        "请恢复该目录后重试。",
+                        relative,
+                    )
+            except FileNotFoundError as exc:
+                self._append_issue(
+                    issues,
+                    _repository_error(
+                        "job_shard_missing",
+                        "Job 必需目录缺失。",
+                        "请检查或恢复该 Job。",
+                        relative,
+                        exc,
+                    ).to_issue(),
+                )
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+            except OSError as exc:
+                self._append_issue(
+                    issues,
+                    _repository_error(
+                        "job_shard_invalid",
+                        "无法检查 Job 布局目录。",
+                        "请检查该 Job。",
+                        relative,
+                        exc,
+                    ).to_issue(),
+                )
+
+        for issue in self._inspect_optional_files(paths):
+            self._append_issue(issues, issue)
+
+        for path, logical_path in (
+            (paths.write_lock, "events/.write.lock"),
+            (paths.event_journal, "events/job_events.jsonl"),
+        ):
+            try:
+                payload = self._read_safe_regular(path, logical_path)
+                if logical_path == "events/.write.lock" and payload != b"0":
+                    raise _repository_error(
+                        "job_shard_invalid",
+                        "Job 写锁文件必须是稳定的单字节文件。",
+                        "请检查该 Job，读取操作不会自动修复它。",
+                        logical_path,
+                    )
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+        return tuple(issues)
+
+    def _inspect_optional_files(self, paths: JobPaths) -> tuple[JobIssue, ...]:
+        issues: list[JobIssue] = []
+        for relative in _OPTIONAL_EXACT_FILES:
+            path = paths.job_dir.joinpath(*relative.split("/"))
+            if _lstat_optional(path) is None:
+                continue
+            try:
+                self._assert_safe_regular(
+                    path,
+                    logical_path=relative,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+
+        for relative_dir, pattern in _OPTIONAL_DYNAMIC_FILES:
+            directory = paths.job_dir.joinpath(*relative_dir.split("/"))
+            try:
+                children = tuple(os.scandir(directory))
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as exc:
+                self._append_issue(
+                    issues,
+                    _repository_error(
+                        "job_shard_invalid",
+                        "无法检查 Job 阶段文件。",
+                        "请检查该 Job。",
+                        relative_dir,
+                        exc,
+                    ).to_issue(),
+                )
+                continue
+            for child in children:
+                if pattern.fullmatch(child.name) is None:
+                    continue
+                logical_path = f"{relative_dir}/{child.name}"
+                try:
+                    self._assert_safe_regular(
+                        Path(child.path),
+                        logical_path=logical_path,
+                        missing_code="job_shard_missing",
+                        invalid_code="job_shard_invalid",
+                    )
+                except JobRepositoryError as exc:
+                    self._append_issue(issues, exc.to_issue())
+
+        revisions = paths.review_revisions_dir
+        try:
+            revision_children = tuple(os.scandir(revisions))
+        except (FileNotFoundError, NotADirectoryError):
+            revision_children = ()
+        except OSError as exc:
+            self._append_issue(
+                issues,
+                _repository_error(
+                    "job_shard_invalid",
+                    "无法检查复核历史目录。",
+                    "请检查该 Job。",
+                    "review/revisions",
+                    exc,
+                ).to_issue(),
+            )
+            revision_children = ()
+        for child in revision_children:
+            if _REVIEW_DIRECTORY.fullmatch(child.name) is None:
+                continue
+            logical_directory = f"review/revisions/{child.name}"
+            try:
+                child_state = child.stat(follow_symlinks=False)
+                if _is_link_or_reparse(child_state):
+                    raise _repository_error(
+                        "job_path_escape",
+                        "复核历史目录不能是链接或重解析点。",
+                        "请恢复普通目录后重试。",
+                        logical_directory,
+                    )
+                if not stat.S_ISDIR(child_state.st_mode):
+                    raise _repository_error(
+                        "job_shard_invalid",
+                        "复核历史路径不是目录。",
+                        "请恢复普通目录后重试。",
+                        logical_directory,
+                    )
+                revision_files = tuple(os.scandir(child.path))
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+                continue
+            except OSError as exc:
+                self._append_issue(
+                    issues,
+                    _repository_error(
+                        "job_shard_invalid",
+                        "无法检查复核历史目录。",
+                        "请检查该 Job。",
+                        logical_directory,
+                        exc,
+                    ).to_issue(),
+                )
+                continue
+            for revision_file in revision_files:
+                if revision_file.name != "revision.json" and _REVIEW_ROUND_FILE.fullmatch(
+                    revision_file.name
+                ) is None:
+                    continue
+                logical_path = f"{logical_directory}/{revision_file.name}"
+                try:
+                    self._assert_safe_regular(
+                        Path(revision_file.path),
+                        logical_path=logical_path,
+                        missing_code="job_shard_missing",
+                        invalid_code="job_shard_invalid",
+                    )
+                except JobRepositoryError as exc:
+                    self._append_issue(issues, exc.to_issue())
+        return tuple(issues)
+
+    def _hash_safe_regular(self, path: Path, logical_path: str) -> str:
+        digest = hashlib.sha256()
+        self._consume_safe_regular(path, logical_path, digest.update)
+        return digest.hexdigest()
+
+    def _read_safe_regular(self, path: Path, logical_path: str) -> bytes:
+        chunks: list[bytes] = []
+        self._consume_safe_regular(path, logical_path, chunks.append)
+        return b"".join(chunks)
+
+    def _consume_safe_regular(self, path: Path, logical_path: str, consume) -> None:
+        self._assert_safe_regular(
+            path,
+            logical_path=logical_path,
+            missing_code="job_shard_missing",
+            invalid_code="job_shard_invalid",
+        )
+        flags = os.O_RDONLY
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(path, flags)
+            try:
+                opened = os.fstat(descriptor)
+                current = os.lstat(path)
+                if (
+                    _is_link_or_reparse(current)
+                    or not stat.S_ISREG(opened.st_mode)
+                    or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                ):
+                    raise _repository_error(
+                        "job_path_escape",
+                        "Job 文件在读取期间发生变化。",
+                        "请停止其他程序修改该 Job 后重试。",
+                        logical_path,
+                    )
+                while True:
+                    chunk = os.read(descriptor, 1024 * 1024)
+                    if not chunk:
+                        break
+                    consume(chunk)
+            finally:
+                os.close(descriptor)
+        except JobRepositoryError:
+            raise
+        except OSError as exc:
+            raise _repository_error(
+                "job_shard_invalid",
+                "无法读取 Job 文件。",
+                "请检查文件权限和完整性。",
+                logical_path,
+                exc,
+            ) from exc
+
+    def _assert_safe_regular(
+        self,
+        path: Path,
+        *,
+        logical_path: str,
+        missing_code: str,
+        invalid_code: str,
+    ) -> None:
+        try:
+            result = os.lstat(path)
+        except FileNotFoundError as exc:
+            raise _repository_error(
+                missing_code,
+                "Job 必需文件不存在。",
+                "请检查或恢复该 Job。",
+                logical_path,
+                exc,
+            ) from exc
+        except OSError as exc:
+            raise _repository_error(
+                invalid_code,
+                "无法检查 Job 文件。",
+                "请检查该 Job。",
+                logical_path,
+                exc,
+            ) from exc
+        if _is_link_or_reparse(result):
+            raise _repository_error(
+                "job_path_escape",
+                "Job 文件不能是链接或重解析点。",
+                "请恢复普通文件后重试。",
+                logical_path,
+            )
+        if not stat.S_ISREG(result.st_mode):
+            raise _repository_error(
+                invalid_code,
+                "Job 文件不是普通文件。",
+                "请恢复普通文件后重试。",
+                logical_path,
+            )
 
     def _validate_source(self, source: JobDemoSource) -> None:
         try:
@@ -509,6 +1146,12 @@ class FileSystemJobRepository:
 
     def _read_identity_document(self, path: Path, *, logical_path: str, parser):
         try:
+            self._assert_safe_regular(
+                path,
+                logical_path=logical_path,
+                missing_code="job_manifest_invalid",
+                invalid_code="job_manifest_invalid",
+            )
             return read_strict_json(path, logical_path=logical_path, parser=parser)
         except JobRepositoryError as exc:
             if exc.code == "job_schema_unsupported":
