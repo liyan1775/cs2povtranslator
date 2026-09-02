@@ -719,6 +719,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
+from cs2pov.storage.cross_process_lock import CrossProcessFileLock
 from cs2pov.storage.demo_asset_repository import FileSystemDemoAssetRepository
 from cs2pov.storage.job_repository import FileSystemJobRepository
 from cs2pov.workspace.paths import WorkspacePaths
@@ -726,8 +727,29 @@ from cs2pov.workspace.paths import WorkspacePaths
 root, entered = sys.argv[1:]
 paths = WorkspacePaths(Path(root))
 clock = lambda: datetime(2026, 8, 31, 16, 0, 0, 10, tzinfo=timezone.utc)
-repository = FileSystemJobRepository(paths, FileSystemDemoAssetRepository(paths), clock=clock)
-Path(entered).write_text("attempting", encoding="ascii")
+
+class SignalingLockFactory:
+    @classmethod
+    def open_existing(cls, path, *, timeout_ms):
+        inner = CrossProcessFileLock.open_existing(path, timeout_ms=timeout_ms)
+        class Context:
+            def __enter__(self):
+                Path(entered).write_text("attempting", encoding="ascii")
+                return inner.__enter__()
+            def __exit__(self, exc_type, exc, traceback):
+                return inner.__exit__(exc_type, exc, traceback)
+        return Context()
+
+    @classmethod
+    def bootstrap_for_write(cls, path, *, timeout_ms):
+        return CrossProcessFileLock.bootstrap_for_write(path, timeout_ms=timeout_ms)
+
+repository = FileSystemJobRepository(
+    paths,
+    FileSystemDemoAssetRepository(paths),
+    clock=clock,
+    lock_factory=SignalingLockFactory,
+)
 session = repository.acquire_write("job-claim", lease_us=10_000_000)
 print(session.claim.run_id, flush=True)
 """
