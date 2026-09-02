@@ -1,0 +1,300 @@
+import multiprocessing
+import time
+
+import pytest
+
+from cs2pov.storage.cross_process_lock import CrossProcessFileLock
+from cs2pov.storage.job_errors import JobRepositoryError
+
+
+def _lock_worker(path, queue):
+    try:
+        with CrossProcessFileLock.open_existing(path, timeout_ms=1000):
+            queue.put("entered")
+            time.sleep(0.15)
+    except JobRepositoryError as exc:
+        queue.put(exc.code)
+
+
+def _lock_race_worker(path, queue):
+    try:
+        with CrossProcessFileLock.open_existing(path, timeout_ms=1500):
+            queue.put("entered")
+    except JobRepositoryError as exc:
+        queue.put(exc.code)
+
+
+def _bootstrap_worker(path, queue):
+    with CrossProcessFileLock.bootstrap_for_write(path, timeout_ms=3000):
+        queue.put(time.monotonic())
+        time.sleep(0.15)
+
+
+def _crash_worker(path, ready):
+    with CrossProcessFileLock.open_existing(path, timeout_ms=1000):
+        ready.set()
+        __import__("os")._exit(7)
+
+
+def _timeout_worker(path, queue):
+    try:
+        with CrossProcessFileLock.open_existing(path, timeout_ms=50):
+            queue.put("entered")
+    except JobRepositoryError as exc:
+        queue.put(exc.code)
+
+
+def test_lock_requires_existing_regular_nonempty_file(tmp_path):
+    p = tmp_path / "lock"
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(p, timeout_ms=10):
+            pass
+    assert not p.exists()
+    p.touch()
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(p, timeout_ms=10):
+            pass
+    p.write_bytes(b"0")
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        assert p.exists()
+
+
+def test_lock_rejects_directory_and_file_symlink_targets(tmp_path):
+    directory = tmp_path / "lock-dir"
+    directory.mkdir()
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(directory, timeout_ms=10):
+            pass
+
+    target = tmp_path / "target.lock"
+    target.write_bytes(b"0")
+    link = tmp_path / "linked.lock"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink privileges unavailable")
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(link, timeout_ms=10):
+            pass
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows junction semantics")
+def test_lock_bootstrap_rejects_junction_parent_without_writing_outside(tmp_path):
+    import subprocess
+
+    outside = tmp_path.parent / f"lock-junction-{tmp_path.name}"
+    outside.mkdir()
+    junction = tmp_path / "linked-dir"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"mklink /J unavailable: {result.stderr.strip() or result.stdout.strip()}")
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.bootstrap_for_write(
+            junction / ".repository.lock", timeout_ms=100
+        ):
+            pass
+    assert not (outside / ".repository.lock").exists()
+
+
+def test_lock_rechecks_parent_chain_after_open_before_acquire(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    from pathlib import Path
+
+    import cs2pov.storage.cross_process_lock as module
+
+    job_root = tmp_path / "job"
+    events_dir = job_root / "events"
+    events_dir.mkdir(parents=True)
+    lock_path = events_dir / ".write.lock"
+    lock_path.write_bytes(b"0")
+    outside = tmp_path / "outside-events"
+    outside.mkdir()
+    (outside / ".write.lock").write_bytes(b"0")
+    pending_link = tmp_path / "pending-events-link"
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(pending_link), str(outside)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"mklink /J unavailable: {result.stderr or result.stdout}"
+            )
+    else:
+        pending_link.symlink_to(outside, target_is_directory=True)
+
+    real_open = module.os.open
+    real_acquire = module._LockedContext._acquire
+    swapped = False
+    acquire_attempted = False
+
+    def swap_parent_at_open(path, *args, **kwargs):
+        nonlocal swapped
+        if Path(path) == lock_path and not swapped:
+            swapped = True
+            events_dir.rename(job_root / "events-original")
+            pending_link.rename(events_dir)
+        return real_open(path, *args, **kwargs)
+
+    def record_acquire(self):
+        nonlocal acquire_attempted
+        acquire_attempted = True
+        return real_acquire(self)
+
+    monkeypatch.setattr(module.os, "open", swap_parent_at_open)
+    monkeypatch.setattr(module._LockedContext, "_acquire", record_acquire)
+
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(lock_path, timeout_ms=100):
+            pass
+
+    assert swapped
+    assert not acquire_attempted
+
+
+def test_lock_releases_after_normal_context_exit(tmp_path):
+    p = tmp_path / "normal-release.lock"
+    p.write_bytes(b"0")
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        pass
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        pass
+
+
+def test_lock_is_non_reentrant(tmp_path):
+    p = tmp_path / "lock"
+    p.write_bytes(b"0")
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        with pytest.raises(JobRepositoryError):
+            with CrossProcessFileLock.open_existing(p, timeout_ms=10):
+                pass
+
+
+def test_lock_rejects_bool_timeout_and_bootstraps_zero_length_same_path(tmp_path):
+    p = tmp_path / "lock"
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.bootstrap_for_write(p, timeout_ms=True):
+            pass
+    p.touch()
+    with CrossProcessFileLock.bootstrap_for_write(p, timeout_ms=100):
+        assert p.stat().st_size == 1
+
+
+def test_two_processes_cannot_enter_lock_critical_section_together(tmp_path):
+    p = tmp_path / "lock"
+    p.write_bytes(b"0")
+    queue = multiprocessing.get_context("spawn").Queue()
+    first = multiprocessing.get_context("spawn").Process(target=_lock_worker, args=(p, queue))
+    second = multiprocessing.get_context("spawn").Process(target=_lock_worker, args=(p, queue))
+    first.start()
+    assert queue.get(timeout=3) == "entered"
+    second.start()
+    result = queue.get(timeout=3)
+    first.join(3)
+    second.join(3)
+    assert result == "entered"
+    assert first.exitcode == 0 and second.exitcode == 0
+
+
+def test_path_replacement_during_descriptor_validation_maps_interrupted(tmp_path, monkeypatch):
+    p = tmp_path / "lock"
+    p.write_bytes(b"0")
+    original = __import__("os").lstat
+    def fail_lstat(path):
+        if str(path) == str(p):
+            raise OSError("injected pathname race")
+        return original(path)
+    monkeypatch.setattr("cs2pov.storage.cross_process_lock.os.lstat", fail_lstat)
+    with pytest.raises(JobRepositoryError) as exc:
+        with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+            pass
+    assert exc.value.code == "job_write_interrupted"
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX inode race semantics")
+@pytest.mark.parametrize("race", ["unlink", "replace"])
+def test_child_waiting_lock_detects_path_unlink_or_replacement(tmp_path, race):
+    import os
+    p = tmp_path / "lock"
+    p.write_bytes(b"0")
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    child = ctx.Process(target=_lock_race_worker, args=(p, queue))
+    with CrossProcessFileLock.open_existing(p, timeout_ms=1000):
+        child.start()
+        time.sleep(0.2)
+        if race == "unlink":
+            p.unlink()
+        else:
+            replacement = tmp_path / "replacement"
+            replacement.write_bytes(b"1")
+            os.replace(replacement, p)
+    result = queue.get(timeout=3)
+    child.join(3)
+    assert result == "job_write_interrupted"
+    assert child.exitcode == 0
+
+
+def test_absent_lock_bootstrap_is_single_file_and_serialized(tmp_path):
+    p = tmp_path / "absent.lock"
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    children = [ctx.Process(target=_bootstrap_worker, args=(p, queue)) for _ in range(2)]
+    for child in children:
+        child.start()
+    entered = sorted(queue.get(timeout=5) for _ in children)
+    for child in children:
+        child.join(5)
+    assert p.exists() and p.stat().st_size == 1
+    assert entered[1] - entered[0] >= 0.10
+    assert all(child.exitcode == 0 for child in children)
+
+
+def test_bootstrap_initializes_same_descriptor_before_locking(tmp_path, monkeypatch):
+    import cs2pov.storage.cross_process_lock as module
+    p = tmp_path / "bootstrap-order.lock"
+    observed = []
+    original = module._LockedContext._acquire
+
+    def observe_acquire(self):
+        observed.append(__import__("os").fstat(self.file.fileno()).st_size)
+        return original(self)
+
+    monkeypatch.setattr(module._LockedContext, "_acquire", observe_acquire)
+    with CrossProcessFileLock.bootstrap_for_write(p, timeout_ms=1000):
+        pass
+    assert observed == [1]
+
+
+def test_lock_releases_after_abnormal_process_exit(tmp_path):
+    p = tmp_path / "crash.lock"
+    p.write_bytes(b"0")
+    ctx = multiprocessing.get_context("spawn")
+    ready = ctx.Event()
+    child = ctx.Process(target=_crash_worker, args=(p, ready))
+    child.start()
+    assert ready.wait(3)
+    child.join(3)
+    assert child.exitcode == 7
+    with CrossProcessFileLock.open_existing(p, timeout_ms=1000):
+        pass
+
+
+def test_held_lock_times_out_as_busy(tmp_path):
+    p = tmp_path / "timeout.lock"
+    p.write_bytes(b"0")
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    with CrossProcessFileLock.open_existing(p, timeout_ms=1000):
+        child = ctx.Process(target=_timeout_worker, args=(p, queue))
+        child.start()
+        assert queue.get(timeout=3) == "job_write_busy"
+    child.join(3)
+    assert child.exitcode == 0

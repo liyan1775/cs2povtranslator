@@ -35,3 +35,15 @@ python scripts/check_golden_baseline.py --local-fixture "authorized-demo-anubis-
 `structured_timeline_v1.json` 仍是冻结的 v0.9.8 基线；`new_domain_contract_v1.json`
 校验当前版本的新领域契约。后者不是旧版输出等价性的证明，不得作为 legacy
 输出等价来介绍。
+
+`new_job_repository_v1.json` 在 02A 三回合契约之上固定新版 Job 仓储的 marker、
+manifest、Demo 引用、模型/语言/复核 shard、事件和最终字幕哈希。它由以下命令在
+真实的“第一天生产者进程 → 第二天消费者进程”中重放：
+
+```powershell
+py -3.12 scripts/check_new_job_repository.py
+```
+
+该夹具只证明同一新版程序族创建的较早 Job 可以只读打开；不承诺 v0.x 或跨版本
+兼容。夹具只含匿名 ID、相对逻辑路径和合成文本，不含真实 Demo、绝对路径、用户
+标识、SteamID、URL、API Key 或需要联网的模型。

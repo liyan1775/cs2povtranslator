@@ -12,6 +12,7 @@ from .schema import (
     require_current_schema,
     require_exact_keys,
     require_identifier,
+    require_path_identifier,
     require_mapping,
     require_optional_str,
     require_sha256,
@@ -44,6 +45,18 @@ def _timestamp(value: object) -> str:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         _error("review_decision_invalid", "reviewed_at")
     return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _strict_timestamp(value: object, path: str) -> str:
+    import re
+
+    if not isinstance(value, str) or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", value) is None:
+        raise DomainSchemaError("domain_field_invalid", "时间必须是带 6 位微秒的 UTC 时间。", "请修正后重试。", path)
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as exc:
+        raise DomainSchemaError("domain_field_invalid", "时间无效。", "请修正后重试。", path) from exc
+    return value
 
 
 class ReviewAction(Enum):
@@ -181,6 +194,103 @@ class ReviewDecision:
                 d["revised_interpreted_source"], "revised_interpreted_source"
             ),
             require_optional_str(d["revised_translated_zh"], "revised_translated_zh"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewRevisionManifest:
+    review_id: str
+    source_draft_fingerprint: str
+    created_at: str
+    round_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        require_path_identifier(self.review_id, "review_id")
+        require_sha256(self.source_draft_fingerprint, "source_draft_fingerprint")
+        object.__setattr__(self, "created_at", _strict_timestamp(self.created_at, "created_at"))
+        if not isinstance(self.round_ids, (tuple, list)):
+            _error("domain_field_invalid", "round_ids")
+        ids = tuple(require_path_identifier(x, "round_ids[]") for x in self.round_ids)
+        if len({x.casefold() for x in ids}) != len(ids):
+            _error("domain_field_invalid", "round_ids")
+        object.__setattr__(self, "round_ids", ids)
+        reject_private_data(self.to_dict(), "review_revision")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "review_id": self.review_id,
+            "source_draft_fingerprint": self.source_draft_fingerprint,
+            "created_at": self.created_at,
+            "round_ids": list(self.round_ids),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "ReviewRevisionManifest":
+        d = require_mapping(value, "review_revision")
+        reject_private_data(d, "review_revision")
+        require_current_schema(d, "review_revision")
+        require_exact_keys(
+            d,
+            {"schema_version", "review_id", "source_draft_fingerprint", "created_at", "round_ids"},
+            set(),
+            "review_revision",
+        )
+        if not isinstance(d["round_ids"], (list, tuple)):
+            _error("domain_field_invalid", "round_ids")
+        return cls(d["review_id"], d["source_draft_fingerprint"], d["created_at"], tuple(d["round_ids"]))
+
+
+@dataclass(frozen=True, slots=True)
+class RoundReviewDocument:
+    review_id: str
+    round_id: str
+    source_draft_fingerprint: str
+    decisions: tuple[ReviewDecision, ...]
+
+    def __post_init__(self) -> None:
+        require_path_identifier(self.review_id, "review_id")
+        require_path_identifier(self.round_id, "round_id")
+        require_sha256(self.source_draft_fingerprint, "source_draft_fingerprint")
+        if not isinstance(self.decisions, (tuple, list)):
+            _error("domain_field_invalid", "decisions")
+        decisions = tuple(self.decisions)
+        if any(not isinstance(d, ReviewDecision) for d in decisions):
+            _error("review_decision_invalid", "decisions")
+        if len({d.decision_id.casefold() for d in decisions}) != len(decisions):
+            _error("review_decision_invalid", "decisions")
+        if len({d.cue_id.casefold() for d in decisions}) != len(decisions):
+            _error("review_decision_invalid", "decisions")
+        object.__setattr__(self, "decisions", decisions)
+        reject_private_data(self.to_dict(), "round_review")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "review_id": self.review_id,
+            "round_id": self.round_id,
+            "source_draft_fingerprint": self.source_draft_fingerprint,
+            "decisions": [d.to_dict() for d in self.decisions],
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> "RoundReviewDocument":
+        d = require_mapping(value, "round_review")
+        reject_private_data(d, "round_review")
+        require_current_schema(d, "round_review")
+        require_exact_keys(
+            d,
+            {"schema_version", "review_id", "round_id", "source_draft_fingerprint", "decisions"},
+            set(),
+            "round_review",
+        )
+        if not isinstance(d["decisions"], (list, tuple)):
+            _error("domain_field_invalid", "decisions")
+        return cls(
+            d["review_id"],
+            d["round_id"],
+            d["source_draft_fingerprint"],
+            tuple(ReviewDecision.from_dict(item) for item in d["decisions"]),
         )
 
 

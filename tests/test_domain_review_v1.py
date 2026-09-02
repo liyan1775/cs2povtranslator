@@ -9,6 +9,8 @@ from cs2pov.domain.review import (
     DraftCommsTimeline,
     ReviewAction,
     ReviewDecision,
+    ReviewRevisionManifest,
+    RoundReviewDocument,
     ReviewedCommsCue,
     ReviewedCommsTimeline,
     compose_reviewed_timeline,
@@ -63,7 +65,7 @@ def _decision(
 ) -> ReviewDecision:
     return ReviewDecision(
         kwargs.pop("decision_id", "decision-001"),
-        draft.cue_id,
+        kwargs.pop("cue_id", draft.cue_id),
         draft.understanding_result_fingerprint,
         action,
         kwargs.pop("reviewed_at", "2026-08-31T12:00:00+00:00"),
@@ -373,3 +375,87 @@ def test_reviewed_cue_enforces_bounded_demo_time_direct_and_from_dict() -> None:
     payload["start_us"] = MAX_DEMO_TIME_US + 1
     with pytest.raises(DomainSchemaError):
         ReviewedCommsCue.from_dict(payload)
+def test_review_revision_requires_canonical_utc_timestamp_and_typed_round_ids():
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00+00:00", ("round-1",))
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", (True,))
+    document = RoundReviewDocument("review-1", "round-1", "a" * 64, (_decision(_draft()),))
+    assert RoundReviewDocument.from_dict(document.to_dict()) == document
+
+
+@pytest.mark.parametrize("timestamp", [
+    "2026-08-31T16:00:00Z",
+    "2026-08-31T16:00:00.1Z",
+    "2026-08-31T16:00:00.1234567Z",
+    "2026-08-31T16:00:00.000000+00:00",
+    "2026-08-31T16:00:00.000000+08:00",
+])
+def test_review_revision_rejects_noncanonical_timestamp_variants(timestamp):
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, timestamp, ("round-1",))
+
+
+def test_review_revision_and_round_document_reject_exact_key_and_casefold_collisions():
+    revision = ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", ("round-1",))
+    payload = revision.to_dict()
+    payload["extra"] = True
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest.from_dict(payload)
+    first = _decision(_draft(), decision_id="decision-1")
+    second = _decision(_draft(), decision_id="decision-2")
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument("review-1", "round-1", "a" * 64, (first, second))
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", ("https://private",))
+
+
+def test_review_revision_and_round_document_to_dict_are_detached_and_reject_root_extra_keys():
+    revision = ReviewRevisionManifest("review-1", "a" * 64, "2026-08-31T16:00:00.000000Z", ("round-1",))
+    revision_payload = revision.to_dict()
+    revision_payload["round_ids"].append("round-2")
+    assert revision.round_ids == ("round-1",)
+    first = _decision(_draft(), decision_id="decision-1")
+    document = RoundReviewDocument("review-1", "round-1", "a" * 64, (first,))
+    document_payload = document.to_dict()
+    document_payload["decisions"][0]["reason"] = "changed"
+    assert document.decisions[0].reason is None
+    document_payload["extra"] = True
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument.from_dict(document_payload)
+
+    nested_payload = document.to_dict()
+    nested_payload["decisions"][0]["extra"] = True
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument.from_dict(nested_payload)
+
+
+@pytest.mark.parametrize(
+    "review_id, round_id",
+    [
+        ("REVIEW-1", "round-1"),
+        ("review-1", "ROUND-1"),
+        ("../review", "round-1"),
+        ("review-1", "../round"),
+    ],
+)
+def test_review_revision_and_round_document_reject_unsafe_path_ids(review_id, round_id):
+    with pytest.raises(DomainSchemaError):
+        ReviewRevisionManifest(
+            review_id,
+            "a" * 64,
+            "2026-08-31T16:00:00.000000Z",
+            (round_id,),
+        )
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument(review_id, round_id, "a" * 64, ())
+
+
+def test_round_review_document_checks_decision_and_cue_collisions_independently():
+    draft = _draft()
+    first = _decision(draft, decision_id="decision-1")
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument("review-1", "round-1", "a" * 64, (first, _decision(draft, decision_id="DECISION-1")))
+    second_draft = _draft("cue-second")
+    with pytest.raises(DomainSchemaError):
+        RoundReviewDocument("review-1", "round-1", "a" * 64, (first, _decision(second_draft, decision_id="decision-2", cue_id="CUE-B-CALLOUT")))
