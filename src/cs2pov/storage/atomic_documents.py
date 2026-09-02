@@ -198,6 +198,10 @@ def _read_verified_bytes(path: Path, logical_path: str) -> bytes:
         raise _repo_error("job_shard_invalid", "无法打开 Job 文档。", logical_path, exc) from exc
     try:
         opened = os.fstat(fd)
+        # A parent can be replaced after the pre-open validation.  Recheck the
+        # complete chain while the descriptor is pinned and before consuming
+        # any bytes; if the open crossed a new junction/symlink, fail closed.
+        _validate_parent(path, logical_path)
         current = os.lstat(path)
         if _is_link_or_reparse(current) or not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
             raise _repo_error("job_shard_invalid", "Job 文档在读取期间发生变化。", logical_path)

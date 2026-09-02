@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -81,6 +82,74 @@ def test_strict_json_rejects_file_symlink(tmp_path):
     with pytest.raises(JobRepositoryError) as exc:
         read_strict_json(link, logical_path="link.json", parser=parser)
     assert exc.value.code == "job_shard_invalid"
+
+
+def test_strict_json_rechecks_parent_chain_after_open_before_read(
+    tmp_path, monkeypatch
+):
+    import os
+    import subprocess
+    import cs2pov.storage.atomic_documents as module
+
+    job_root = tmp_path / "job"
+    source_dir = job_root / "source"
+    source_dir.mkdir(parents=True)
+    target = source_dir / "demo_ref.json"
+    target.write_text('{"schema_version":1,"value":"inside"}\n', encoding="utf-8")
+    outside = tmp_path / "outside-source"
+    outside.mkdir()
+    (outside / "demo_ref.json").write_text(
+        '{"schema_version":1,"value":"honey"}\n', encoding="utf-8"
+    )
+    pending_link = tmp_path / "pending-source-link"
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(pending_link), str(outside)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"mklink /J unavailable: {result.stderr or result.stdout}"
+            )
+    else:
+        pending_link.symlink_to(outside, target_is_directory=True)
+
+    real_open = module.os.open
+    real_read = module.os.read
+    swapped = False
+    opened_descriptor = None
+    outside_bytes_read = False
+
+    def swap_parent_at_open(path, *args, **kwargs):
+        nonlocal swapped, opened_descriptor
+        if Path(path) == target and not swapped:
+            swapped = True
+            source_dir.rename(job_root / "source-original")
+            pending_link.rename(source_dir)
+            opened_descriptor = real_open(path, *args, **kwargs)
+            return opened_descriptor
+        return real_open(path, *args, **kwargs)
+
+    def record_read(descriptor, *args, **kwargs):
+        nonlocal outside_bytes_read
+        if descriptor == opened_descriptor:
+            outside_bytes_read = True
+        return real_read(descriptor, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", swap_parent_at_open)
+    monkeypatch.setattr(module.os, "read", record_read)
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        read_strict_json(
+            target,
+            logical_path="source/demo_ref.json",
+            parser=lambda value: value,
+        )
+
+    assert exc_info.value.code == "job_path_escape"
+    assert swapped
+    assert not outside_bytes_read
 
 
 def test_atomic_json_validates_before_write_and_preserves_old_bytes(tmp_path):
