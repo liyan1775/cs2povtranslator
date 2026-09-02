@@ -445,7 +445,22 @@ class FileSystemJobRepository:
                 continue
             try:
                 child_state = child.stat(follow_symlinks=False)
-            except OSError:
+            except OSError as exc:
+                entries.append(
+                    self._entry_from_parts(
+                        discovery_id,
+                        None,
+                        (
+                            _repository_error(
+                                "job_path_escape",
+                                "无法安全检查候选 Job 目录。",
+                                "请检查该 Job 的目录权限和文件系统状态。",
+                                None,
+                                exc,
+                            ).to_issue(),
+                        ),
+                    )
+                )
                 continue
             if _is_link_or_reparse(child_state):
                 entries.append(

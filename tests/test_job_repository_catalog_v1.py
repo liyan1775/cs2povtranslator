@@ -210,6 +210,43 @@ def test_list_jobs_isolates_marker_lstat_failure_from_healthy_sibling(tmp_path, 
     }
 
 
+def test_list_jobs_keeps_candidate_visible_when_direntry_stat_fails(tmp_path, monkeypatch):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-healthy", 10)
+    _create(workspace, demo_assets, source, "job-unreadable", 11)
+    import cs2pov.storage.job_repository as job_repository
+
+    real_scandir = job_repository.os.scandir
+    root_entries = tuple(real_scandir(workspace.jobs_dir))
+
+    class UnreadableEntry:
+        def __init__(self, entry):
+            self.name = entry.name
+            self.path = entry.path
+
+        def stat(self, *, follow_symlinks=True):
+            raise PermissionError("injected candidate stat failure")
+
+    def injected_scandir(path):
+        if Path(path) == workspace.jobs_dir:
+            return iter(
+                UnreadableEntry(entry) if entry.name == "job-unreadable" else entry
+                for entry in root_entries
+            )
+        return real_scandir(path)
+
+    monkeypatch.setattr(job_repository.os, "scandir", injected_scandir)
+
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+
+    by_id = {entry.discovery_id: entry for entry in entries}
+    assert by_id["job-healthy"].healthy
+    assert not by_id["job-unreadable"].healthy
+    assert {issue.code for issue in by_id["job-unreadable"].issues} == {
+        "job_path_escape"
+    }
+
+
 def test_inspect_job_maps_directory_lstat_failure_to_nonthrowing_diagnostic(tmp_path, monkeypatch):
     workspace, demo_assets, source = _seed(tmp_path)
     _create(workspace, demo_assets, source, "job-io-failure", 10)
