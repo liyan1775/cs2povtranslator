@@ -294,7 +294,10 @@ def atomic_write_json(path: Path, value, *, logical_path: str, serializer: Calla
     staging = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     replaced = False
     try:
-        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        fd = os.open(staging, flags, 0o600)
         try:
             _write_all(fd, payload)
             os.fsync(fd)
@@ -391,7 +394,10 @@ def atomic_write_bytes(path: Path, payload: bytes, *, logical_path: str):
     staging = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
     replaced = False
     try:
-        fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_BINARY"):
+            flags |= os.O_BINARY
+        fd = os.open(staging, flags, 0o600)
         try:
             _write_all(fd, payload)
             os.fsync(fd)

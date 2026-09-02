@@ -6,6 +6,7 @@ from cs2pov.storage.atomic_documents import (
     SchemaClassification,
     SchemaExpectation,
     SchemaAwareParser,
+    atomic_write_bytes,
     atomic_write_json,
     atomic_write_jsonl,
     classify_schema_versions,
@@ -89,8 +90,18 @@ def test_atomic_json_validates_before_write_and_preserves_old_bytes(tmp_path):
         atomic_write_json(p, {"schema_version": 1, "bad": object()}, logical_path="doc.json", serializer=lambda x: x, parser=parser)
     assert p.read_bytes() == b'{"schema_version":1,"old":true}\n'
     atomic_write_json(p, {"schema_version": 1, "text": "中文"}, logical_path="doc.json", serializer=lambda x: x, parser=parser)
+    assert b"\r\n" not in p.read_bytes()
     assert p.read_text(encoding="utf-8").endswith("\n")
     assert "中文" in p.read_text(encoding="utf-8")
+
+
+def test_atomic_bytes_preserves_lf_bytes_exactly(tmp_path):
+    target = tmp_path / "subtitle.srt"
+    payload = "one\ntwo 中文\n".encode("utf-8")
+
+    atomic_write_bytes(target, payload, logical_path="final/subtitles/subtitle.srt")
+
+    assert target.read_bytes() == payload
 
 
 def test_jsonl_incomplete_tail(tmp_path):
