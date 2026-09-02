@@ -17,6 +17,7 @@ from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.domain.job import (
     CreateJobRequest,
     FinalArtifactKind,
+    JobEvent,
     JobDemoSource,
     JobCatalogEntry,
     JobInspection,
@@ -61,6 +62,7 @@ from cs2pov.workspace.errors import WorkspacePathOutsideRootError
 from cs2pov.workspace.paths import WorkspacePaths
 
 from .atomic_documents import (
+    append_jsonl_record,
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_jsonl,
@@ -70,6 +72,12 @@ from .atomic_documents import (
 )
 from .cross_process_lock import CrossProcessFileLock
 from .job_claim import CLAIM_INITIALIZATION_GRACE_US, JobWriteSession
+from .job_events import (
+    EVENT_LOGICAL_PATH,
+    JOB_EVENT_PARSER,
+    EventJournalRead,
+    read_event_journal,
+)
 from .job_shards import (
     DEMO_DESCRIPTOR_PARSER,
     DRAFT_TIMELINE_PARSER,
@@ -1689,6 +1697,63 @@ class FileSystemJobRepository:
             )
             return CompleteDomainGraph(language, draft, active, reviewed)
 
+    def append_event(
+        self,
+        job_id: str,
+        event: JobEvent,
+        claim: JobWriteClaim,
+    ) -> None:
+        if type(event) is not JobEvent:
+            raise self._invalid_shard_input(
+                "Job 事件无效。", EVENT_LOGICAL_PATH
+            )
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            active, _ = self._verify_claim_locked(paths, claim)
+            if event.job_id != job_id or event.run_id != active.run_id:
+                raise self._invalid_shard_input(
+                    "Job 事件与当前 Job 或写入会话身份不一致。",
+                    EVENT_LOGICAL_PATH,
+                )
+            current = read_event_journal(
+                paths.event_journal,
+                expected_job_id=job_id,
+            )
+            if current.incomplete_tail:
+                raise self._invalid_shard_input(
+                    "事件日志存在不完整末行，不能继续追加。",
+                    EVENT_LOGICAL_PATH,
+                )
+            if event.event_id in {value.event_id for value in current.events}:
+                raise self._invalid_shard_input(
+                    "事件 ID 已存在，未重复追加。",
+                    EVENT_LOGICAL_PATH,
+                )
+            append_jsonl_record(
+                paths.event_journal,
+                event,
+                logical_path=EVENT_LOGICAL_PATH,
+                serializer=lambda value: value.to_dict(),
+                parser=JOB_EVENT_PARSER,
+            )
+
+    def read_events(self, job_id: str) -> EventJournalRead:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            return read_event_journal(
+                paths.event_journal,
+                expected_job_id=opened.manifest.job_id,
+            )
+
     def _heartbeat_write(
         self, job_id: str, claim: JobWriteClaim
     ) -> JobWriteClaim:
@@ -2426,6 +2491,7 @@ class FileSystemJobRepository:
             return JobInspection(entry, None, None, None, (), False)
 
         issues: list[JobIssue] = []
+        event_read = EventJournalRead((), False, ())
         marker = self._inspect_document(
             paths.repository_marker,
             logical_path="repository.json",
@@ -2520,6 +2586,16 @@ class FileSystemJobRepository:
                         self._append_issue(issues, issue)
                     for issue in self._inspect_review_shards(paths, manifest):
                         self._append_issue(issues, issue)
+                    try:
+                        event_read = read_event_journal(
+                            paths.event_journal,
+                            expected_job_id=manifest.job_id,
+                        )
+                    except JobRepositoryError as exc:
+                        self._append_issue(issues, exc.to_issue())
+                    else:
+                        for issue in event_read.issues:
+                            self._append_issue(issues, issue)
             except JobRepositoryError as exc:
                 self._append_issue(issues, exc.to_issue())
         else:
@@ -2567,7 +2643,14 @@ class FileSystemJobRepository:
             marker=marker,
             effective_run_status=effective_run_status,
         )
-        return JobInspection(entry, marker, manifest, source, (), False)
+        return JobInspection(
+            entry,
+            marker,
+            manifest,
+            source,
+            event_read.events,
+            event_read.incomplete_tail,
+        )
 
     def _invalid_shard_input(
         self,
