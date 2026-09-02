@@ -100,6 +100,64 @@ def test_lock_bootstrap_rejects_junction_parent_without_writing_outside(tmp_path
     assert not (outside / ".repository.lock").exists()
 
 
+def test_lock_rechecks_parent_chain_after_open_before_acquire(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    from pathlib import Path
+
+    import cs2pov.storage.cross_process_lock as module
+
+    job_root = tmp_path / "job"
+    events_dir = job_root / "events"
+    events_dir.mkdir(parents=True)
+    lock_path = events_dir / ".write.lock"
+    lock_path.write_bytes(b"0")
+    outside = tmp_path / "outside-events"
+    outside.mkdir()
+    (outside / ".write.lock").write_bytes(b"0")
+    pending_link = tmp_path / "pending-events-link"
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(pending_link), str(outside)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"mklink /J unavailable: {result.stderr or result.stdout}"
+            )
+    else:
+        pending_link.symlink_to(outside, target_is_directory=True)
+
+    real_open = module.os.open
+    real_acquire = module._LockedContext._acquire
+    swapped = False
+    acquire_attempted = False
+
+    def swap_parent_at_open(path, *args, **kwargs):
+        nonlocal swapped
+        if Path(path) == lock_path and not swapped:
+            swapped = True
+            events_dir.rename(job_root / "events-original")
+            pending_link.rename(events_dir)
+        return real_open(path, *args, **kwargs)
+
+    def record_acquire(self):
+        nonlocal acquire_attempted
+        acquire_attempted = True
+        return real_acquire(self)
+
+    monkeypatch.setattr(module.os, "open", swap_parent_at_open)
+    monkeypatch.setattr(module._LockedContext, "_acquire", record_acquire)
+
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(lock_path, timeout_ms=100):
+            pass
+
+    assert swapped
+    assert not acquire_attempted
+
+
 def test_lock_releases_after_normal_context_exit(tmp_path):
     p = tmp_path / "normal-release.lock"
     p.write_bytes(b"0")

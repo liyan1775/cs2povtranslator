@@ -111,6 +111,7 @@ class _LockedContext:
         return handle
 
     def _validate_descriptor(self, *, require_nonempty: bool = True) -> None:
+        self._validate_parent()
         st = os.fstat(self._file.fileno())
         attrs = getattr(st, "st_file_attributes", 0)
         reparse = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
