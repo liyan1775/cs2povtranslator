@@ -49,9 +49,64 @@ def test_lock_requires_existing_regular_nonempty_file(tmp_path):
     with pytest.raises(JobRepositoryError):
         with CrossProcessFileLock.open_existing(p, timeout_ms=10):
             pass
+    assert not p.exists()
+    p.touch()
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(p, timeout_ms=10):
+            pass
     p.write_bytes(b"0")
     with CrossProcessFileLock.open_existing(p, timeout_ms=100):
         assert p.exists()
+
+
+def test_lock_rejects_directory_and_file_symlink_targets(tmp_path):
+    directory = tmp_path / "lock-dir"
+    directory.mkdir()
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(directory, timeout_ms=10):
+            pass
+
+    target = tmp_path / "target.lock"
+    target.write_bytes(b"0")
+    link = tmp_path / "linked.lock"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlink privileges unavailable")
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.open_existing(link, timeout_ms=10):
+            pass
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="Windows junction semantics")
+def test_lock_bootstrap_rejects_junction_parent_without_writing_outside(tmp_path):
+    import subprocess
+
+    outside = tmp_path.parent / f"lock-junction-{tmp_path.name}"
+    outside.mkdir()
+    junction = tmp_path / "linked-dir"
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"mklink /J unavailable: {result.stderr.strip() or result.stdout.strip()}")
+    with pytest.raises(JobRepositoryError):
+        with CrossProcessFileLock.bootstrap_for_write(
+            junction / ".repository.lock", timeout_ms=100
+        ):
+            pass
+    assert not (outside / ".repository.lock").exists()
+
+
+def test_lock_releases_after_normal_context_exit(tmp_path):
+    p = tmp_path / "normal-release.lock"
+    p.write_bytes(b"0")
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        pass
+    with CrossProcessFileLock.open_existing(p, timeout_ms=100):
+        pass
 
 
 def test_lock_is_non_reentrant(tmp_path):
@@ -144,6 +199,22 @@ def test_absent_lock_bootstrap_is_single_file_and_serialized(tmp_path):
     assert all(child.exitcode == 0 for child in children)
 
 
+def test_bootstrap_initializes_same_descriptor_before_locking(tmp_path, monkeypatch):
+    import cs2pov.storage.cross_process_lock as module
+    p = tmp_path / "bootstrap-order.lock"
+    observed = []
+    original = module._LockedContext._acquire
+
+    def observe_acquire(self):
+        observed.append(__import__("os").fstat(self.file.fileno()).st_size)
+        return original(self)
+
+    monkeypatch.setattr(module._LockedContext, "_acquire", observe_acquire)
+    with CrossProcessFileLock.bootstrap_for_write(p, timeout_ms=1000):
+        pass
+    assert observed == [1]
+
+
 def test_lock_releases_after_abnormal_process_exit(tmp_path):
     p = tmp_path / "crash.lock"
     p.write_bytes(b"0")
@@ -158,7 +229,6 @@ def test_lock_releases_after_abnormal_process_exit(tmp_path):
         pass
 
 
-@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX timeout semantics")
 def test_held_lock_times_out_as_busy(tmp_path):
     p = tmp_path / "timeout.lock"
     p.write_bytes(b"0")

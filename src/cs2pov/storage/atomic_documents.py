@@ -4,6 +4,7 @@ import enum
 import errno
 import json
 import os
+import re
 import stat
 import sys
 import uuid
@@ -27,6 +28,9 @@ class SchemaClassification(enum.Enum):
 class SchemaExpectation:
     pointer: str
 
+    def __post_init__(self) -> None:
+        _validate_schema_pointer(self.pointer)
+
 
 @dataclass(frozen=True, slots=True)
 class SchemaAwareParser:
@@ -34,17 +38,51 @@ class SchemaAwareParser:
     expectations: tuple[SchemaExpectation | str, ...]
     invalid_code: str = "job_shard_invalid"
 
+    def __post_init__(self) -> None:
+        if not callable(self.parser):
+            raise TypeError("parser must be callable")
+        if not isinstance(self.expectations, (list, tuple)):
+            raise TypeError("expectations must be a list or tuple")
+        pointers = []
+        for expectation in self.expectations:
+            if isinstance(expectation, SchemaExpectation):
+                pointer = expectation.pointer
+            elif isinstance(expectation, str):
+                pointer = expectation
+            else:
+                raise TypeError("expectations must contain strings or SchemaExpectation")
+            _validate_schema_pointer(pointer)
+            pointers.append(pointer)
+        if not pointers:
+            raise ValueError("expectations must not be empty")
+        if "" not in pointers:
+            raise ValueError("expectations must include the root")
+        if len(set(pointers)) != len(pointers):
+            raise ValueError("expectations must not contain duplicates")
+        if self.invalid_code not in {"job_manifest_invalid", "job_shard_invalid"}:
+            raise ValueError("invalid_code is not supported")
+        object.__setattr__(self, "expectations", tuple(pointers))
+
     def __call__(self, raw: object):
-        try:
-            return self.parser(raw)
-        except DomainSchemaError as exc:
-            classification = classify_schema_versions(raw, self.expectations)
-            code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else self.invalid_code
-            raise _repo_error(code, "Job 文档校验失败。", "document", exc) from exc
+        return self.parser(raw)
 
 
-def schema_aware_parser(parser: Callable[[object], object], *, expectations: tuple[SchemaExpectation | str, ...], invalid_code: str = "job_shard_invalid") -> SchemaAwareParser:
+def schema_aware_parser(
+    parser: Callable[[object], object],
+    *,
+    expectations: list[SchemaExpectation | str] | tuple[SchemaExpectation | str, ...],
+    invalid_code: str = "job_shard_invalid",
+) -> SchemaAwareParser:
     return SchemaAwareParser(parser, expectations, invalid_code)
+
+
+def _validate_schema_pointer(pointer: object) -> None:
+    if not isinstance(pointer, str):
+        raise TypeError("schema pointer must be a string")
+    if pointer == "":
+        return
+    if re.fullmatch(r"/[A-Za-z0-9_-]+/\*", pointer) is None:
+        raise ValueError("schema pointer must be root or /segment/*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,12 +105,6 @@ def _map_exception(exc: BaseException, logical_path: str):
         code = "job_schema_unsupported" if exc.code == "domain_schema_unsupported" else "job_shard_invalid"
         return _repo_error(code, "Job 文档校验失败。", logical_path, exc)
     return _repo_error("job_shard_invalid", "Job 文档格式无效。", logical_path, exc)
-
-
-def _map_domain_error(exc: DomainSchemaError, raw: object, logical_path: str):
-    classification = classify_schema_versions(raw, ("",))
-    code = "job_schema_unsupported" if classification is SchemaClassification.UNSUPPORTED else "job_shard_invalid"
-    return _repo_error(code, "Job 文档校验失败。", logical_path, exc)
 
 
 def _invoke_parser(parser: Callable[[object], object], raw: object, logical_path: str):

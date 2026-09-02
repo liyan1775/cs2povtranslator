@@ -24,6 +24,25 @@ def source():
     return JobDemoSource(HASH, f"library/demos/{HASH}/asset.json", "match.dem")
 
 
+def valid_manifest():
+    return JobManifest(
+        "job-001",
+        "name",
+        "2026-08-31T16:00:00.000000Z",
+        "2026-08-31T16:00:00.000000Z",
+        HASH,
+        "match.dem",
+        None,
+        None,
+        JobPhase.CREATED,
+        JobRunStatus.PENDING,
+        RoundProgressSummary(0, 0, 0, 0),
+        (),
+        None,
+        (),
+    )
+
+
 def test_job_manifest_round_trips_and_fingerprint_is_order_independent():
     manifest = JobManifest(
         job_id="job-001",
@@ -151,14 +170,149 @@ def test_event_payload_is_json_only_and_private_free(payload):
 
 
 def test_job_enum_contracts_have_all_current_values():
-    assert len(JobPhase) == 19
-    assert len(JobRunStatus) == 6
-    assert len(FinalArtifactKind) == 4
-    assert len(FinalArtifactTimebase) == 2
+    assert tuple(item.value for item in JobPhase) == (
+        "created", "timeline_ready", "voice_ready", "transcribed", "context_ready",
+        "understanding_translating", "understood_translated", "draft_timeline_ready",
+        "completed_draft", "review_pending", "reviewed", "final_timeline_ready",
+        "subtitles_exported", "green_screen_rendered", "completed_without_video",
+        "ready_for_render", "rendering", "video_ready", "completed_with_video",
+    )
+    assert tuple(item.value for item in JobRunStatus) == (
+        "pending", "running", "succeeded", "failed", "cancelled", "interrupted",
+    )
+    assert tuple(item.value for item in FinalArtifactKind) == ("timeline", "subtitle", "green_screen", "video")
+    assert tuple(item.value for item in FinalArtifactTimebase) == ("demo_global", "round_local")
     with pytest.raises(ValueError):
         JobPhase("CREATED")
     with pytest.raises(ValueError):
         JobRunStatus("PENDING")
+    for enum_type, bad_value in (
+        (FinalArtifactKind, "SUBTITLE"),
+        (FinalArtifactTimebase, "DEMO_GLOBAL"),
+    ):
+        with pytest.raises(ValueError):
+            enum_type(bad_value)
+
+    manifest_payload = valid_manifest().to_dict()
+    manifest_payload["phase"] = "CREATED"
+    with pytest.raises(DomainSchemaError):
+        JobManifest.from_dict(manifest_payload)
+
+    artifact = FinalArtifactEntry(
+        "artifact-1",
+        FinalArtifactKind.SUBTITLE,
+        "final/subtitles/out.srt",
+        HASH,
+        None,
+        FinalArtifactTimebase.DEMO_GLOBAL,
+    ).to_dict()
+    artifact["kind"] = "SUBTITLE"
+    with pytest.raises(DomainSchemaError):
+        FinalArtifactEntry.from_dict(artifact)
+
+
+@pytest.mark.parametrize("field", ["total", "succeeded", "failed", "review_pending"])
+def test_round_progress_rejects_bool_for_every_integer_field(field):
+    values = {"total": 1, "succeeded": 0, "failed": 0, "review_pending": 0}
+    values[field] = True
+    with pytest.raises(DomainSchemaError):
+        RoundProgressSummary(**values)
+
+
+def test_manifest_updated_at_must_not_precede_created_at_and_to_dict_is_detached():
+    with pytest.raises(DomainSchemaError):
+        JobManifest(
+            "job-1", "name", "2026-08-31T16:00:01.000000Z", "2026-08-31T16:00:00.000000Z",
+            HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING,
+            RoundProgressSummary(0, 0, 0, 0), (), None, (),
+        )
+    manifest = JobManifest(
+        "job-1", "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z",
+        HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING,
+        RoundProgressSummary(0, 0, 0, 0), ("snap-1",), None, (),
+    )
+    payload = manifest.to_dict()
+    payload["configuration_snapshot_ids"].append("snap-2")
+    payload["round_progress"]["total"] = 100
+    assert manifest.configuration_snapshot_ids == ("snap-1",)
+    assert manifest.round_progress.total == 0
+
+
+@pytest.mark.parametrize("value", ["https://private", "/home/private", "C:/secret", "\\\\server\\secret"])
+def test_issue_message_suggestion_and_catalog_metadata_reject_private_or_invalid_values(value):
+    from cs2pov.domain.job import JobIssue
+    with pytest.raises(DomainSchemaError):
+        JobIssue("job_manifest_invalid", "error", value, value, "job.json")
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("display_name", "../private"),
+        ("demo_display_name", "../private.dem"),
+        ("demo_asset_id", "not-a-hash"),
+        ("map_name", ":bad"),
+        ("target_player_id", "../../player"),
+    ],
+)
+def test_manifest_from_dict_rejects_invalid_names_hashes_and_identifiers(field, value):
+    payload = valid_manifest().to_dict()
+    payload[field] = value
+    with pytest.raises(DomainSchemaError):
+        JobManifest.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate, parser",
+    [
+        (lambda payload: payload.update(extra=True), JobManifest.from_dict),
+        (lambda payload: payload.update(extra=True), JobRepositoryMarker.from_dict),
+        (lambda payload: payload.update(extra=True), JobDemoSource.from_dict),
+        (lambda payload: payload.update(extra=True), JobEvent.from_dict),
+        (lambda payload: payload.update(extra=True), JobWriteClaim.from_dict),
+        (lambda payload: payload.update(extra=True), FinalArtifactEntry.from_dict),
+    ],
+)
+def test_every_job_document_rejects_unknown_root_keys(mutate, parser):
+    artifact = FinalArtifactEntry(
+        "artifact-1",
+        FinalArtifactKind.SUBTITLE,
+        "final/subtitles/out.srt",
+        HASH,
+        None,
+        FinalArtifactTimebase.DEMO_GLOBAL,
+    )
+    values = {
+        JobManifest.from_dict: valid_manifest().to_dict(),
+        JobRepositoryMarker.from_dict: JobRepositoryMarker("job-001").to_dict(),
+        JobDemoSource.from_dict: source().to_dict(),
+        JobEvent.from_dict: JobEvent(
+            "event-1",
+            "job-001",
+            "run-1",
+            "2026-08-31T16:00:00.000000Z",
+            "job_created",
+            {},
+        ).to_dict(),
+        JobWriteClaim.from_dict: JobWriteClaim(
+            "job-001",
+            "run-1",
+            1,
+            "2026-08-31T16:00:00.000000Z",
+            "2026-08-31T16:00:00.000000Z",
+            "2026-08-31T16:00:30.000000Z",
+        ).to_dict(),
+        FinalArtifactEntry.from_dict: artifact.to_dict(),
+    }
+    payload = values[parser]
+    mutate(payload)
+    with pytest.raises(DomainSchemaError):
+        parser(payload)
+
+
+def test_demo_source_wraps_invalid_asset_reference_as_domain_error():
+    with pytest.raises(DomainSchemaError):
+        JobDemoSource("not-a-hash", "library/demos/not-a-hash/asset.json", "match.dem")
 
 
 def test_manifest_rejects_casefold_duplicate_paths_and_snapshot_ids():
@@ -166,9 +320,35 @@ def test_manifest_rejects_casefold_duplicate_paths_and_snapshot_ids():
         JobManifest(
             "job-1", "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z",
             HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING,
-            RoundProgressSummary(0, 0, 0, 0), ("snap-1", "SNAP-1"), None, (),
+            RoundProgressSummary(0, 0, 0, 0), ("snap-1", "snap-1"), None, (),
         )
     first = FinalArtifactEntry("artifact-1", FinalArtifactKind.SUBTITLE, "final/subtitles/file.srt", HASH, None, FinalArtifactTimebase.DEMO_GLOBAL)
     second = FinalArtifactEntry("artifact-2", FinalArtifactKind.SUBTITLE, "final/subtitles/FILE.SRT", HASH, None, FinalArtifactTimebase.DEMO_GLOBAL)
     with pytest.raises(DomainSchemaError):
         JobManifest("job-1", "name", "2026-08-31T16:00:00.000000Z", "2026-08-31T16:00:00.000000Z", HASH, "match.dem", None, None, JobPhase.CREATED, JobRunStatus.PENDING, RoundProgressSummary(0, 0, 0, 0), (), None, (first, second))
+
+    duplicate_id = FinalArtifactEntry(
+        "artifact-1",
+        FinalArtifactKind.SUBTITLE,
+        "final/subtitles/other.srt",
+        HASH,
+        None,
+        FinalArtifactTimebase.DEMO_GLOBAL,
+    )
+    with pytest.raises(DomainSchemaError):
+        JobManifest(
+            "job-1",
+            "name",
+            "2026-08-31T16:00:00.000000Z",
+            "2026-08-31T16:00:00.000000Z",
+            HASH,
+            "match.dem",
+            None,
+            None,
+            JobPhase.CREATED,
+            JobRunStatus.PENDING,
+            RoundProgressSummary(0, 0, 0, 0),
+            (),
+            None,
+            (first, duplicate_id),
+        )

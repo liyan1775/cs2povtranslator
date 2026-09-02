@@ -290,7 +290,15 @@ class JobDemoSource:
     display_name: str
 
     def __post_init__(self) -> None:
-        DemoAssetRef(self.asset_id, self.asset_manifest_relative_path)
+        try:
+            DemoAssetRef(self.asset_id, self.asset_manifest_relative_path)
+        except (TypeError, ValueError) as exc:
+            raise DomainSchemaError(
+                "domain_field_invalid",
+                "Demo 来源引用无效。",
+                "请修正后重试。",
+                "demo_source",
+            ) from exc
         _name(self.display_name, "display_name")
         reject_private_data(self.to_dict(), "demo_source")
 

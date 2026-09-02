@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from cs2pov.workspace.paths import WorkspacePaths
@@ -15,6 +17,30 @@ def test_job_paths_match_layout_and_validate_round_ids(tmp_path):
     assert paths.round_understanding("round_1") == paths.job_dir / "understanding" / "round_round_1.json"
     assert paths.review_round("review_1", "round_1").name == "round_round_1.json"
     assert paths.event_journal == paths.job_dir / "events" / "job_events.jsonl"
+    assert paths.source_dir == paths.job_dir / "source"
+    assert paths.timeline_dir == paths.job_dir / "timeline"
+    assert paths.demo_timeline == paths.timeline_dir / "demo.json"
+    assert paths.timeline_rounds == paths.timeline_dir / "rounds.json"
+    assert paths.time_anchors == paths.timeline_dir / "time_anchors.jsonl"
+    assert paths.voice_dir == paths.job_dir / "voice"
+    assert paths.voice_activities == paths.voice_dir / "activities.jsonl"
+    assert paths.models_dir == paths.job_dir / "models"
+    assert paths.snapshots_dir == paths.models_dir / "snapshots"
+    assert paths.invocations_dir == paths.models_dir / "invocations"
+    assert paths.transcript_dir == paths.job_dir / "transcript"
+    assert paths.understanding_dir == paths.job_dir / "understanding"
+    assert paths.review_dir == paths.job_dir / "review"
+    assert paths.review_revisions_dir == paths.review_dir / "revisions"
+    assert paths.tasks_dir == paths.job_dir / "tasks"
+    assert paths.events_dir == paths.job_dir / "events"
+    assert paths.write_lock == paths.events_dir / ".write.lock"
+    assert paths.writer_claim_dir == paths.events_dir / ".writer_claim"
+    assert paths.writer_claim == paths.writer_claim_dir / "claim.json"
+    assert paths.final_dir == paths.job_dir / "final"
+    assert paths.final_timelines_dir == paths.final_dir / "timelines"
+    assert paths.final_subtitles_dir == paths.final_dir / "subtitles"
+    assert paths.final_green_screen_dir == paths.final_dir / "green_screen"
+    assert paths.final_video_dir == paths.final_dir / "video"
 
 
 @pytest.mark.parametrize("value", ["../x", "A", "round.", "round ", "CON", "", True, "a\\b"])
@@ -37,12 +63,23 @@ def test_job_paths_rejects_jobs_symlink_outside_workspace(tmp_path):
         JobPaths(WorkspacePaths(tmp_path), "job-1")
 
 
-def test_job_paths_rejects_windows_junction_outside_workspace(tmp_path):
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction test")
+@pytest.mark.parametrize("outside_workspace", [False, True])
+def test_job_paths_rejects_windows_junction_inside_or_outside_workspace(tmp_path, outside_workspace):
     import subprocess
-    outside = tmp_path.parent / "junction-job-paths"
-    outside.mkdir()
+
+    target = (
+        tmp_path.parent / f"junction-job-paths-{tmp_path.name}"
+        if outside_workspace
+        else tmp_path / "actual-jobs"
+    )
+    target.mkdir()
     junction = tmp_path / "jobs"
-    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(outside)], capture_output=True, text=True)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(target)],
+        capture_output=True,
+        text=True,
+    )
     if result.returncode != 0:
         pytest.skip(f"mklink /J unavailable: {result.stderr.strip() or result.stdout.strip()}")
     with pytest.raises(Exception):
@@ -82,3 +119,18 @@ def test_job_paths_exposes_every_dynamic_shard_path(tmp_path):
     assert paths.task_round("round-1").name == "round_round-1.json"
     assert paths.final_artifact_path("final/video/movie.mp4").name == "movie.mp4"
     assert paths.final_artifact_path("final/timelines/full.json", kind=None).parent.name == "timelines"
+
+
+@pytest.mark.parametrize("bad", ["../x", "A", "round.", "round ", "CON", True])
+def test_every_dynamic_job_path_rejects_unsafe_identifiers(tmp_path, bad):
+    paths = JobPaths(WorkspacePaths(tmp_path), "job-1")
+    for factory in (
+        lambda: paths.snapshot(bad),
+        lambda: paths.task_invocations(bad),
+        lambda: paths.round_transcript(bad),
+        lambda: paths.round_understanding(bad),
+        lambda: paths.review_revision(bad),
+        lambda: paths.task_round(bad),
+    ):
+        with pytest.raises(Exception):
+            factory()
