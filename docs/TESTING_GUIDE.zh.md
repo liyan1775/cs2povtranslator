@@ -29,6 +29,30 @@ py -3.12 scripts/check_new_domain_contract.py
 
 该命令只使用仓库内匿名 JSON，不需要 CS2、GPU、模型或 API。
 
+## 新版 Job 仓储历史重放（02B）
+
+下面的命令不是几个同进程单元测试的包装。它会用生产仓储 API 在“第一天”创建
+完整三回合 Job，再启动全新的 Python 进程，在“第二天”列出并严格打开该 Job，
+读取模型/转录/理解翻译/复核/事件与最终字幕，同时对比读取前后的所有文件字节、
+mtime 和目录，证明查看没有写入：
+
+```powershell
+py -3.12 scripts/check_new_job_repository.py
+```
+
+它还用屏障同步的真实子进程验证并发创建只有一个赢家、writer claim 只有一个
+owner、过期旧 owner 不能发布、manifest 校验与原子发布处于同一把 OS 锁内；并
+验证损坏/不支持 schema 的同级 Job 被隔离、无 `repository.json` 的 v0.x 目录被
+忽略、Demo 持久源暂时不可用时已有最终字幕仍可读取。成功时只打印：
+
+```text
+new job repository replay passed
+```
+
+这里的“历史 Job”只指同一个新版程序族在更早会话或更早日期创建的 Job。当前
+明确不验收 v0.x 或跨 schema 版本加载。运行本重放不需要 CS2、GPU、模型、网络
+或 API，也尚未声称已经实现按回合翻译调度。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

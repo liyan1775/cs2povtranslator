@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "fixture_id": "new-job-repository-v1",
+  "domain_contract": {
+    "relative_path": "new_domain_contract_v1.json",
+    "sha256": "71cf0e997adadca5aed85b145f7c10fcdc245fbc0da6eef4c4c63769474d9108"
+  },
+  "source": {
+    "file_name": "fixture.dem",
+    "content_text": "synthetic-new-job-demo-v1",
+    "sha256": "5e1ac2221fb302a5bacc073d7623c1bdc53542a060f818f5cddd0f10b0f63e58"
+  },
+  "clock": {
+    "day_1": "2026-09-01T08:00:00.000000Z",
+    "configuration_1": "2026-09-01T08:00:00.000001Z",
+    "configuration_2": "2026-09-01T08:00:00.000002Z",
+    "review": "2026-09-01T08:00:00.000003Z",
+    "final": "2026-09-01T08:00:00.000004Z",
+    "day_2": "2026-09-02T08:00:00.000000Z"
+  },
+  "claims": {
+    "primary_run_id": "run-11111111111141118111111111111111",
+    "lease_us": 60000000,
+    "race_successes": 1,
+    "race_busy": 1,
+    "old_owner_result": "job_write_interrupted"
+  },
+  "job": {
+    "job_id": "job-history-001",
+    "display_name": "History Fixture",
+    "repository": {
+      "schema_version": 1,
+      "repository_kind": "cs2pov-current-job",
+      "job_id": "job-history-001"
+    },
+    "source": {
+      "schema_version": 1,
+      "asset_id": "5e1ac2221fb302a5bacc073d7623c1bdc53542a060f818f5cddd0f10b0f63e58",
+      "asset_manifest_relative_path": "library/demos/5e1ac2221fb302a5bacc073d7623c1bdc53542a060f818f5cddd0f10b0f63e58/asset.json",
+      "display_name": "fixture.dem"
+    },
+    "manifest": {
+      "schema_version": 1,
+      "job_id": "job-history-001",
+      "display_name": "History Fixture",
+      "created_at": "2026-09-01T08:00:00.000000Z",
+      "updated_at": "2026-09-01T08:00:00.000004Z",
+      "demo_asset_id": "5e1ac2221fb302a5bacc073d7623c1bdc53542a060f818f5cddd0f10b0f63e58",
+      "demo_display_name": "fixture.dem",
+      "map_name": "de_mirage",
+      "target_player_id": "player-alpha",
+      "phase": "completed_without_video",
+      "run_status": "succeeded",
+      "round_progress": {
+        "total": 3,
+        "succeeded": 3,
+        "failed": 0,
+        "review_pending": 0
+      },
+      "configuration_snapshot_ids": [
+        "asr-config-001",
+        "llm-config-001"
+      ],
+      "active_review_id": "review-001",
+      "final_artifacts": [
+        {
+          "artifact_id": "subtitle-bilingual-001",
+          "kind": "subtitle",
+          "relative_path": "final/subtitles/bilingual.srt",
+          "content_sha256": "877ae9a50d8a95f5f939864444606d30faf5a22cbbba6e8bdeb8451d9cef5938",
+          "round_id": null,
+          "timebase": "demo_global"
+        }
+      ]
+    },
+    "review": {
+      "review_id": "review-001",
+      "created_at": "2026-09-01T08:00:00.000003Z"
+    },
+    "event": {
+      "schema_version": 1,
+      "event_id": "event-completed-001",
+      "job_id": "job-history-001",
+      "run_id": "run-11111111111141118111111111111111",
+      "occurred_at": "2026-09-01T08:00:00.000004Z",
+      "event_type": "completed",
+      "payload": {
+        "round_count": 3
+      }
+    },
+    "final_artifact": {
+      "relative_path": "final/subtitles/bilingual.srt",
+      "content_text": "1\n00:00:00,750 --> 00:00:01,250\nAlpha: one jungle\nAlpha: 一人在丛林\n",
+      "sha256": "877ae9a50d8a95f5f939864444606d30faf5a22cbbba6e8bdeb8451d9cef5938"
+    }
+  },
+  "siblings": {
+    "corrupt": {
+      "job_id": "job-corrupt",
+      "marker_present": true,
+      "issue_code": "job_shard_invalid"
+    },
+    "unsupported": {
+      "job_id": "job-unsupported",
+      "marker_present": true,
+      "issue_code": "job_schema_unsupported"
+    },
+    "legacy": {
+      "job_id": "legacy-output",
+      "marker_present": false,
+      "listed": false
+    }
+  },
+  "expected": {
+    "healthy_job_id": "job-history-001",
+    "round_ids": [
+      "round-001",
+      "round-002",
+      "round-003"
+    ],
+    "configuration_snapshot_ids": [
+      "asr-config-001",
+      "llm-config-001"
+    ],
+    "invocation_ids": [
+      "asr-invoke-001",
+      "invoke-round-001",
+      "invoke-round-002"
+    ],
+    "active_review_id": "review-001",
+    "event_ids": [
+      "event-completed-001"
+    ],
+    "event_incomplete_tail": false,
+    "asr_original": "be be be",
+    "interpreted_source": "B, B, B",
+    "final_translated_zh": "B点！B点！B点！",
+    "durable_files": [
+      {
+        "logical_path": "events/.write.lock",
+        "sha256": "5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
+      },
+      {
+        "logical_path": "events/job_events.jsonl",
+        "sha256": "6c6c98dd35c0792b8caad1fa251ede0d60ac0da674569964aa02f340671d96e0"
+      },
+      {
+        "logical_path": "final/subtitles/bilingual.srt",
+        "sha256": "877ae9a50d8a95f5f939864444606d30faf5a22cbbba6e8bdeb8451d9cef5938"
+      },
+      {
+        "logical_path": "final/timelines/draft.json",
+        "sha256": "1ca8fb6a6298716a916137bbcb90dccda02432619592b5ebced4e6366c149cc4"
+      },
+      {
+        "logical_path": "final/timelines/reviewed.json",
+        "sha256": "91f179071676e0a703a6a44744d7e8c224e24a83f799ab6c2a29f39a19571a95"
+      },
+      {
+        "logical_path": "job.json",
+        "sha256": "030b38aaed358d201c8915fe5b41f2503f46536f4f4e82f136d9247eb2ab16cb"
+      },
+      {
+        "logical_path": "models/invocations/task_asr-batch-001.jsonl",
+        "sha256": "85b17d7a11e76577efe68072fc72172ec7eb26ad748747088269053f34d8785d"
+      },
+      {
+        "logical_path": "models/invocations/task_round-001.jsonl",
+        "sha256": "fabac63f23f8daa04d95d9bf41907cbe08e8fdf84a1f773329781859ee7b5c15"
+      },
+      {
+        "logical_path": "models/invocations/task_round-002.jsonl",
+        "sha256": "b7d7c77f658481be237c56ca253964382068008dc423d8f6090323f1f195bc84"
+      },
+      {
+        "logical_path": "models/snapshots/snapshot_asr-config-001.json",
+        "sha256": "e045e5f2732c25bf5d0265c68acb7b82cacf83ef7e92612457591f0fc0c7eae3"
+      },
+      {
+        "logical_path": "models/snapshots/snapshot_llm-config-001.json",
+        "sha256": "964f9f1469186625b5e4e6a983976cb55fd4f7ef4fb1fcc0f02f34bc8e7f4ed9"
+      },
+      {
+        "logical_path": "repository.json",
+        "sha256": "4a1834ecc0c9e75e120a6f70dffe7625a229539b7ea40fa3725f5e0bfa837ee6"
+      },
+      {
+        "logical_path": "review/revisions/review_review-001/revision.json",
+        "sha256": "a7ff4425d56831a2e8ec6de76495242c83ece9f4b20aaa09f758656554b5caa1"
+      },
+      {
+        "logical_path": "review/revisions/review_review-001/round_round-001.json",
+        "sha256": "2168791bfffced4d6c268161f795b71dc30ba11f1bc9f8c7db24b7bee2911066"
+      },
+      {
+        "logical_path": "review/revisions/review_review-001/round_round-002.json",
+        "sha256": "d558796c5ecfdaafc256c45106cda3787020325fef70aab822b3a4b2fa4c3909"
+      },
+      {
+        "logical_path": "review/revisions/review_review-001/round_round-003.json",
+        "sha256": "b5d97b7a9818918541a5712759d6465bb0fff1e27588eadb4de301efc9d5fae8"
+      },
+      {
+        "logical_path": "source/demo_ref.json",
+        "sha256": "db0cb91f67190e232f894bcf7e196faf4b81f19c5c097e4f0fd29bfc76679087"
+      },
+      {
+        "logical_path": "timeline/demo.json",
+        "sha256": "bb23932cf137d640cc8fdce910ec187b2bc770d10e3077d6a60fdb8ab83557d9"
+      },
+      {
+        "logical_path": "timeline/rounds.json",
+        "sha256": "16db3d4003f07b5570c45f0c8e051b2b2910708baa5baf4f2ca67c83ec23d409"
+      },
+      {
+        "logical_path": "timeline/time_anchors.jsonl",
+        "sha256": "e8de8f8655bbd6feb56900147e261f5cb8aabc830484b470aae59c9653aae1db"
+      },
+      {
+        "logical_path": "transcript/round_round-001.jsonl",
+        "sha256": "56508002c043f58a6aa2473419b47b0b38c4b56746d4a5914ee13e5445d5c9bd"
+      },
+      {
+        "logical_path": "transcript/round_round-002.jsonl",
+        "sha256": "26b78d25b737e2684f3b95a3dc7c806e3a8e5fcb4e58c8ee2f6c4869044f4d2d"
+      },
+      {
+        "logical_path": "transcript/round_round-003.jsonl",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "logical_path": "transcript/unassigned.jsonl",
+        "sha256": "7f2f0e33e1bbd5a8bea334320cf0695a89f2d8277ac136393e746eb90b3ffe65"
+      },
+      {
+        "logical_path": "understanding/round_round-001.json",
+        "sha256": "5e89548259f5344eb30f8e794ce3550ae8dd61ceeb6f28dd1dcce128fe15dc94"
+      },
+      {
+        "logical_path": "understanding/round_round-002.json",
+        "sha256": "4cd137fb827f31df6f7d99efb0a854f5644a8ea54376baf764fe89e383b28252"
+      },
+      {
+        "logical_path": "understanding/round_round-003.json",
+        "sha256": "8a99f25fc53ef16cec2b4eea8dda4ac1eb298ed6a3a5e2bcf5068ccbcb9332a3"
+      },
+      {
+        "logical_path": "voice/activities.jsonl",
+        "sha256": "b88b43bdc9d5a75dd2bc445dda7c7947265ac9a808bc9f1e22977aa1bc35a1a9"
+      }
+    ]
+  }
+}
