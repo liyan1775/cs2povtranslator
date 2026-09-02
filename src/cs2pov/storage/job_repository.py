@@ -32,6 +32,14 @@ from cs2pov.domain.invocation import (
     ModelInvocationRecord,
 )
 from cs2pov.domain.schema import require_path_identifier
+from cs2pov.domain.timeline import DemoTimeline
+from cs2pov.domain.transcript import TranscriptCue
+from cs2pov.domain.understanding import RoundUnderstandingDocument
+from cs2pov.domain.validation import (
+    validate_transcript_against_timeline,
+    validate_understanding_document_graph,
+    validate_voice_activity_against_timeline,
+)
 from cs2pov.domain.voice import VoiceActivityCue
 from cs2pov.storage.demo_asset_repository import (
     DemoAssetRepositoryError,
@@ -53,12 +61,19 @@ from .atomic_documents import (
 from .cross_process_lock import CrossProcessFileLock
 from .job_claim import CLAIM_INITIALIZATION_GRACE_US, JobWriteSession
 from .job_shards import (
+    DEMO_DESCRIPTOR_PARSER,
     MODEL_CONFIGURATION_PARSER,
     MODEL_INVOCATION_PARSER,
+    ROUND_COLLECTION_PARSER,
+    ROUND_UNDERSTANDING_PARSER,
+    TIME_ANCHOR_PARSER,
+    TRANSCRIPT_CUE_PARSER,
     VOICE_ACTIVITY_PARSER,
     canonical_task_invocations,
+    canonical_transcripts,
     canonical_voice_activities,
     require_canonical_task_invocations,
+    require_canonical_transcripts,
     require_canonical_voice_activities,
 )
 
@@ -74,6 +89,16 @@ class OpenedJob:
     source: JobDemoSource
     paths: JobPaths
     effective_run_status: JobRunStatus
+
+
+@dataclass(frozen=True, slots=True)
+class LanguageGraph:
+    timeline: DemoTimeline
+    activities: tuple[VoiceActivityCue, ...]
+    configurations: tuple[ModelConfigurationSnapshot, ...]
+    invocations: tuple[ModelInvocationRecord, ...]
+    transcripts: tuple[TranscriptCue, ...]
+    understanding_documents: tuple[RoundUnderstandingDocument, ...]
 
 
 _MARKER_PARSER = schema_aware_parser(
@@ -984,6 +1009,190 @@ class FileSystemJobRepository:
             )
         return values
 
+    def save_demo_timeline(
+        self,
+        job_id: str,
+        timeline: DemoTimeline,
+        claim: JobWriteClaim,
+    ) -> None:
+        if type(timeline) is not DemoTimeline:
+            raise self._invalid_shard_input("Demo 时间线无效。", "timeline")
+        self._validate_timeline_path_ids(timeline)
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            if timeline.descriptor.demo_asset_id != opened.manifest.demo_asset_id:
+                raise self._invalid_shard_input(
+                    "Demo 时间线引用了不同的素材。", "timeline/demo.json"
+                )
+            atomic_write_json(
+                paths.demo_timeline,
+                timeline.descriptor,
+                logical_path="timeline/demo.json",
+                serializer=lambda value: value.to_dict(),
+                parser=DEMO_DESCRIPTOR_PARSER,
+            )
+            atomic_write_json(
+                paths.timeline_rounds,
+                timeline.rounds,
+                logical_path="timeline/rounds.json",
+                serializer=lambda value: value.to_dict(),
+                parser=ROUND_COLLECTION_PARSER,
+            )
+            atomic_write_jsonl(
+                paths.time_anchors,
+                timeline.anchors,
+                logical_path="timeline/time_anchors.jsonl",
+                serializer=lambda value: value.to_dict(),
+                parser=TIME_ANCHOR_PARSER,
+            )
+
+    def load_demo_timeline(self, job_id: str) -> DemoTimeline:
+        opened = self.load_job(job_id)
+        return self._read_demo_timeline(
+            opened.paths,
+            expected_asset_id=opened.manifest.demo_asset_id,
+        )
+
+    def save_transcript_round(
+        self,
+        job_id: str,
+        round_id: str,
+        cues: tuple[TranscriptCue, ...],
+        claim: JobWriteClaim,
+    ) -> None:
+        persisted_id = self._persisted_path_id(round_id, "round_id")
+        logical_path = f"transcript/round_{persisted_id}.jsonl"
+        try:
+            canonical = canonical_transcripts(
+                cues,
+                round_id=persisted_id,
+                logical_path=logical_path,
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "回合转录文件关系无效。", logical_path, exc
+            ) from exc
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            timeline = self._read_demo_timeline(
+                paths,
+                expected_asset_id=opened.manifest.demo_asset_id,
+            )
+            if persisted_id not in {
+                value.round_id for value in timeline.rounds.rounds
+            }:
+                raise self._invalid_shard_input(
+                    "回合转录引用了未知回合。", logical_path
+                )
+            atomic_write_jsonl(
+                paths.round_transcript(persisted_id),
+                canonical,
+                logical_path=logical_path,
+                serializer=lambda value: value.to_dict(),
+                parser=TRANSCRIPT_CUE_PARSER,
+            )
+
+    def load_transcript_round(
+        self, job_id: str, round_id: str
+    ) -> tuple[TranscriptCue, ...]:
+        persisted_id = self._persisted_path_id(round_id, "round_id")
+        opened = self.load_job(job_id)
+        return self._read_transcript_file(opened.paths, persisted_id)
+
+    def save_unassigned_transcript(
+        self,
+        job_id: str,
+        cues: tuple[TranscriptCue, ...],
+        claim: JobWriteClaim,
+    ) -> None:
+        logical_path = "transcript/unassigned.jsonl"
+        try:
+            canonical = canonical_transcripts(
+                cues,
+                round_id=None,
+                logical_path=logical_path,
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "未分配转录文件关系无效。", logical_path, exc
+            ) from exc
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            atomic_write_jsonl(
+                paths.unassigned_transcript(),
+                canonical,
+                logical_path=logical_path,
+                serializer=lambda value: value.to_dict(),
+                parser=TRANSCRIPT_CUE_PARSER,
+            )
+
+    def load_unassigned_transcript(
+        self, job_id: str
+    ) -> tuple[TranscriptCue, ...]:
+        opened = self.load_job(job_id)
+        return self._read_unassigned_transcript(opened.paths, required=True)
+
+    def save_round_understanding(
+        self,
+        job_id: str,
+        document: RoundUnderstandingDocument,
+        claim: JobWriteClaim,
+    ) -> None:
+        if type(document) is not RoundUnderstandingDocument:
+            raise self._invalid_shard_input(
+                "理解翻译文档无效。", "understanding"
+            )
+        round_id = self._persisted_path_id(document.round_id, "round_id")
+        logical_path = f"understanding/round_{round_id}.json"
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            atomic_write_json(
+                paths.round_understanding(round_id),
+                document,
+                logical_path=logical_path,
+                serializer=lambda value: value.to_dict(),
+                parser=ROUND_UNDERSTANDING_PARSER,
+            )
+
+    def load_round_understanding(
+        self, job_id: str, round_id: str
+    ) -> RoundUnderstandingDocument:
+        persisted_id = self._persisted_path_id(round_id, "round_id")
+        opened = self.load_job(job_id)
+        return self._read_round_understanding(opened.paths, persisted_id)
+
+    def load_language_graph(self, job_id: str) -> LanguageGraph:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_read_lock_locked(paths, locked_file)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            return self._read_language_graph_locked(opened.paths, opened.manifest)
+
     def _heartbeat_write(
         self, job_id: str, claim: JobWriteClaim
     ) -> JobWriteClaim:
@@ -1805,6 +2014,15 @@ class FileSystemJobRepository:
                 write_lock_already_held=True,
             ):
                 self._append_issue(issues, issue)
+            try:
+                with self.lock_factory.open_existing(
+                    paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+                ) as locked_file:
+                    self._assert_read_lock_locked(paths, locked_file)
+                    for issue in self._inspect_language_shards(paths, manifest):
+                        self._append_issue(issues, issue)
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
         else:
             for issue in self._inspect_static_layout(
                 paths, write_lock_already_held=True
@@ -1865,6 +2083,87 @@ class FileSystemJobRepository:
             logical_path,
             cause,
         )
+
+    def _inspect_language_shards(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+    ) -> tuple[JobIssue, ...]:
+        issues: list[JobIssue] = []
+
+        def capture(operation) -> bool:
+            try:
+                operation()
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+                return False
+            return True
+
+        timeline_states = tuple(
+            _lstat_optional(path, logical_path=logical_path)
+            for path, logical_path in (
+                (paths.demo_timeline, "timeline/demo.json"),
+                (paths.timeline_rounds, "timeline/rounds.json"),
+                (paths.time_anchors, "timeline/time_anchors.jsonl"),
+            )
+        )
+        timeline_present = any(state is not None for state in timeline_states)
+        timeline_complete = all(state is not None for state in timeline_states)
+        timeline_ok = True
+        if timeline_present:
+            timeline_ok = capture(
+                lambda: self._read_demo_timeline(
+                    paths,
+                    expected_asset_id=manifest.demo_asset_id,
+                )
+            )
+
+        if _lstat_optional(
+            paths.voice_activities,
+            logical_path="voice/activities.jsonl",
+        ) is not None:
+            capture(lambda: self._read_voice_activities(paths, required=True))
+
+        capture(lambda: self._configuration_index(paths, manifest))
+
+        def inspect_invocations() -> None:
+            for task_id in self._invocation_task_ids(paths):
+                self._read_task_invocations(paths, task_id)
+
+        capture(inspect_invocations)
+
+        def inspect_transcripts() -> None:
+            for round_id in self._dynamic_path_ids(
+                paths.transcript_dir,
+                prefix="round_",
+                suffix=".jsonl",
+                field="round_id",
+                logical_directory="transcript",
+            ):
+                self._read_transcript_file(paths, round_id)
+            if _lstat_optional(
+                paths.unassigned_transcript(),
+                logical_path="transcript/unassigned.jsonl",
+            ) is not None:
+                self._read_unassigned_transcript(paths, required=True)
+
+        capture(inspect_transcripts)
+
+        def inspect_understanding() -> None:
+            for round_id in self._dynamic_path_ids(
+                paths.understanding_dir,
+                prefix="round_",
+                suffix=".json",
+                field="round_id",
+                logical_directory="understanding",
+            ):
+                self._read_round_understanding(paths, round_id)
+
+        capture(inspect_understanding)
+
+        if timeline_complete and timeline_ok and not issues:
+            capture(lambda: self._read_language_graph_locked(paths, manifest))
+        return tuple(issues)
 
     def _manifest_conflict(
         self, message_zh: str = "Job 清单已经被其他操作更新。"
@@ -2013,6 +2312,308 @@ class FileSystemJobRepository:
                 "模型调用文件名发生大小写折叠冲突。", "models/invocations"
             )
         return tuple(sorted(task_ids))
+
+    def _validate_timeline_path_ids(self, timeline: DemoTimeline) -> None:
+        round_ids = [
+            self._persisted_path_id(value.round_id, "round_id")
+            for value in timeline.rounds.rounds
+        ]
+        if len({value.casefold() for value in round_ids}) != len(round_ids):
+            raise self._invalid_shard_input(
+                "回合 ID 发生大小写折叠冲突。", "timeline/rounds.json"
+            )
+
+    def _read_demo_timeline(
+        self,
+        paths: JobPaths,
+        *,
+        expected_asset_id: str,
+    ) -> DemoTimeline:
+        descriptor = read_strict_json(
+            paths.demo_timeline,
+            logical_path="timeline/demo.json",
+            parser=DEMO_DESCRIPTOR_PARSER,
+        )
+        rounds = read_strict_json(
+            paths.timeline_rounds,
+            logical_path="timeline/rounds.json",
+            parser=ROUND_COLLECTION_PARSER,
+        )
+        anchors = read_strict_jsonl(
+            paths.time_anchors,
+            logical_path="timeline/time_anchors.jsonl",
+            parser=TIME_ANCHOR_PARSER,
+        ).records
+        try:
+            timeline = DemoTimeline(descriptor, rounds, anchors)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "Demo 时间线分片无法组成有效时间线。", "timeline", exc
+            ) from exc
+        self._validate_timeline_path_ids(timeline)
+        if timeline.descriptor.demo_asset_id != expected_asset_id:
+            raise self._invalid_shard_input(
+                "Demo 时间线与 Job 素材身份不一致。", "timeline/demo.json"
+            )
+        return timeline
+
+    def _read_voice_activities(
+        self,
+        paths: JobPaths,
+        *,
+        required: bool,
+    ) -> tuple[VoiceActivityCue, ...]:
+        state = _lstat_optional(
+            paths.voice_activities,
+            logical_path="voice/activities.jsonl",
+        )
+        if state is None:
+            if required:
+                self._assert_safe_regular(
+                    paths.voice_activities,
+                    logical_path="voice/activities.jsonl",
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
+            return ()
+        result = read_strict_jsonl(
+            paths.voice_activities,
+            logical_path="voice/activities.jsonl",
+            parser=VOICE_ACTIVITY_PARSER,
+        )
+        try:
+            return require_canonical_voice_activities(result.records)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "语音活动文件关系无效。", "voice/activities.jsonl", exc
+            ) from exc
+
+    def _read_transcript_file(
+        self,
+        paths: JobPaths,
+        round_id: str,
+    ) -> tuple[TranscriptCue, ...]:
+        logical_path = f"transcript/round_{round_id}.jsonl"
+        result = read_strict_jsonl(
+            paths.round_transcript(round_id),
+            logical_path=logical_path,
+            parser=TRANSCRIPT_CUE_PARSER,
+        )
+        try:
+            return require_canonical_transcripts(
+                result.records,
+                round_id=round_id,
+                logical_path=logical_path,
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "回合转录文件关系无效。", logical_path, exc
+            ) from exc
+
+    def _read_unassigned_transcript(
+        self,
+        paths: JobPaths,
+        *,
+        required: bool,
+    ) -> tuple[TranscriptCue, ...]:
+        logical_path = "transcript/unassigned.jsonl"
+        state = _lstat_optional(paths.unassigned_transcript(), logical_path=logical_path)
+        if state is None:
+            if required:
+                self._assert_safe_regular(
+                    paths.unassigned_transcript(),
+                    logical_path=logical_path,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
+            return ()
+        result = read_strict_jsonl(
+            paths.unassigned_transcript(),
+            logical_path=logical_path,
+            parser=TRANSCRIPT_CUE_PARSER,
+        )
+        try:
+            return require_canonical_transcripts(
+                result.records,
+                round_id=None,
+                logical_path=logical_path,
+            )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "未分配转录文件关系无效。", logical_path, exc
+            ) from exc
+
+    def _read_round_understanding(
+        self,
+        paths: JobPaths,
+        round_id: str,
+    ) -> RoundUnderstandingDocument:
+        logical_path = f"understanding/round_{round_id}.json"
+        value = read_strict_json(
+            paths.round_understanding(round_id),
+            logical_path=logical_path,
+            parser=ROUND_UNDERSTANDING_PARSER,
+        )
+        if value.round_id != round_id:
+            raise self._invalid_shard_input(
+                "理解翻译文档与文件身份不一致。", logical_path
+            )
+        return value
+
+    def _dynamic_path_ids(
+        self,
+        directory: Path,
+        *,
+        prefix: str,
+        suffix: str,
+        field: str,
+        logical_directory: str,
+    ) -> tuple[str, ...]:
+        try:
+            children = tuple(os.scandir(directory))
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法读取 Job 分片目录。", logical_directory, exc
+            ) from exc
+        values: list[str] = []
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            if not child.name.startswith(prefix) or not child.name.endswith(suffix):
+                continue
+            raw_id = child.name[len(prefix) : -len(suffix)]
+            persisted_id = self._persisted_path_id(raw_id, field)
+            self._assert_safe_regular(
+                Path(child.path),
+                logical_path=f"{logical_directory}/{child.name}",
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            values.append(persisted_id)
+        if len({value.casefold() for value in values}) != len(values):
+            raise self._invalid_shard_input(
+                "分片文件名发生大小写折叠冲突。", logical_directory
+            )
+        return tuple(sorted(values))
+
+    def _read_all_invocations_locked(
+        self,
+        paths: JobPaths,
+        configurations: tuple[ModelConfigurationSnapshot, ...],
+    ) -> tuple[ModelInvocationRecord, ...]:
+        task_ids = self._invocation_task_ids(paths)
+        values = tuple(
+            record
+            for task_id in task_ids
+            for record in self._read_task_invocations(paths, task_id)
+        )
+        if len({value.invocation_id for value in values}) != len(values):
+            raise self._invalid_shard_input(
+                "不同任务文件中的模型调用 ID 重复。", "models/invocations"
+            )
+        configuration_ids = {value.snapshot_id for value in configurations}
+        if any(
+            value.configuration_snapshot_id not in configuration_ids
+            for value in values
+        ):
+            raise self._invalid_shard_input(
+                "模型调用引用了未注册的配置快照。", "models/invocations"
+            )
+        return values
+
+    def _read_language_graph_locked(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+    ) -> LanguageGraph:
+        timeline = self._read_demo_timeline(
+            paths,
+            expected_asset_id=manifest.demo_asset_id,
+        )
+        activities = self._read_voice_activities(paths, required=False)
+        configuration_index = self._configuration_index(paths, manifest)
+        configurations = tuple(
+            configuration_index[snapshot_id]
+            for snapshot_id in manifest.configuration_snapshot_ids
+        )
+        invocations = self._read_all_invocations_locked(paths, configurations)
+
+        transcript_ids = self._dynamic_path_ids(
+            paths.transcript_dir,
+            prefix="round_",
+            suffix=".jsonl",
+            field="round_id",
+            logical_directory="transcript",
+        )
+        authoritative_round_ids = tuple(
+            value.round_id for value in timeline.rounds.rounds
+        )
+        unknown_transcript_ids = set(transcript_ids) - set(authoritative_round_ids)
+        if unknown_transcript_ids:
+            raise self._invalid_shard_input(
+                "转录文件引用了未知回合。", "transcript"
+            )
+        transcripts = tuple(
+            cue
+            for round_id in authoritative_round_ids
+            if round_id in transcript_ids
+            for cue in self._read_transcript_file(paths, round_id)
+        ) + self._read_unassigned_transcript(paths, required=False)
+        if len({value.cue_id for value in transcripts}) != len(transcripts):
+            raise self._invalid_shard_input(
+                "不同转录文件中的提示 ID 重复。", "transcript"
+            )
+
+        understanding_ids = self._dynamic_path_ids(
+            paths.understanding_dir,
+            prefix="round_",
+            suffix=".json",
+            field="round_id",
+            logical_directory="understanding",
+        )
+        unknown_understanding_ids = set(understanding_ids) - set(
+            authoritative_round_ids
+        )
+        if unknown_understanding_ids:
+            raise self._invalid_shard_input(
+                "理解翻译文档引用了未知回合。", "understanding"
+            )
+        documents = tuple(
+            self._read_round_understanding(paths, round_id)
+            for round_id in authoritative_round_ids
+            if round_id in understanding_ids
+        )
+
+        try:
+            for activity in activities:
+                validate_voice_activity_against_timeline(activity, timeline)
+            for transcript in transcripts:
+                validate_transcript_against_timeline(
+                    transcript,
+                    timeline,
+                    activities,
+                    configurations,
+                    invocations,
+                )
+            for document in documents:
+                validate_understanding_document_graph(
+                    document,
+                    transcripts,
+                    configurations,
+                    invocations,
+                )
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "语言数据图引用关系无效。", "language_graph", exc
+            ) from exc
+        return LanguageGraph(
+            timeline,
+            activities,
+            configurations,
+            invocations,
+            transcripts,
+            documents,
+        )
 
     def _paths_for(self, job_id: str) -> JobPaths:
         try:
