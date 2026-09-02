@@ -2577,27 +2577,28 @@ class FileSystemJobRepository:
                 write_lock_already_held=True,
             ):
                 self._append_issue(issues, issue)
-            try:
-                with self.lock_factory.open_existing(
-                    paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
-                ) as locked_file:
-                    self._assert_read_lock_locked(paths, locked_file)
-                    for issue in self._inspect_language_shards(paths, manifest):
-                        self._append_issue(issues, issue)
-                    for issue in self._inspect_review_shards(paths, manifest):
-                        self._append_issue(issues, issue)
-                    try:
-                        event_read = read_event_journal(
-                            paths.event_journal,
-                            expected_job_id=manifest.job_id,
-                        )
-                    except JobRepositoryError as exc:
-                        self._append_issue(issues, exc.to_issue())
-                    else:
-                        for issue in event_read.issues:
+            if not any(issue.code == "job_path_escape" for issue in issues):
+                try:
+                    with self.lock_factory.open_existing(
+                        paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+                    ) as locked_file:
+                        self._assert_read_lock_locked(paths, locked_file)
+                        for issue in self._inspect_language_shards(paths, manifest):
                             self._append_issue(issues, issue)
-            except JobRepositoryError as exc:
-                self._append_issue(issues, exc.to_issue())
+                        for issue in self._inspect_review_shards(paths, manifest):
+                            self._append_issue(issues, issue)
+                        try:
+                            event_read = read_event_journal(
+                                paths.event_journal,
+                                expected_job_id=manifest.job_id,
+                            )
+                        except JobRepositoryError as exc:
+                            self._append_issue(issues, exc.to_issue())
+                        else:
+                            for issue in event_read.issues:
+                                self._append_issue(issues, issue)
+                except JobRepositoryError as exc:
+                    self._append_issue(issues, exc.to_issue())
         else:
             for issue in self._inspect_static_layout(
                 paths, write_lock_already_held=True
@@ -2626,7 +2627,7 @@ class FileSystemJobRepository:
                     and effective_run_status is JobRunStatus.INTERRUPTED
                 ):
                     self._append_issue(issues, self._interrupted_projection_issue())
-        else:
+        elif not any(issue.code == "job_path_escape" for issue in issues):
             try:
                 effective_run_status, projection_issue = self._project_claim_state(
                     paths,
@@ -3945,56 +3946,31 @@ class FileSystemJobRepository:
         self, paths: JobPaths, *, write_lock_already_held: bool = False
     ) -> tuple[JobIssue, ...]:
         issues: list[JobIssue] = []
+        blocked_directories: set[str] = set()
         for relative in _INITIAL_DIRECTORIES:
             directory = paths.job_dir.joinpath(*relative.split("/"))
             try:
-                state = os.lstat(directory)
-                if _is_link_or_reparse(state):
-                    raise _repository_error(
-                        "job_path_escape",
-                        "Job 布局目录包含链接或重解析点。",
-                        "请恢复该目录后重试。",
-                        relative,
-                    )
-                if not stat.S_ISDIR(state.st_mode):
-                    raise _repository_error(
-                        "job_shard_invalid",
-                        "Job 布局路径不是目录。",
-                        "请恢复该目录后重试。",
-                        relative,
-                    )
-            except FileNotFoundError as exc:
-                self._append_issue(
-                    issues,
-                    _repository_error(
-                        "job_shard_missing",
-                        "Job 必需目录缺失。",
-                        "请检查或恢复该 Job。",
-                        relative,
-                        exc,
-                    ).to_issue(),
+                self._assert_safe_directory_chain(
+                    directory,
+                    logical_path=relative,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
                 )
             except JobRepositoryError as exc:
+                blocked_directories.add(relative)
                 self._append_issue(issues, exc.to_issue())
-            except OSError as exc:
-                self._append_issue(
-                    issues,
-                    _repository_error(
-                        "job_shard_invalid",
-                        "无法检查 Job 布局目录。",
-                        "请检查该 Job。",
-                        relative,
-                        exc,
-                    ).to_issue(),
-                )
 
-        for issue in self._inspect_optional_files(paths):
+        for issue in self._inspect_optional_files(
+            paths, blocked_directories=frozenset(blocked_directories)
+        ):
             self._append_issue(issues, issue)
 
         required_files = [(paths.event_journal, "events/job_events.jsonl")]
         if not write_lock_already_held:
             required_files.insert(0, (paths.write_lock, "events/.write.lock"))
         for path, logical_path in required_files:
+            if self._logical_path_is_blocked(logical_path, blocked_directories):
+                continue
             try:
                 payload = self._read_safe_regular(path, logical_path)
                 if logical_path == "events/.write.lock" and payload != b"0":
@@ -4008,11 +3984,24 @@ class FileSystemJobRepository:
                 self._append_issue(issues, exc.to_issue())
         return tuple(issues)
 
-    def _inspect_optional_files(self, paths: JobPaths) -> tuple[JobIssue, ...]:
+    def _inspect_optional_files(
+        self,
+        paths: JobPaths,
+        *,
+        blocked_directories: frozenset[str] = frozenset(),
+    ) -> tuple[JobIssue, ...]:
         issues: list[JobIssue] = []
         for relative in _OPTIONAL_EXACT_FILES:
+            if self._logical_path_is_blocked(relative, blocked_directories):
+                continue
             path = paths.job_dir.joinpath(*relative.split("/"))
             try:
+                self._assert_safe_parent_chain(
+                    path,
+                    logical_path=relative,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
                 state = _lstat_optional(path, logical_path=relative)
             except JobRepositoryError as exc:
                 self._append_issue(issues, exc.to_issue())
@@ -4030,10 +4019,21 @@ class FileSystemJobRepository:
                 self._append_issue(issues, exc.to_issue())
 
         for relative_dir, pattern in _OPTIONAL_DYNAMIC_FILES:
+            if self._logical_path_is_blocked(
+                relative_dir, blocked_directories
+            ):
+                continue
             directory = paths.job_dir.joinpath(*relative_dir.split("/"))
             try:
+                self._assert_safe_directory_chain(
+                    directory,
+                    logical_path=relative_dir,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
                 children = tuple(os.scandir(directory))
-            except (FileNotFoundError, NotADirectoryError):
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
                 continue
             except OSError as exc:
                 self._append_issue(
@@ -4062,9 +4062,20 @@ class FileSystemJobRepository:
                     self._append_issue(issues, exc.to_issue())
 
         revisions = paths.review_revisions_dir
+        if self._logical_path_is_blocked(
+            "review/revisions", blocked_directories
+        ):
+            return tuple(issues)
         try:
+            self._assert_safe_directory_chain(
+                revisions,
+                logical_path="review/revisions",
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
             revision_children = tuple(os.scandir(revisions))
-        except (FileNotFoundError, NotADirectoryError):
+        except JobRepositoryError as exc:
+            self._append_issue(issues, exc.to_issue())
             revision_children = ()
         except OSError as exc:
             self._append_issue(
@@ -4157,6 +4168,12 @@ class FileSystemJobRepository:
             descriptor = os.open(path, flags)
             try:
                 opened = os.fstat(descriptor)
+                self._assert_safe_parent_chain(
+                    path,
+                    logical_path=logical_path,
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
                 current = os.lstat(path)
                 if (
                     _is_link_or_reparse(current)
@@ -4195,6 +4212,12 @@ class FileSystemJobRepository:
         missing_code: str,
         invalid_code: str,
     ) -> None:
+        self._assert_safe_parent_chain(
+            path,
+            logical_path=logical_path,
+            missing_code=missing_code,
+            invalid_code=invalid_code,
+        )
         try:
             result = os.lstat(path)
         except FileNotFoundError as exc:
@@ -4227,6 +4250,88 @@ class FileSystemJobRepository:
                 "请恢复普通文件后重试。",
                 logical_path,
             )
+
+    @staticmethod
+    def _logical_path_is_blocked(
+        logical_path: str, blocked_directories: set[str] | frozenset[str]
+    ) -> bool:
+        return any(
+            logical_path == directory
+            or logical_path.startswith(f"{directory}/")
+            for directory in blocked_directories
+        )
+
+    def _assert_safe_parent_chain(
+        self,
+        path: Path,
+        *,
+        logical_path: str,
+        missing_code: str,
+        invalid_code: str,
+    ) -> None:
+        self._assert_safe_directory_chain(
+            path.parent,
+            logical_path=logical_path,
+            missing_code=missing_code,
+            invalid_code=invalid_code,
+        )
+
+    def _assert_safe_directory_chain(
+        self,
+        directory: Path,
+        *,
+        logical_path: str,
+        missing_code: str,
+        invalid_code: str,
+    ) -> None:
+        try:
+            relative = directory.relative_to(self.paths.jobs_dir)
+        except ValueError as exc:
+            raise _repository_error(
+                "job_path_escape",
+                "Job 路径超出当前工作区。",
+                "请恢复工作区内的普通目录后重试。",
+                logical_path,
+                exc,
+            ) from exc
+        candidates = [self.paths.jobs_dir]
+        current = self.paths.jobs_dir
+        for part in relative.parts:
+            current /= part
+            candidates.append(current)
+        for candidate in candidates:
+            try:
+                result = os.lstat(candidate)
+            except FileNotFoundError as exc:
+                raise _repository_error(
+                    missing_code,
+                    "Job 文件的父目录不存在。",
+                    "请检查或恢复该 Job。",
+                    logical_path,
+                    exc,
+                ) from exc
+            except OSError as exc:
+                raise _repository_error(
+                    invalid_code,
+                    "无法检查 Job 文件的父目录。",
+                    "请检查该 Job。",
+                    logical_path,
+                    exc,
+                ) from exc
+            if _is_link_or_reparse(result):
+                raise _repository_error(
+                    "job_path_escape",
+                    "Job 文件的父目录包含链接或重解析点。",
+                    "请恢复普通目录后重试。",
+                    logical_path,
+                )
+            if not stat.S_ISDIR(result.st_mode):
+                raise _repository_error(
+                    invalid_code,
+                    "Job 文件的父路径不是目录。",
+                    "请恢复普通目录后重试。",
+                    logical_path,
+                )
 
     def _validate_source(self, source: JobDemoSource) -> None:
         try:

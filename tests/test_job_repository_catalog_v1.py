@@ -577,6 +577,76 @@ def test_inspect_job_does_not_repair_missing_initial_lock_or_journal(tmp_path):
     assert _filesystem_snapshot(job_dir) == before
 
 
+def test_inspect_job_never_opens_files_below_linked_events_directory(
+    tmp_path, monkeypatch
+):
+    import subprocess
+    import cs2pov.storage.job_repository as repository_module
+
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-linked-events", 10)
+    job_dir = workspace.jobs_dir / "job-linked-events"
+    events = job_dir / "events"
+    events.rename(job_dir / "events-original")
+    outside = tmp_path / "outside-events"
+    outside.mkdir()
+    (outside / ".write.lock").write_bytes(b"0")
+    (outside / "job_events.jsonl").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "event_id": "outside-event",
+                "job_id": "job-linked-events",
+                "run_id": "run-outside",
+                "occurred_at": "2026-08-31T10:00:00.000000Z",
+                "event_type": "outside",
+                "payload": {"sentinel": "must-not-be-read"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if os.name == "nt":
+        result = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(events), str(outside)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            pytest.skip(
+                f"mklink /J unavailable: {result.stderr or result.stdout}"
+            )
+    else:
+        events.symlink_to(outside, target_is_directory=True)
+
+    real_open = repository_module.os.open
+    opened_outside = False
+
+    def reject_linked_events_open(path, *args, **kwargs):
+        nonlocal opened_outside
+        candidate = Path(path)
+        try:
+            candidate.relative_to(events)
+        except ValueError:
+            pass
+        else:
+            opened_outside = True
+            raise AssertionError("linked events subtree must never be opened")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(repository_module.os, "open", reject_linked_events_open)
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-linked-events"
+    )
+
+    assert "job_path_escape" in {
+        issue.code for issue in inspection.entry.issues
+    }
+    assert not opened_outside
+    assert inspection.events == ()
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction test")
 def test_list_jobs_reports_junction_candidate_without_following_it(tmp_path):
     workspace, demo_assets, _ = _seed(tmp_path)
