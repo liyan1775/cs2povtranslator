@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import errno
 import hashlib
@@ -27,7 +27,12 @@ from cs2pov.domain.job import (
     JobWriteClaim,
     RoundProgressSummary,
 )
+from cs2pov.domain.invocation import (
+    ModelConfigurationSnapshot,
+    ModelInvocationRecord,
+)
 from cs2pov.domain.schema import require_path_identifier
+from cs2pov.domain.voice import VoiceActivityCue
 from cs2pov.storage.demo_asset_repository import (
     DemoAssetRepositoryError,
     FileSystemDemoAssetRepository,
@@ -40,11 +45,22 @@ from cs2pov.workspace.paths import WorkspacePaths
 from .atomic_documents import (
     atomic_write_bytes,
     atomic_write_json,
+    atomic_write_jsonl,
     read_strict_json,
+    read_strict_jsonl,
     schema_aware_parser,
 )
 from .cross_process_lock import CrossProcessFileLock
 from .job_claim import CLAIM_INITIALIZATION_GRACE_US, JobWriteSession
+from .job_shards import (
+    MODEL_CONFIGURATION_PARSER,
+    MODEL_INVOCATION_PARSER,
+    VOICE_ACTIVITY_PARSER,
+    canonical_task_invocations,
+    canonical_voice_activities,
+    require_canonical_task_invocations,
+    require_canonical_voice_activities,
+)
 
 
 def utc_now() -> datetime:
@@ -726,6 +742,247 @@ class FileSystemJobRepository:
             paths,
             persisted.run_status,
         )
+
+    def save_voice_activities(
+        self,
+        job_id: str,
+        activities: tuple[VoiceActivityCue, ...],
+        claim: JobWriteClaim,
+    ) -> None:
+        try:
+            canonical = canonical_voice_activities(activities)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "语音活动集合无效。", "voice/activities.jsonl", exc
+            ) from exc
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            atomic_write_jsonl(
+                paths.voice_activities,
+                canonical,
+                logical_path="voice/activities.jsonl",
+                serializer=lambda value: value.to_dict(),
+                parser=VOICE_ACTIVITY_PARSER,
+            )
+
+    def load_voice_activities(
+        self, job_id: str
+    ) -> tuple[VoiceActivityCue, ...]:
+        opened = self.load_job(job_id)
+        state = _lstat_optional(
+            opened.paths.voice_activities,
+            logical_path="voice/activities.jsonl",
+        )
+        if state is None:
+            return ()
+        result = read_strict_jsonl(
+            opened.paths.voice_activities,
+            logical_path="voice/activities.jsonl",
+            parser=VOICE_ACTIVITY_PARSER,
+        )
+        try:
+            return require_canonical_voice_activities(result.records)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "语音活动文件关系无效。", "voice/activities.jsonl", exc
+            ) from exc
+
+    def register_model_configuration(
+        self,
+        job_id: str,
+        snapshot: ModelConfigurationSnapshot,
+        expected_manifest_fingerprint: str,
+        claim: JobWriteClaim,
+    ) -> OpenedJob:
+        if type(snapshot) is not ModelConfigurationSnapshot:
+            raise self._invalid_shard_input(
+                "模型配置快照无效。", "models/snapshots"
+            )
+        snapshot_id = self._persisted_path_id(snapshot.snapshot_id, "snapshot_id")
+        if not isinstance(expected_manifest_fingerprint, str):
+            raise TypeError("expected_manifest_fingerprint must be a string")
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            current = opened.manifest
+            if current.content_fingerprint() != expected_manifest_fingerprint:
+                raise self._manifest_conflict()
+            configurations = self._configuration_index(
+                paths,
+                current,
+                allowed_unindexed_id=snapshot_id,
+            )
+            existing = configurations.get(snapshot_id)
+            if existing is not None and existing != snapshot:
+                raise self._invalid_shard_input(
+                    "同一配置 ID 已存在不同内容。",
+                    f"models/snapshots/snapshot_{snapshot_id}.json",
+                )
+            if snapshot_id in current.configuration_snapshot_ids:
+                if existing is None:
+                    raise self._invalid_shard_input(
+                        "Job 清单引用的模型配置不存在。",
+                        f"models/snapshots/snapshot_{snapshot_id}.json",
+                    )
+                return opened
+            timestamp = _canonical_timestamp(self.clock)
+            if timestamp <= current.updated_at:
+                raise self._manifest_conflict(
+                    "Job 更新时间没有向前推进，尚未写入配置快照。"
+                )
+            target = paths.snapshot(snapshot_id)
+            if existing is None:
+                atomic_write_json(
+                    target,
+                    snapshot,
+                    logical_path=f"models/snapshots/snapshot_{snapshot_id}.json",
+                    serializer=lambda value: value.to_dict(),
+                    parser=MODEL_CONFIGURATION_PARSER,
+                )
+            new_manifest = replace(
+                current,
+                updated_at=timestamp,
+                configuration_snapshot_ids=(
+                    *current.configuration_snapshot_ids,
+                    snapshot_id,
+                ),
+            )
+            return self._replace_manifest_locked(
+                locked_file,
+                job_id,
+                expected_manifest_fingerprint,
+                new_manifest,
+                claim,
+            )
+
+    def load_model_configuration(
+        self, job_id: str, snapshot_id: str
+    ) -> ModelConfigurationSnapshot:
+        persisted_id = self._persisted_path_id(snapshot_id, "snapshot_id")
+        opened = self.load_job(job_id)
+        if persisted_id not in opened.manifest.configuration_snapshot_ids:
+            raise self._invalid_shard_input(
+                "模型配置快照尚未登记到 Job 清单。", "models/snapshots"
+            )
+        value = self._read_model_configuration(opened.paths, persisted_id)
+        if value.snapshot_id != persisted_id:
+            raise self._invalid_shard_input(
+                "配置文件名与内容身份不一致。",
+                f"models/snapshots/snapshot_{persisted_id}.json",
+            )
+        return value
+
+    def load_model_configurations(
+        self, job_id: str
+    ) -> tuple[ModelConfigurationSnapshot, ...]:
+        opened = self.load_job(job_id)
+        values = self._configuration_index(opened.paths, opened.manifest)
+        return tuple(
+            values[snapshot_id]
+            for snapshot_id in opened.manifest.configuration_snapshot_ids
+        )
+
+    def save_task_invocations(
+        self,
+        job_id: str,
+        task_id: str,
+        records: tuple[ModelInvocationRecord, ...],
+        claim: JobWriteClaim,
+    ) -> None:
+        persisted_id = self._persisted_path_id(task_id, "task_id")
+        try:
+            canonical = canonical_task_invocations(persisted_id, records)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "模型调用集合与任务文件不一致。",
+                f"models/invocations/task_{persisted_id}.jsonl",
+                exc,
+            ) from exc
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            configurations = self._configuration_index(paths, opened.manifest)
+            if any(
+                record.configuration_snapshot_id not in configurations
+                for record in canonical
+            ):
+                raise self._invalid_shard_input(
+                    "模型调用引用了未注册的配置快照。",
+                    f"models/invocations/task_{persisted_id}.jsonl",
+                )
+            target = paths.task_invocations(persisted_id)
+            if _lstat_optional(
+                target,
+                logical_path=f"models/invocations/task_{persisted_id}.jsonl",
+            ) is not None:
+                existing = self._read_task_invocations(paths, persisted_id)
+                if existing != canonical:
+                    raise self._invalid_shard_input(
+                        "同一任务调用文件已存在不同内容。",
+                        f"models/invocations/task_{persisted_id}.jsonl",
+                    )
+                return
+            atomic_write_jsonl(
+                target,
+                canonical,
+                logical_path=f"models/invocations/task_{persisted_id}.jsonl",
+                serializer=lambda value: value.to_dict(),
+                parser=MODEL_INVOCATION_PARSER,
+            )
+
+    def load_task_invocations(
+        self, job_id: str, task_id: str
+    ) -> tuple[ModelInvocationRecord, ...]:
+        persisted_id = self._persisted_path_id(task_id, "task_id")
+        opened = self.load_job(job_id)
+        values = self._read_task_invocations(opened.paths, persisted_id)
+        configurations = self._configuration_index(opened.paths, opened.manifest)
+        if any(
+            value.configuration_snapshot_id not in configurations for value in values
+        ):
+            raise self._invalid_shard_input(
+                "模型调用引用了未注册的配置快照。",
+                f"models/invocations/task_{persisted_id}.jsonl",
+            )
+        return values
+
+    def load_all_invocations(
+        self, job_id: str
+    ) -> tuple[ModelInvocationRecord, ...]:
+        opened = self.load_job(job_id)
+        task_ids = self._invocation_task_ids(opened.paths)
+        values = tuple(
+            value
+            for task_id in task_ids
+            for value in self._read_task_invocations(opened.paths, task_id)
+        )
+        if len({value.invocation_id for value in values}) != len(values):
+            raise self._invalid_shard_input(
+                "不同任务文件中的模型调用 ID 重复。", "models/invocations"
+            )
+        configurations = self._configuration_index(opened.paths, opened.manifest)
+        if any(
+            value.configuration_snapshot_id not in configurations for value in values
+        ):
+            raise self._invalid_shard_input(
+                "模型调用引用了未注册的配置快照。", "models/invocations"
+            )
+        return values
 
     def _heartbeat_write(
         self, job_id: str, claim: JobWriteClaim
@@ -1594,6 +1851,168 @@ class FileSystemJobRepository:
             effective_run_status=effective_run_status,
         )
         return JobInspection(entry, marker, manifest, source, (), False)
+
+    def _invalid_shard_input(
+        self,
+        message_zh: str,
+        logical_path: str,
+        cause: BaseException | None = None,
+    ) -> JobRepositoryError:
+        return _repository_error(
+            "job_shard_invalid",
+            message_zh,
+            "请检查数据身份和引用关系后重试。",
+            logical_path,
+            cause,
+        )
+
+    def _manifest_conflict(
+        self, message_zh: str = "Job 清单已经被其他操作更新。"
+    ) -> JobRepositoryError:
+        return _repository_error(
+            "job_manifest_conflict",
+            message_zh,
+            "请重新打开 Job，并基于最新状态重试。",
+            "job.json",
+        )
+
+    def _persisted_path_id(self, value: str, field: str) -> str:
+        try:
+            return require_path_identifier(value, field)
+        except DomainSchemaError as exc:
+            raise _repository_error(
+                "job_path_escape",
+                "持久化标识不能安全用作文件名。",
+                "请使用小写字母、数字、连字符或下划线。",
+                None,
+                exc,
+            ) from exc
+
+    def _read_model_configuration(
+        self, paths: JobPaths, snapshot_id: str
+    ) -> ModelConfigurationSnapshot:
+        logical_path = f"models/snapshots/snapshot_{snapshot_id}.json"
+        target = paths.snapshot(snapshot_id)
+        self._assert_safe_regular(
+            target,
+            logical_path=logical_path,
+            missing_code="job_shard_missing",
+            invalid_code="job_shard_invalid",
+        )
+        value = read_strict_json(
+            target,
+            logical_path=logical_path,
+            parser=MODEL_CONFIGURATION_PARSER,
+        )
+        if value.snapshot_id != snapshot_id:
+            raise self._invalid_shard_input(
+                "配置文件名与内容身份不一致。", logical_path
+            )
+        return value
+
+    def _configuration_index(
+        self,
+        paths: JobPaths,
+        manifest: JobManifest,
+        *,
+        allowed_unindexed_id: str | None = None,
+    ) -> dict[str, ModelConfigurationSnapshot]:
+        try:
+            children = tuple(os.scandir(paths.snapshots_dir))
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法读取模型配置目录。", "models/snapshots", exc
+            ) from exc
+        disk_ids: list[str] = []
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            if not child.name.startswith("snapshot_") or not child.name.endswith(
+                ".json"
+            ):
+                continue
+            raw_id = child.name[len("snapshot_") : -len(".json")]
+            snapshot_id = self._persisted_path_id(raw_id, "snapshot_id")
+            logical_path = f"models/snapshots/{child.name}"
+            self._assert_safe_regular(
+                Path(child.path),
+                logical_path=logical_path,
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            disk_ids.append(snapshot_id)
+        if len({value.casefold() for value in disk_ids}) != len(disk_ids):
+            raise self._invalid_shard_input(
+                "模型配置文件名发生大小写折叠冲突。", "models/snapshots"
+            )
+        manifest_ids = manifest.configuration_snapshot_ids
+        expected_ids = set(manifest_ids)
+        if allowed_unindexed_id is not None:
+            expected_ids.add(allowed_unindexed_id)
+        unexpected = set(disk_ids) - expected_ids
+        if unexpected:
+            raise self._invalid_shard_input(
+                "存在未被 Job 清单登记的模型配置快照。", "models/snapshots"
+            )
+        missing = set(manifest_ids) - set(disk_ids)
+        if missing:
+            missing_id = sorted(missing)[0]
+            raise _repository_error(
+                "job_shard_missing",
+                "Job 清单引用的模型配置快照不存在。",
+                "请恢复该快照或回到一致的 Job 清单。",
+                f"models/snapshots/snapshot_{missing_id}.json",
+            )
+        return {
+            snapshot_id: self._read_model_configuration(paths, snapshot_id)
+            for snapshot_id in sorted(disk_ids)
+        }
+
+    def _read_task_invocations(
+        self, paths: JobPaths, task_id: str
+    ) -> tuple[ModelInvocationRecord, ...]:
+        logical_path = f"models/invocations/task_{task_id}.jsonl"
+        result = read_strict_jsonl(
+            paths.task_invocations(task_id),
+            logical_path=logical_path,
+            parser=MODEL_INVOCATION_PARSER,
+        )
+        try:
+            return require_canonical_task_invocations(task_id, result.records)
+        except DomainSchemaError as exc:
+            raise self._invalid_shard_input(
+                "模型调用文件关系无效。", logical_path, exc
+            ) from exc
+
+    def _invocation_task_ids(self, paths: JobPaths) -> tuple[str, ...]:
+        try:
+            children = tuple(os.scandir(paths.invocations_dir))
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法读取模型调用目录。", "models/invocations", exc
+            ) from exc
+        task_ids: list[str] = []
+        for child in children:
+            if child.name.startswith("."):
+                continue
+            if not child.name.startswith("task_") or not child.name.endswith(
+                ".jsonl"
+            ):
+                continue
+            raw_id = child.name[len("task_") : -len(".jsonl")]
+            task_id = self._persisted_path_id(raw_id, "task_id")
+            self._assert_safe_regular(
+                Path(child.path),
+                logical_path=f"models/invocations/{child.name}",
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            task_ids.append(task_id)
+        if len({value.casefold() for value in task_ids}) != len(task_ids):
+            raise self._invalid_shard_input(
+                "模型调用文件名发生大小写折叠冲突。", "models/invocations"
+            )
+        return tuple(sorted(task_ids))
 
     def _paths_for(self, job_id: str) -> JobPaths:
         try:
