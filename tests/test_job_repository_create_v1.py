@@ -196,6 +196,116 @@ def test_create_job_keeps_final_directory_hidden_until_all_documents_validate(tm
     assert seen == ["repository.json", "source/demo_ref.json", "job.json"]
 
 
+def test_create_job_fsyncs_complete_staging_directory_tree_before_publish(tmp_path, monkeypatch):
+    workspace, _, repository, request = _make_repository(tmp_path)
+    import cs2pov.storage.job_repository as job_repository
+
+    observed: list[set[str]] = []
+
+    def inspect_tree(staging):
+        assert not (workspace.jobs_dir / request.job_id).exists()
+        observed.append(
+            {
+                path.relative_to(staging).as_posix()
+                for path in (staging, *staging.rglob("*"))
+                if path.is_dir()
+            }
+        )
+
+    monkeypatch.setattr(
+        job_repository,
+        "_fsync_staging_tree",
+        inspect_tree,
+        raising=False,
+    )
+
+    repository.create_job(request)
+
+    assert len(observed) == 1
+    assert {
+        ".",
+        "models",
+        "models/snapshots",
+        "models/invocations",
+        "review",
+        "review/revisions",
+        "final",
+        "final/timelines",
+        "final/subtitles",
+        "final/green_screen",
+        "final/video",
+    } <= observed[0]
+
+
+def test_staging_directory_fsync_failure_prevents_final_publication(tmp_path, monkeypatch):
+    workspace, _, repository, request = _make_repository(tmp_path)
+    import cs2pov.storage.job_repository as job_repository
+
+    def fail_before_publish(_staging):
+        raise JobRepositoryError(
+            "job_write_failed",
+            "目录持久化失败。",
+            "请重试。",
+        )
+
+    monkeypatch.setattr(
+        job_repository,
+        "_fsync_staging_tree",
+        fail_before_publish,
+        raising=False,
+    )
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        repository.create_job(request)
+
+    assert exc_info.value.code == "job_write_failed"
+    assert not (workspace.jobs_dir / request.job_id).exists()
+    assert not any(path.name.endswith(".staging") for path in workspace.jobs_dir.iterdir())
+
+
+def test_staging_tree_fsync_walks_every_parent_bottom_up(tmp_path, monkeypatch):
+    import cs2pov.storage.job_repository as job_repository
+
+    staging = tmp_path / "staging"
+    required = (
+        "models/snapshots",
+        "models/invocations",
+        "review/revisions",
+        "final/timelines",
+        "final/subtitles",
+        "final/green_screen",
+        "final/video",
+    )
+    for relative in required:
+        staging.joinpath(*relative.split("/")).mkdir(parents=True, exist_ok=True)
+    observed = []
+    monkeypatch.setattr(job_repository, "_DIRECTORY_FSYNC_SUPPORTED", True)
+    monkeypatch.setattr(
+        job_repository,
+        "_fsync_staging_directory",
+        lambda path: observed.append(path.relative_to(staging).as_posix()),
+    )
+
+    job_repository._fsync_staging_tree(staging)
+
+    assert set(observed) >= {
+        ".",
+        "models",
+        "models/snapshots",
+        "models/invocations",
+        "review",
+        "review/revisions",
+        "final",
+        "final/timelines",
+        "final/subtitles",
+        "final/green_screen",
+        "final/video",
+    }
+    assert observed.index("models/snapshots") < observed.index("models") < observed.index(".")
+    assert observed.index("review/revisions") < observed.index("review") < observed.index(".")
+    assert observed.index("final/video") < observed.index("final") < observed.index(".")
+
+
 def test_create_job_never_overwrites_existing_corrupt_or_empty_target(tmp_path):
     workspace, _, repository, request = _make_repository(tmp_path)
     target = workspace.jobs_dir / request.job_id
@@ -245,6 +355,34 @@ def test_create_job_cleans_only_its_staging_when_initial_write_fails(tmp_path, m
     assert (unrelated / "keep").read_bytes() == b"keep"
     assert not (workspace.jobs_dir / request.job_id).exists()
     assert sorted(child.name for child in workspace.jobs_dir.iterdir()) == [".unrelated.staging"]
+
+
+def test_staging_cleanup_does_not_delete_replacement_with_different_identity(tmp_path, monkeypatch):
+    workspace, _, repository, request = _make_repository(tmp_path)
+    import cs2pov.storage.job_repository as job_repository
+
+    replacement_payload = b"belongs-to-another-writer"
+
+    def replace_then_fail(path, *_args, **_kwargs):
+        staging = Path(path).parent
+        displaced = staging.with_name(staging.name + ".displaced")
+        staging.rename(displaced)
+        staging.mkdir()
+        (staging / "keep.bin").write_bytes(replacement_payload)
+        raise JobRepositoryError("job_write_failed", "写入失败。", "请重试。", "job.json")
+
+    monkeypatch.setattr(job_repository, "atomic_write_json", replace_then_fail)
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        repository.create_job(request)
+
+    assert exc_info.value.code == "job_write_failed"
+    replacements = [
+        path for path in workspace.jobs_dir.iterdir() if path.name.endswith(".staging")
+    ]
+    assert len(replacements) == 1
+    assert (replacements[0] / "keep.bin").read_bytes() == replacement_payload
+    assert any("ownership changed" in note for note in getattr(exc_info.value, "__notes__", ()))
 
 
 def test_created_documents_do_not_contain_workspace_absolute_path(tmp_path):
@@ -365,6 +503,53 @@ else:
     assert not any(path.name.endswith(".staging") for path in workspace.jobs_dir.iterdir())
 
 
+def test_job_created_by_child_remains_visible_after_abrupt_process_exit(tmp_path):
+    workspace, _, _, request = _make_repository(tmp_path)
+    worker = r"""
+import os
+from pathlib import Path
+import sys
+from cs2pov.domain.job import CreateJobRequest, JobDemoSource
+from cs2pov.storage.demo_asset_repository import FileSystemDemoAssetRepository
+from cs2pov.storage.job_repository import FileSystemJobRepository
+from cs2pov.workspace.paths import WorkspacePaths
+
+root, asset_id, display_name = sys.argv[1:]
+paths = WorkspacePaths(Path(root))
+source = JobDemoSource(asset_id, f"library/demos/{asset_id}/asset.json", display_name)
+FileSystemJobRepository(paths, FileSystemDemoAssetRepository(paths)).create_job(
+    CreateJobRequest("job-crash-visible", "crash visible", source)
+)
+os._exit(0)
+"""
+    environment = os.environ.copy()
+    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        part for part in (source_root, environment.get("PYTHONPATH", "")) if part
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            worker,
+            str(workspace.root),
+            request.source.asset_id,
+            request.source.display_name,
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    reopened = FileSystemJobRepository(
+        workspace, FileSystemDemoAssetRepository(workspace)
+    ).load_job("job-crash-visible")
+    assert reopened.manifest.display_name == "crash visible"
+
+
 def test_load_job_returns_frozen_current_version_value_without_writing(tmp_path):
     workspace, _, repository, request = _make_repository(tmp_path)
     repository.create_job(request)
@@ -426,6 +611,33 @@ def test_load_job_maps_malformed_manifest_schema_to_manifest_invalid(tmp_path, s
         repository.load_job(request.job_id)
 
     assert exc_info.value.code == "job_manifest_invalid"
+
+
+@pytest.mark.parametrize(
+    "document,schema_value,expected_code",
+    [
+        ("repository.json", True, "job_manifest_invalid"),
+        ("repository.json", "1", "job_manifest_invalid"),
+        ("repository.json", None, "job_manifest_invalid"),
+        ("source/demo_ref.json", True, "job_shard_invalid"),
+        ("source/demo_ref.json", "1", "job_shard_invalid"),
+        ("source/demo_ref.json", None, "job_shard_invalid"),
+    ],
+)
+def test_load_job_maps_malformed_marker_and_source_schema_precisely(
+    tmp_path, document, schema_value, expected_code
+):
+    workspace, _, repository, request = _make_repository(tmp_path)
+    repository.create_job(request)
+    path = workspace.jobs_dir / request.job_id / document
+    payload = json.loads(path.read_text("utf-8"))
+    payload["schema_version"] = schema_value
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(JobRepositoryError) as exc_info:
+        repository.load_job(request.job_id)
+
+    assert exc_info.value.code == expected_code
 
 
 @pytest.mark.parametrize(
@@ -550,3 +762,30 @@ def test_create_rejects_windows_junction_jobs_root(tmp_path):
 
     assert exc_info.value.code == "job_path_escape"
     assert not any(outside.iterdir())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction test")
+def test_create_and_load_reject_windows_junction_job_candidate(tmp_path):
+    workspace, demo_assets, _, request = _make_repository(tmp_path)
+    workspace.jobs_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-job-junction"
+    outside.mkdir()
+    (outside / "keep.bin").write_bytes(b"keep")
+    junction = workspace.jobs_dir / request.job_id
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"mklink /J unavailable: {result.stderr or result.stdout}")
+    repository = FileSystemJobRepository(workspace, demo_assets, clock=lambda: NOW)
+
+    with pytest.raises(JobRepositoryError) as create_error:
+        repository.create_job(request)
+    with pytest.raises(JobRepositoryError) as load_error:
+        repository.load_job(request.job_id)
+
+    assert create_error.value.code == "job_path_escape"
+    assert load_error.value.code == "job_path_escape"
+    assert (outside / "keep.bin").read_bytes() == b"keep"

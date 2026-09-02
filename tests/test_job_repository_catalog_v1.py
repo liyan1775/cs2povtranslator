@@ -184,6 +184,83 @@ def test_list_jobs_isolates_damaged_current_jobs_and_ignores_legacy_and_staging(
     assert after == before
 
 
+def test_list_jobs_isolates_marker_lstat_failure_from_healthy_sibling(tmp_path, monkeypatch):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-healthy", 10)
+    _create(workspace, demo_assets, source, "job-io-failure", 11)
+    import cs2pov.storage.job_repository as job_repository
+
+    failing_marker = workspace.jobs_dir / "job-io-failure/repository.json"
+    real_lstat = job_repository.os.lstat
+
+    def injected_lstat(path, *args, **kwargs):
+        if Path(path) == failing_marker:
+            raise PermissionError("injected marker failure")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(job_repository.os, "lstat", injected_lstat)
+
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+
+    by_id = {entry.discovery_id: entry for entry in entries}
+    assert by_id["job-healthy"].healthy
+    assert not by_id["job-io-failure"].healthy
+    assert {issue.code for issue in by_id["job-io-failure"].issues} == {
+        "job_manifest_invalid"
+    }
+
+
+def test_inspect_job_maps_directory_lstat_failure_to_nonthrowing_diagnostic(tmp_path, monkeypatch):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-io-failure", 10)
+    import cs2pov.storage.job_repository as job_repository
+
+    failing_directory = workspace.jobs_dir / "job-io-failure"
+    real_lstat = job_repository.os.lstat
+
+    def injected_lstat(path, *args, **kwargs):
+        if Path(path) == failing_directory:
+            raise PermissionError("injected directory failure")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(job_repository.os, "lstat", injected_lstat)
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-io-failure"
+    )
+
+    assert not inspection.entry.healthy
+    assert {issue.code for issue in inspection.entry.issues} == {"job_path_escape"}
+    assert inspection.marker is None
+    assert inspection.manifest is None
+
+
+def test_list_jobs_isolates_optional_shard_lstat_failure(tmp_path, monkeypatch):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-healthy", 10)
+    _create(workspace, demo_assets, source, "job-shard-io", 11)
+    import cs2pov.storage.job_repository as job_repository
+
+    failing_shard = workspace.jobs_dir / "job-shard-io/timeline/demo.json"
+    real_lstat = job_repository.os.lstat
+
+    def injected_lstat(path, *args, **kwargs):
+        if Path(path) == failing_shard:
+            raise PermissionError("injected optional shard failure")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(job_repository.os, "lstat", injected_lstat)
+
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+
+    by_id = {entry.discovery_id: entry for entry in entries}
+    assert by_id["job-healthy"].healthy
+    assert not by_id["job-shard-io"].healthy
+    issue = by_id["job-shard-io"].issues[0]
+    assert issue.code == "job_path_escape"
+    assert issue.logical_path == "timeline/demo.json"
+
+
 def test_list_jobs_exposes_distinct_final_artifact_kinds_from_valid_manifest(tmp_path):
     workspace, demo_assets, source = _seed(tmp_path)
     _create(workspace, demo_assets, source, "job-artifacts", 10)
@@ -305,6 +382,24 @@ def test_inspect_job_reports_unavailable_demo_but_keeps_valid_artifact_metadata(
     with pytest.raises(JobRepositoryError) as exc_info:
         FileSystemJobRepository(workspace, demo_assets).load_job("job-inspect")
     assert exc_info.value.code == "job_source_unavailable"
+
+
+def test_inspect_job_ignores_unknown_extra_file_and_directory_without_mutation(tmp_path):
+    workspace, demo_assets, source = _seed(tmp_path)
+    _create(workspace, demo_assets, source, "job-forward-safe", 10)
+    job_dir = workspace.jobs_dir / "job-forward-safe"
+    (job_dir / "future-feature").mkdir()
+    (job_dir / "future-feature/payload.bin").write_bytes(b"unknown")
+    (job_dir / "timeline/future-format.data").write_bytes(b"unknown")
+    before = _filesystem_snapshot(job_dir)
+
+    inspection = FileSystemJobRepository(workspace, demo_assets).inspect_job(
+        "job-forward-safe"
+    )
+
+    assert inspection.entry.healthy
+    assert inspection.entry.issues == ()
+    assert _filesystem_snapshot(job_dir) == before
 
 
 def test_inspect_job_captures_missing_source_and_bad_artifact_without_hiding_manifest(tmp_path):
@@ -443,3 +538,37 @@ def test_inspect_job_does_not_repair_missing_initial_lock_or_journal(tmp_path):
 
     assert "job_shard_missing" in {issue.code for issue in inspection.entry.issues}
     assert _filesystem_snapshot(job_dir) == before
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction test")
+def test_list_jobs_reports_junction_candidate_without_following_it(tmp_path):
+    workspace, demo_assets, _ = _seed(tmp_path)
+    workspace.jobs_dir.mkdir(parents=True)
+    outside = tmp_path / "outside-catalog-junction"
+    outside.mkdir()
+    (outside / "repository.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "repository_kind": "cs2pov-current-job",
+                "job_id": "job-junction",
+            }
+        ),
+        encoding="utf-8",
+    )
+    junction = workspace.jobs_dir / "job-junction"
+    import subprocess
+
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(junction), str(outside)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"mklink /J unavailable: {result.stderr or result.stdout}")
+
+    entries = FileSystemJobRepository(workspace, demo_assets).list_jobs()
+
+    assert len(entries) == 1
+    assert entries[0].discovery_id == "job-junction"
+    assert {issue.code for issue in entries[0].issues} == {"job_path_escape"}

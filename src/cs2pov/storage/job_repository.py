@@ -111,6 +111,7 @@ _OPTIONAL_DYNAMIC_FILES = (
 
 _REVIEW_DIRECTORY = re.compile(r"review_[a-z0-9][a-z0-9_-]{0,63}\Z")
 _REVIEW_ROUND_FILE = re.compile(r"round_[a-z0-9][a-z0-9_-]{0,63}\.json\Z")
+_DIRECTORY_FSYNC_SUPPORTED = os.name != "nt"
 
 
 def _repository_error(
@@ -148,11 +149,21 @@ def _canonical_timestamp(clock) -> str:
         ) from exc
 
 
-def _lstat_optional(path: Path) -> os.stat_result | None:
+def _lstat_optional(
+    path: Path, *, logical_path: str | None = None
+) -> os.stat_result | None:
     try:
         return os.lstat(path)
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise _repository_error(
+            "job_path_escape",
+            "无法安全检查 Job 文件系统节点。",
+            "请检查该 Job 的目录权限和文件系统状态。",
+            logical_path,
+            exc,
+        ) from exc
 
 
 def _fsync_jobs_directory(path: Path) -> None:
@@ -172,6 +183,61 @@ def _fsync_jobs_directory(path: Path) -> None:
             None,
             exc,
         ) from exc
+
+
+def _fsync_staging_directory(path: Path) -> None:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            current = os.lstat(path)
+            if (
+                _is_link_or_reparse(current)
+                or not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+            ):
+                raise _repository_error(
+                    "job_path_escape",
+                    "Job staging 目录在持久化前发生变化。",
+                    "请停止其他程序修改 jobs 目录后重试。",
+                )
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except JobRepositoryError:
+        raise
+    except OSError as exc:
+        raise _repository_error(
+            "job_write_failed",
+            "Job staging 目录持久化失败。",
+            "请检查磁盘和工作区权限后重试。",
+            None,
+            exc,
+        ) from exc
+
+
+def _fsync_staging_tree(staging: Path) -> None:
+    if not _DIRECTORY_FSYNC_SUPPORTED:
+        return
+    directories = {staging}
+    for relative in _INITIAL_DIRECTORIES:
+        current = staging
+        for part in relative.split("/"):
+            current = current / part
+            directories.add(current)
+    # Each child directory persists its own entries first; each parent then
+    # persists the child's directory entry, ending with the staging root.
+    for directory in sorted(
+        directories,
+        key=lambda path: len(path.relative_to(staging).parts),
+        reverse=True,
+    ):
+        _fsync_staging_directory(directory)
 
 
 class FileSystemJobRepository:
@@ -402,11 +468,53 @@ class FileSystemJobRepository:
                 continue
 
             marker_path = Path(child.path) / "repository.json"
-            if _lstat_optional(marker_path) is None:
+            try:
+                os.lstat(marker_path)
+            except FileNotFoundError:
                 # Markerless directories, including v0.x manifest.json-only
                 # outputs, are outside this current-version repository.
                 continue
-            entries.append(self.inspect_job(discovery_id).entry)
+            except OSError as exc:
+                entries.append(
+                    self._entry_from_parts(
+                        discovery_id,
+                        None,
+                        (
+                            _repository_error(
+                                "job_manifest_invalid",
+                                "无法检查当前 Job 的仓储标记。",
+                                "请检查该 Job 的 repository.json 和目录权限。",
+                                "repository.json",
+                                exc,
+                            ).to_issue(),
+                        ),
+                    )
+                )
+                continue
+            try:
+                entries.append(self.inspect_job(discovery_id).entry)
+            except JobRepositoryError as exc:
+                # A sibling may disappear or become unreadable after discovery;
+                # catalog isolation still returns the other Jobs.
+                entries.append(
+                    self._entry_from_parts(discovery_id, None, (exc.to_issue(),))
+                )
+            except OSError as exc:
+                entries.append(
+                    self._entry_from_parts(
+                        discovery_id,
+                        None,
+                        (
+                            _repository_error(
+                                "job_path_escape",
+                                "检查 Job 时发生文件系统错误。",
+                                "请检查该 Job 的目录权限和文件系统状态。",
+                                None,
+                                exc,
+                            ).to_issue(),
+                        ),
+                    )
+                )
 
         valid_time = [entry for entry in entries if entry.updated_at is not None]
         invalid_time = [entry for entry in entries if entry.updated_at is None]
@@ -433,9 +541,7 @@ class FileSystemJobRepository:
             paths = self._paths_for(job_id)
             self._validate_existing_job_dir(paths)
         except JobRepositoryError as exc:
-            if exc.code != "job_path_escape" or _lstat_optional(
-                self.paths.jobs_dir / job_id
-            ) is None:
+            if exc.code != "job_path_escape":
                 raise
             entry = self._entry_from_parts(job_id, None, (exc.to_issue(),))
             return JobInspection(entry, None, None, None, (), False)
@@ -666,7 +772,12 @@ class FileSystemJobRepository:
                         "请重新生成或恢复该产物。",
                         artifact.relative_path,
                     )
-            except (WorkspacePathOutsideRootError, DomainSchemaError, ValueError) as exc:
+            except (
+                WorkspacePathOutsideRootError,
+                DomainSchemaError,
+                OSError,
+                ValueError,
+            ) as exc:
                 error = _repository_error(
                     "job_path_escape",
                     "最终产物路径超出 Job 或包含不安全节点。",
@@ -748,7 +859,12 @@ class FileSystemJobRepository:
         issues: list[JobIssue] = []
         for relative in _OPTIONAL_EXACT_FILES:
             path = paths.job_dir.joinpath(*relative.split("/"))
-            if _lstat_optional(path) is None:
+            try:
+                state = _lstat_optional(path, logical_path=relative)
+            except JobRepositoryError as exc:
+                self._append_issue(issues, exc.to_issue())
+                continue
+            if state is None:
                 continue
             try:
                 self._assert_safe_regular(
@@ -1107,6 +1223,7 @@ class FileSystemJobRepository:
                     "请重试创建 Job。",
                     "events/job_events.jsonl",
                 )
+            _fsync_staging_tree(staging)
         except JobRepositoryError:
             raise
         except OSError as exc:
