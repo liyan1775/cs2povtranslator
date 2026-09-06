@@ -167,3 +167,23 @@ workspace Pipeline DemoAsset E2E passed: auto-import, reference-only jobs, resum
 
 该 E2E 只运行到 `prepare_input`，不需要 CS2、GPU、真实 Demo、ASR、LLM 或 API。
 CI 在 Ubuntu Python 3.11/3.12/3.13 和 Windows Python 3.12 的同一测试矩阵中运行它。
+# 02C-A 回合任务状态回放
+
+`py -3.12 scripts/check_new_job_state.py` 在独立进程中重放三回合状态序列：
+乱序完成、重试等待、取消后恢复、草稿/正式阶段分支，以及仅一个回合输入变化时的失效。
+回放使用生产状态函数，比较静态期望与每次转换的规范化指纹；未知字段、重复 JSON 键和被篡改结果均使检查失败。
+
+产物清理在合法 `COMPLETED_WITH_VIDEO` 分支上使用四类合成索引进行验证：翻译配置
+失效撤销 timeline/subtitle/green_screen/video 与 active review；render-only 失效
+仅撤销 video，保留复核及其余三类产物。mutation 回归确认生产 rewind 若保留旧产物，
+回放会拒绝该行为。此检查不创建实际媒体文件。
+
+2026-09-06 已确认验证及 commit/CI 待办集中记录于
+[A 交付清单](superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)；
+Sagan 最终全量为 2233 passed、28 skipped，95.87 秒，exit 0；全部 16 个
+changed/untracked Python 文件 Ruff、compileall、diffcheck 通过，计划扫描无匹配。
+GitHub 尚未推送，远程 CI 与合并验收待完成。
+
+相关测试位于 `test_domain_job_tasks_v1.py`、`test_domain_job_task_state_v1.py`、
+`test_domain_job_state_v1.py`、`test_domain_invalidation_v1.py` 和
+`test_new_job_state_replay.py`。这些测试证明当前状态契约，不作为真实并发性能、持久化崩溃恢复或翻译质量的验收证据。
