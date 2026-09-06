@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -119,7 +120,15 @@ def test_job_id_allows_safe_unicode_hyphen_and_underscore_names(tmp_path: Path, 
     assert store.job_dir.is_dir()
 
 
-def test_explicit_and_automatic_collisions_use_observable_suffixes(tmp_path: Path):
+def test_explicit_and_automatic_collisions_use_observable_suffixes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls(2026, 9, 5, 12, 0, 0)
+
+    # Keep automatic IDs in the same second to exercise a real directory collision.
+    monkeypatch.setattr("cs2pov.storage.artifact_store.datetime", FixedDatetime)
+
     first = ArtifactStore.create(tmp_path, job_id="same-job")
     second = ArtifactStore.create(tmp_path, job_id="same-job")
     auto_one = ArtifactStore.create(tmp_path, map_name="de_mirage")
@@ -129,11 +138,76 @@ def test_explicit_and_automatic_collisions_use_observable_suffixes(tmp_path: Pat
     assert second.job_dir.name == "same-job_2"
     assert auto_two.job_dir.name == f"{auto_one.job_dir.name}_2"
     assert first.job_dir != second.job_dir
+    assert all(store.job_dir.is_dir() for store in (first, second, auto_one, auto_two))
+
+
+def test_creation_retries_when_competing_claim_disappears_before_stat(tmp_path, monkeypatch):
+    claim = tmp_path / ".released.job.claim"
+    claim.mkdir()
+    original_stat = Path.stat
+    released = False
+
+    def release_before_stat(path, *args, **kwargs):
+        nonlocal released
+        if path == claim and not released:
+            released = True
+            claim.rmdir()
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", release_before_stat)
+    store = ArtifactStore.create(tmp_path, job_id="released")
+    assert released
+    assert store.job_dir.is_dir()
+    assert not claim.exists()
+
+
+def test_disappearing_claim_race_still_respects_deadline(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import cs2pov.storage.artifact_store as module
+
+    claim = tmp_path / ".churn.job.claim"
+    original_mkdir = Path.mkdir
+    ticks = iter((0.0, 11.0))
+
+    def contested_mkdir(path, *args, **kwargs):
+        if path == claim:
+            raise FileExistsError()
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", contested_mkdir)
+    monkeypatch.setattr(module, "time", SimpleNamespace(
+        monotonic=lambda: next(ticks), time=module.time.time, sleep=module.time.sleep,
+    ))
+    with pytest.raises(JobRuntimeError) as caught:
+        with module._rename_claim(tmp_path, "churn"):
+            pytest.fail("Expired claim deadline entered critical section")
+    assert caught.value.code == "job_path_claim_busy"
+    assert next(ticks, None) is None
+
+
+def test_claim_stat_permission_error_is_not_retried_as_release(tmp_path, monkeypatch):
+    import cs2pov.storage.artifact_store as module
+
+    claim = tmp_path / ".occupied.job.claim"
+    claim.mkdir()
+    original_stat = Path.stat
+
+    def blocked_stat(path, *args, **kwargs):
+        if path == claim:
+            raise PermissionError()
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", blocked_stat)
+    with pytest.raises(JobRuntimeError) as caught:
+        with module._rename_claim(tmp_path, "occupied"):
+            pytest.fail("Unreadable claim entered critical section")
+    assert caught.value.code == "job_path_claim_busy"
 
 
 def test_concurrent_creators_claim_distinct_real_directories(tmp_path: Path):
     def create() -> Path:
         return ArtifactStore.create(tmp_path, job_id="parallel").job_dir
+
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         paths = list(pool.map(lambda _: create(), range(2)))
