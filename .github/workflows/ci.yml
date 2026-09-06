@@ -56,6 +56,9 @@ jobs:
       - name: Replay v0.9.8 golden baseline
         run: python scripts/check_golden_baseline.py --replay
 
+      - name: Replay current Job state core
+        run: python scripts/check_new_job_state.py
+
       - name: Run test suite
         run: python -m pytest -q -p no:cacheprovider
 

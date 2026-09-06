@@ -1,6 +1,8 @@
 # Round Orchestration Runtime Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
+
+**Status (2026-09-05):** Planned; implementation starts after 02C-A is merged. Provider-specific integration belongs to task 5.3 of the overall plan.
 
 **Goal:** Persist round tasks and run them with bounded parallelism, deterministic retries, cancellation, crash recovery, immediate successful checkpoints, and stable aggregation without requiring a real model API.
 
@@ -20,7 +22,7 @@
 - Filesystem task truth may lead the cached manifest summary after a crash. Explicit resume reconciles it; list/inspect/load remain read-only.
 - No real provider, endpoint, API key, CS2, GPU, Web UI, knowledge database, subtitle renderer, or POV recorder is introduced here.
 - Use the configured `ModelConfigurationSnapshot`; failures must not silently switch model, service, prompt, or knowledge revision.
-- Use TDD, focused commits, full real-process replay, independent strong review, GitHub CI, and post-merge CI.
+- Use TDD, focused commits, full real-process replay, independent review, GitHub CI, and post-merge CI. Prefer Luna for implementation, testing, documentation and routine review; reserve the coordinating model for material unresolved risks.
 
 ---
 
@@ -662,9 +664,9 @@ git add docs/ARCHITECTURE.zh.md docs/TESTING_GUIDE.zh.md tests/golden/README.zh.
 git commit -m "docs: explain round orchestration recovery"
 ```
 
-- [ ] **Step 4: Independent strong review**
+- [ ] **Step 4: Independent review**
 
-Ask a fresh strong model to review state legality, claim fencing, cross-file crash points, task/result closure, async cancellation, retry timing, no-write reads, Windows junction behavior, and test realism. Resolve every accepted finding with a red regression first and rerun the complete gate.
+Ask an independent reviewer, normally Luna under the user's resource allocation, to review state legality, claim fencing, cross-file crash points, task/result closure, async cancellation, retry timing, no-write reads, Windows junction behavior, and test realism. Escalate material unresolved risks to the coordinating model. Resolve every accepted finding with a red regression first and rerun the complete gate.
 
 - [ ] **Step 5: GitHub handoff and post-merge proof**
 

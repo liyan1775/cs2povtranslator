@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from enum import Enum
 from collections.abc import Mapping
 from typing import Any
@@ -12,6 +11,7 @@ from .errors import DomainSchemaError
 from .fingerprint import content_fingerprint
 from .schema import (
     MAX_COUNT,
+    require_canonical_utc_timestamp,
     require_current_schema,
     require_exact_keys,
     require_identifier,
@@ -33,18 +33,7 @@ def _invalid(path: str, code: str = "domain_field_invalid", message: str = "Job 
 
 
 def _timestamp(value: object, path: str) -> str:
-    if not isinstance(value, str) or value != value.strip():
-        _invalid(path, "domain_field_invalid", "时间格式无效。")
-    # Durable timestamps are intentionally canonical, not merely parseable.
-    import re
-
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z", value) is None:
-        _invalid(path, "domain_field_invalid", "时间必须是带 6 位微秒的 UTC 时间。")
-    try:
-        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise DomainSchemaError("domain_field_invalid", "时间无效。", "请修正后重试。", path) from exc
-    return parsed.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return require_canonical_utc_timestamp(value, path)
 
 
 def _name(value: object, path: str) -> str:

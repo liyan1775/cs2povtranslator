@@ -114,12 +114,11 @@ class ArtifactStore:
         external_audio_cache = self._audio_cache_root is not None and not self._keep_temp_audio
         while True:
             target_temp_audio: Path | None = None
-            collided = False
             renamed = False
             with _rename_claim(self.job_dir.parent, target.name):
                 _reject_escaped_candidate(target, self.job_dir.parent.resolve())
                 if target.exists() or target.is_symlink():
-                    collided = True
+                    pass
                 else:
                     target_temp_audio = self._temp_audio_path(target)
                     if external_audio_cache and old_temp_audio.exists():
@@ -128,12 +127,12 @@ class ArtifactStore:
                         # workspace cache root rather than inside the Job.
                         with _rename_claim(self._audio_cache_root, target.name):
                             if target_temp_audio.exists():
-                                collided = True
+                                pass
                             else:
                                 try:
                                     old_temp_audio.rename(target_temp_audio)
                                 except FileExistsError:
-                                    collided = True
+                                    pass
                                 else:
                                     try:
                                         self.job_dir.rename(target)
@@ -146,7 +145,6 @@ class ArtifactStore:
                                                 "Job 重命名失败，临时音频回滚也失败。",
                                                 "请保留旧/新 cache/audio 目录，按日志诊断后再处理。",
                                             ) from rollback_error
-                                        collided = True
                                     except Exception:
                                         try:
                                             target_temp_audio.rename(old_temp_audio)
@@ -163,7 +161,7 @@ class ArtifactStore:
                         try:
                             self.job_dir.rename(target)
                         except FileExistsError:
-                            collided = True
+                            pass
                         else:
                             renamed = True
             if renamed:
@@ -320,6 +318,10 @@ def _rename_claim(parent: Path, candidate_name: str):
         except FileExistsError:
             try:
                 age = time.time() - claim.stat().st_mtime
+            except FileNotFoundError:
+                # The cooperating owner can release between mkdir and stat.
+                # Retry acquisition under the existing bounded deadline.
+                age = 0.0
             except OSError as exc:
                 raise JobRuntimeError("job_path_claim_busy", "Job 重命名正在被其他任务占用。", "请稍后重试。") from exc
             if age > 30.0:

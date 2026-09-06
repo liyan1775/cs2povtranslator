@@ -177,6 +177,9 @@ class RoundUnderstandingDocument:
             "results": [r.to_dict() for r in self.results],
         }
 
+    def content_fingerprint(self) -> str:
+        return content_fingerprint(self.to_dict())
+
     @classmethod
     def from_dict(cls, d):
         d = require_mapping(d, "round_understanding")

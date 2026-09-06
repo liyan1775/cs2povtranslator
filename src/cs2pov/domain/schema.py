@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime
 from collections.abc import Mapping
 from typing import Final
 from .errors import DomainSchemaError
@@ -50,6 +51,20 @@ def _err(code, path, msg="字段无效。"):
 def require_mapping(value, path):
     if not isinstance(value, Mapping):
         _err("domain_field_invalid", path)
+    return value
+
+
+def require_canonical_utc_timestamp(value: object, path: str) -> str:
+    """Validate an exact UTC timestamp and preserve its canonical bytes."""
+    if not isinstance(value, str) or value != value.strip():
+        _err("domain_field_invalid", path, "时间格式无效。")
+    if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z", value) is None:
+        _err("domain_field_invalid", path, "时间必须是带 6 位微秒的 UTC 时间。")
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ")
+    except ValueError as exc:
+        raise DomainSchemaError("domain_field_invalid", "时间无效。", "请修正后重试。", path) from exc
+    # strftime does not zero-pad years below 1000 on all platforms.
     return value
 
 

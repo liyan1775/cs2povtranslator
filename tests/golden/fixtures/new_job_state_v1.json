@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "fixture_id": "new-job-state-v1",
+  "rounds": [
+    {
+      "round_id": "round-001",
+      "input_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+      "result_fingerprint": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    {
+      "round_id": "round-002",
+      "input_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+      "result_fingerprint": "8888888888888888888888888888888888888888888888888888888888888888"
+    },
+    {
+      "round_id": "round-003",
+      "input_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+      "result_fingerprint": "9999999999999999999999999999999999999999999999999999999999999999"
+    }
+  ],
+  "expected": {
+    "completion_order": [
+      "round-002",
+      "round-001",
+      "round-003"
+    ],
+    "aggregate_order": [
+      "round-001",
+      "round-002",
+      "round-003"
+    ],
+    "progress_before_invalidation": {
+      "total": 3,
+      "succeeded": 3,
+      "failed": 0,
+      "review_pending": 0
+    },
+    "progress_after_invalidation": {
+      "total": 3,
+      "succeeded": 2,
+      "failed": 0,
+      "review_pending": 0
+    },
+    "run_status_after_invalidation": "pending",
+    "retry_at": "2026-09-05T00:00:05.000000Z",
+    "draft_phase": "completed_draft",
+    "review_gate_rejected": true,
+    "reviewed_phase": "final_timeline_ready",
+    "completed_branch_phase": "completed_with_video",
+    "rewound_phase": "context_ready",
+    "rewound_active_review": null,
+    "rewound_artifact_kinds": [],
+    "render_only_rewound_phase": "green_screen_rendered",
+    "render_only_active_review": "review-001",
+    "render_only_artifact_kinds": [
+      "timeline",
+      "subtitle",
+      "green_screen"
+    ],
+    "transition_fingerprints": {
+      "round-001:2026-09-05T00:00:01.000000Z": "6d7a5d00ca1f9727f7ff478ebde9b28caf327de1a5d2a10430af60ab94242817",
+      "round-002:2026-09-05T00:00:01.000000Z": "80996b7460ba35d72ee8f922060cad19b2a53092994ea74db343981cebae1551",
+      "round-003:2026-09-05T00:00:01.000000Z": "98e82e56350ffb6d25be114e98a1dab646530b555ce213801496a1e545d95db0",
+      "round-002:2026-09-05T00:00:02.000000Z": "ffcc6bb28831dbc0581fd396a99b59b1bb053c7506f263dad7c0afffcab72d70",
+      "round-001:2026-09-05T00:00:03.000000Z": "f7083a8efd22eb9c9da794ec574b04b7dde8f88a7f3f74c2798ae8c912c19e62",
+      "round-003:2026-09-05T00:00:04.000000Z": "c72507b8d5d374fd93705adac6c75cd7b887ab08528813ce9cfc8762c5872cd0",
+      "round-001:2026-09-05T00:00:05.000000Z": "80949d71a333e8f3ac8f65c7e075be52e4c5ed603dad106f658c07743d07db1e",
+      "round-001:2026-09-05T00:00:06.000000Z": "b3c349cfcd823b42d46529c58604d492b46a6fa97df203e668f74f618e9f5e63",
+      "round-003:2026-09-05T00:00:07.000000Z": "fcd1e0170c3bb9d40fe9af46a61a56044d80f5800b3cc25909ab10220e2a320b",
+      "round-003:2026-09-05T00:00:08.000000Z": "e9c4cb1eba25d1bdd583bd4990458c51138b5c6e45b939caede6418e6378e832",
+      "round-003:2026-09-05T00:00:09.000000Z": "767d4e9e0b6ad60339e446c794b13a4d04bfcaff47a9e6a3ff8db22cdcb7ef59",
+      "round-002:2026-09-05T00:00:21.000000Z": "fec8603f2e9623713fad197f24ee69f2df56995a602610e8fea53758dbd74f93"
+    },
+    "final_tasks": [
+      {
+        "schema_version": 1,
+        "task_id": "round-001",
+        "round_id": "round-001",
+        "status": "succeeded",
+        "input_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+        "configuration_snapshot_id": "snapshot-balanced",
+        "result_fingerprint": "7777777777777777777777777777777777777777777777777777777777777777",
+        "attempts": [
+          {
+            "attempt_id": "round-001-try-1",
+            "attempt_number": 1,
+            "input_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "configuration_snapshot_id": "snapshot-balanced",
+            "status": "retryable_failed",
+            "started_at": "2026-09-05T00:00:01.000000Z",
+            "finished_at": "2026-09-05T00:00:03.000000Z",
+            "invocation_record_ids": [],
+            "result_fingerprint": null,
+            "error": {
+              "code": "provider_busy",
+              "message_zh": "服务繁忙。",
+              "impact_zh": "本回合未完成。",
+              "suggestion_zh": "请稍后重试。",
+              "retryable": true,
+              "retry_after_us": 2000000
+            }
+          },
+          {
+            "attempt_id": "round-001-try-2",
+            "attempt_number": 2,
+            "input_fingerprint": "1111111111111111111111111111111111111111111111111111111111111111",
+            "configuration_snapshot_id": "snapshot-balanced",
+            "status": "succeeded",
+            "started_at": "2026-09-05T00:00:05.000000Z",
+            "finished_at": "2026-09-05T00:00:06.000000Z",
+            "invocation_record_ids": [],
+            "result_fingerprint": "7777777777777777777777777777777777777777777777777777777777777777",
+            "error": null
+          }
+        ],
+        "next_retry_at": null,
+        "updated_at": "2026-09-05T00:00:06.000000Z"
+      },
+      {
+        "schema_version": 1,
+        "task_id": "round-002",
+        "round_id": "round-002",
+        "status": "pending",
+        "input_fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "configuration_snapshot_id": "snapshot-new",
+        "result_fingerprint": null,
+        "attempts": [
+          {
+            "attempt_id": "round-002-try-1",
+            "attempt_number": 1,
+            "input_fingerprint": "2222222222222222222222222222222222222222222222222222222222222222",
+            "configuration_snapshot_id": "snapshot-balanced",
+            "status": "succeeded",
+            "started_at": "2026-09-05T00:00:01.000000Z",
+            "finished_at": "2026-09-05T00:00:02.000000Z",
+            "invocation_record_ids": [],
+            "result_fingerprint": "8888888888888888888888888888888888888888888888888888888888888888",
+            "error": null
+          }
+        ],
+        "next_retry_at": null,
+        "updated_at": "2026-09-05T00:00:21.000000Z"
+      },
+      {
+        "schema_version": 1,
+        "task_id": "round-003",
+        "round_id": "round-003",
+        "status": "succeeded",
+        "input_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+        "configuration_snapshot_id": "snapshot-balanced",
+        "result_fingerprint": "9999999999999999999999999999999999999999999999999999999999999999",
+        "attempts": [
+          {
+            "attempt_id": "round-003-try-1",
+            "attempt_number": 1,
+            "input_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+            "configuration_snapshot_id": "snapshot-balanced",
+            "status": "cancelled",
+            "started_at": "2026-09-05T00:00:01.000000Z",
+            "finished_at": "2026-09-05T00:00:04.000000Z",
+            "invocation_record_ids": [],
+            "result_fingerprint": null,
+            "error": null
+          },
+          {
+            "attempt_id": "round-003-try-2",
+            "attempt_number": 2,
+            "input_fingerprint": "3333333333333333333333333333333333333333333333333333333333333333",
+            "configuration_snapshot_id": "snapshot-balanced",
+            "status": "succeeded",
+            "started_at": "2026-09-05T00:00:08.000000Z",
+            "finished_at": "2026-09-05T00:00:09.000000Z",
+            "invocation_record_ids": [],
+            "result_fingerprint": "9999999999999999999999999999999999999999999999999999999999999999",
+            "error": null
+          }
+        ],
+        "next_retry_at": null,
+        "updated_at": "2026-09-05T00:00:09.000000Z"
+      }
+    ]
+  }
+}
