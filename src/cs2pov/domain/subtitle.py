@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Sequence
 
 from cs2pov.domain.models import TranslationSegment, TranscriptSegment, VoiceActivityCue
 
@@ -339,14 +339,26 @@ def _smooth_short_stack_fragments(items: list[tuple[float, float, str]], min_sec
     return out
 
 
-def render_srt(items, text_fn: Callable, policy: SubtitlePolicy | None = None) -> str:
+def render_srt(
+    items,
+    text_fn: Callable,
+    policy: SubtitlePolicy | None = None,
+    *,
+    time_formatter: Callable[[float], str] = format_srt_time,
+) -> str:
+    """Render SRT using an export-specific time formatter.
+
+    Legacy callers retain the historical float-second formatter. Current Job
+    adapters can provide a deterministic formatter while keeping integer
+    microseconds in their durable timeline objects.
+    """
     lines: list[str] = []
     display_items = apply_subtitle_policy(list(items), policy)
     if policy is not None and policy.overlap_policy == "merge":
         merged_items = _merge_overlapping_items(display_items, text_fn)
         for idx, (start, end, text) in enumerate(merged_items, 1):
             lines.append(str(idx))
-            lines.append(f"{format_srt_time(start)} --> {format_srt_time(end)}")
+            lines.append(f"{time_formatter(start)} --> {time_formatter(end)}")
             lines.append(text)
             lines.append("")
         return "\n".join(lines).strip() + "\n"
@@ -356,14 +368,14 @@ def render_srt(items, text_fn: Callable, policy: SubtitlePolicy | None = None) -
         stacked_items = _smooth_short_stack_fragments(stacked_items, policy.min_stack_fragment_seconds)
         for idx, (start, end, text) in enumerate(stacked_items, 1):
             lines.append(str(idx))
-            lines.append(f"{format_srt_time(start)} --> {format_srt_time(end)}")
+            lines.append(f"{time_formatter(start)} --> {time_formatter(end)}")
             lines.append(text)
             lines.append("")
         return "\n".join(lines).strip() + "\n"
 
     for idx, item in enumerate(display_items, 1):
         lines.append(str(idx))
-        lines.append(f"{format_srt_time(item.start_time)} --> {format_srt_time(item.end_time)}")
+        lines.append(f"{time_formatter(item.start_time)} --> {time_formatter(item.end_time)}")
         lines.append(text_fn(item))
         lines.append("")
     return "\n".join(lines).strip() + "\n"

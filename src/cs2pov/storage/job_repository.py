@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import ctypes
@@ -18,6 +19,7 @@ from cs2pov.domain.fingerprint import content_fingerprint
 from cs2pov.domain.job_tasks import RoundTaskStatus, RoundTranslationTask
 from cs2pov.domain.job import (
     CreateJobRequest,
+    FinalArtifactEntry,
     FinalArtifactKind,
     JobEvent,
     JobDemoSource,
@@ -976,6 +978,152 @@ class FileSystemJobRepository:
                 new_manifest,
                 claim,
             )
+
+    def publish_final_artifacts(
+        self,
+        job_id: str,
+        artifacts: tuple[FinalArtifactEntry, ...],
+        payloads: Mapping[str, bytes],
+        expected_manifest_fingerprint: str,
+        new_manifest: JobManifest,
+        claim: JobWriteClaim,
+    ) -> OpenedJob:
+        """Publish immutable final files and their manifest registration together.
+
+        Subtitle export prepares every payload before entering this method. The
+        repository then validates the manifest CAS, writes only previously
+        absent artifact paths, and publishes the manifest last. A path that
+        already contains different content is rejected instead of being
+        overwritten, which keeps an existing valid artifact authoritative when
+        a later export fails.
+        """
+        if not isinstance(expected_manifest_fingerprint, str):
+            raise TypeError("expected_manifest_fingerprint must be a string")
+        if not isinstance(new_manifest, JobManifest):
+            raise TypeError("new_manifest must be a JobManifest")
+        if not isinstance(claim, JobWriteClaim):
+            raise TypeError("claim must be a JobWriteClaim")
+        if not isinstance(payloads, Mapping):
+            raise TypeError("payloads must be a mapping")
+        try:
+            artifact_values = tuple(artifacts)
+        except TypeError as exc:
+            raise TypeError("artifacts must be iterable") from exc
+        if any(not isinstance(item, FinalArtifactEntry) for item in artifact_values):
+            raise TypeError("artifacts must contain FinalArtifactEntry values")
+        if len({item.artifact_id for item in artifact_values}) != len(artifact_values):
+            raise self._invalid_shard_input(
+                "最终产物标识重复。", "job.json"
+            )
+        if len({item.relative_path.casefold() for item in artifact_values}) != len(
+            artifact_values
+        ):
+            raise self._invalid_shard_input(
+                "最终产物路径重复。", "job.json"
+            )
+        if set(payloads) != {item.relative_path for item in artifact_values}:
+            raise self._invalid_shard_input(
+                "最终产物文件与登记清单不一致。", "final/subtitles"
+            )
+        for relative_path, payload in payloads.items():
+            if not isinstance(relative_path, str) or not isinstance(payload, bytes):
+                raise TypeError("payloads must map relative paths to bytes")
+            if hashlib.sha256(payload).hexdigest() != next(
+                item.content_sha256
+                for item in artifact_values
+                if item.relative_path == relative_path
+            ):
+                raise self._invalid_shard_input(
+                    "最终产物内容哈希不一致。", relative_path
+                )
+
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        created_paths: list[Path] = []
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            current = opened.manifest
+            if current.content_fingerprint() != expected_manifest_fingerprint:
+                raise self._manifest_conflict()
+            new_by_id = {item.artifact_id: item for item in new_manifest.final_artifacts}
+            if any(new_by_id.get(item.artifact_id) != item for item in artifact_values):
+                raise self._invalid_shard_input(
+                    "最终产物登记与新 Job 清单不一致。", "job.json"
+                )
+            if not {
+                item.artifact_id for item in current.final_artifacts
+            }.issubset(new_by_id):
+                raise self._invalid_shard_input(
+                    "新 Job 清单不能移除既有最终产物。", "job.json"
+                )
+            current_by_id = {item.artifact_id: item for item in current.final_artifacts}
+            for item in artifact_values:
+                existing = current_by_id.get(item.artifact_id)
+                if existing is not None and existing != item:
+                    raise self._manifest_conflict(
+                        "同一最终产物标识已经对应不同内容。"
+                    )
+            current_paths = {
+                item.relative_path.casefold() for item in current.final_artifacts
+            }
+            for item in artifact_values:
+                path = paths.artifact_path(item.kind, item.relative_path)
+                state = _lstat_optional(path, logical_path=item.relative_path)
+                if state is not None:
+                    existing_digest = self._hash_safe_regular(
+                        path, item.relative_path
+                    )
+                    if existing_digest != item.content_sha256:
+                        raise self._manifest_conflict(
+                            "同一最终产物路径已经对应不同内容。"
+                        )
+                elif item.relative_path.casefold() in current_paths:
+                    raise self._invalid_shard_input(
+                        "Job 清单引用的最终产物文件不存在。", item.relative_path
+                    )
+
+            manifest_write_started = False
+            try:
+                for item in artifact_values:
+                    path = paths.artifact_path(item.kind, item.relative_path)
+                    if _lstat_optional(path, logical_path=item.relative_path) is None:
+                        created_paths.append(path)
+                        atomic_write_bytes(
+                            path,
+                            payloads[item.relative_path],
+                            logical_path=item.relative_path,
+                        )
+                self._validate_manifest_references(paths, new_manifest, opened.source)
+                manifest_write_started = True
+                persisted = self._replace_manifest_locked(
+                    locked_file,
+                    job_id,
+                    expected_manifest_fingerprint,
+                    new_manifest,
+                    claim,
+                )
+            except Exception:
+                # Once manifest publication starts, leave the files in place:
+                # the write may have become durable before a post-write
+                # verification error was raised. Before that point, remove only
+                # files created by this operation so the previous manifest and
+                # its artifacts remain a valid reopening boundary.
+                if not manifest_write_started:
+                    for path in reversed(created_paths):
+                        try:
+                            state = os.lstat(path)
+                            if not _is_link_or_reparse(state) and stat.S_ISREG(state.st_mode):
+                                os.unlink(path)
+                        except FileNotFoundError:
+                            pass
+                        except OSError:
+                            pass
+                raise
+            return persisted
 
     def _replace_manifest_locked(
         self,
