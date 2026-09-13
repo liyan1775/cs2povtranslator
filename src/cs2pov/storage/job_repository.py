@@ -1203,7 +1203,7 @@ class FileSystemJobRepository:
     def _round_task_ids(self, paths):
         return self._dynamic_path_ids(
             paths.tasks_dir, prefix="round_", suffix=".json",
-            field="round_id", logical_directory="tasks",
+            field="round_id", logical_directory="tasks", strict_names=True,
         )
 
     def _read_round_task(self, paths, round_id):
@@ -1238,6 +1238,12 @@ class FileSystemJobRepository:
                     match = re.fullmatch(r"result_([0-9a-f]{64})\.json", child.name)
                     if match is None:
                         raise task_invalid(logical)
+                    self._assert_safe_regular(
+                        Path(child.path),
+                        logical_path=logical,
+                        missing_code="job_shard_missing",
+                        invalid_code="job_shard_invalid",
+                    )
                     document = read_strict_json(Path(child.path), logical_path=logical, parser=ROUND_UNDERSTANDING_PARSER)
                     if document.round_id != round_id or document.content_fingerprint() != match[1]:
                         raise task_invalid(logical)
@@ -1246,6 +1252,16 @@ class FileSystemJobRepository:
         except OSError as exc:
             raise task_invalid("understanding/history") from exc
         return results
+
+    def _inspect_understanding_history_locked(self, paths, manifest):
+        configurations = self._configuration_index(paths, manifest)
+        invocations = {
+            value.invocation_id: value
+            for value in self._read_all_invocations_locked(
+                paths, tuple(configurations.values())
+            )
+        }
+        self._read_understanding_history_locked(paths, configurations, invocations)
 
     def _round_task_context_locked(self, paths, manifest):
         ids = self._round_task_ids(paths)
@@ -2846,6 +2862,7 @@ class FileSystemJobRepository:
                 manifest,
                 source,
                 write_lock_already_held=True,
+                inspect_task_entries=True,
             ):
                 self._append_issue(issues, issue)
             if not any(issue.code == "job_path_escape" for issue in issues):
@@ -2856,6 +2873,10 @@ class FileSystemJobRepository:
                         self._assert_read_lock_locked(paths, locked_file)
                         # The earlier manifest was read before waiting for this lock.
                         _, manifest, _ = self._read_job_core(paths, job_id)
+                        try:
+                            self._inspect_understanding_history_locked(paths, manifest)
+                        except JobRepositoryError as exc:
+                            self._append_issue(issues, exc.to_issue())
                         try:
                             self._round_task_context_locked(paths, manifest)
                         except JobRepositoryError as exc:
@@ -2878,7 +2899,9 @@ class FileSystemJobRepository:
                     self._append_issue(issues, exc.to_issue())
         else:
             for issue in self._inspect_static_layout(
-                paths, write_lock_already_held=True
+                paths,
+                write_lock_already_held=True,
+                inspect_task_entries=True,
             ):
                 self._append_issue(issues, issue)
 
@@ -3430,6 +3453,7 @@ class FileSystemJobRepository:
         suffix: str,
         field: str,
         logical_directory: str,
+        strict_names: bool = False,
     ) -> tuple[str, ...]:
         try:
             children = tuple(os.scandir(directory))
@@ -3442,6 +3466,11 @@ class FileSystemJobRepository:
             if child.name.startswith("."):
                 continue
             if not child.name.startswith(prefix) or not child.name.endswith(suffix):
+                if strict_names:
+                    raise self._invalid_shard_input(
+                        "tasks 目录包含未识别的非隐藏条目。",
+                        f"{logical_directory}/{child.name}",
+                    )
                 continue
             raw_id = child.name[len(prefix) : -len(suffix)]
             persisted_id = self._persisted_path_id(raw_id, field)
@@ -4202,10 +4231,13 @@ class FileSystemJobRepository:
         source: JobDemoSource | None,
         *,
         write_lock_already_held: bool = False,
+        inspect_task_entries: bool = False,
     ) -> tuple[JobIssue, ...]:
         issues = list(
             self._inspect_static_layout(
-                paths, write_lock_already_held=write_lock_already_held
+                paths,
+                write_lock_already_held=write_lock_already_held,
+                inspect_task_entries=inspect_task_entries,
             )
         )
         if source is not None:
@@ -4261,7 +4293,11 @@ class FileSystemJobRepository:
         return tuple(issues)
 
     def _inspect_static_layout(
-        self, paths: JobPaths, *, write_lock_already_held: bool = False
+        self,
+        paths: JobPaths,
+        *,
+        write_lock_already_held: bool = False,
+        inspect_task_entries: bool = False,
     ) -> tuple[JobIssue, ...]:
         issues: list[JobIssue] = []
         blocked_directories: set[str] = set()
@@ -4279,7 +4315,9 @@ class FileSystemJobRepository:
                 self._append_issue(issues, exc.to_issue())
 
         for issue in self._inspect_optional_files(
-            paths, blocked_directories=frozenset(blocked_directories)
+            paths,
+            blocked_directories=frozenset(blocked_directories),
+            inspect_task_entries=inspect_task_entries,
         ):
             self._append_issue(issues, issue)
 
@@ -4307,6 +4345,7 @@ class FileSystemJobRepository:
         paths: JobPaths,
         *,
         blocked_directories: frozenset[str] = frozenset(),
+        inspect_task_entries: bool = False,
     ) -> tuple[JobIssue, ...]:
         issues: list[JobIssue] = []
         for relative in _OPTIONAL_EXACT_FILES:
@@ -4367,6 +4406,18 @@ class FileSystemJobRepository:
                 continue
             for child in children:
                 if pattern.fullmatch(child.name) is None:
+                    if (
+                        inspect_task_entries
+                        and relative_dir == "tasks"
+                        and not child.name.startswith(".")
+                    ):
+                        self._append_issue(
+                            issues,
+                            self._invalid_shard_input(
+                                "tasks 目录包含未识别的非隐藏条目。",
+                                f"{relative_dir}/{child.name}",
+                            ).to_issue(),
+                        )
                     continue
                 logical_path = f"{relative_dir}/{child.name}"
                 try:

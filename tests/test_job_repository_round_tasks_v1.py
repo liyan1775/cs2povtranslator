@@ -63,6 +63,61 @@ def test_empty_tasks_without_timeline_are_read_only_and_compatible(tmp_path):
     assert _snapshot_tree(root) == before
 
 
+def test_corrupt_orphan_history_without_tasks_is_inspected_but_loadable(tmp_path):
+    workspace, repo, claim, values, task = seeded(tmp_path)
+    finish(repo, claim, task, values)
+    repo.archive_round_understanding(JOB, task.round_id, values[7].content_fingerprint(), claim)
+    archive = repo.load_job(JOB).paths.round_understanding_history(
+        task.round_id, values[7].content_fingerprint()
+    )
+    task_path = workspace.jobs_dir / JOB / "tasks/round_round-001.json"
+    task_path.unlink()
+    wire = json.loads(archive.read_text(encoding="utf-8"))
+    wire["results"][0]["translated_zh"] = "篡改后的归档结果"
+    archive.write_text(json.dumps(wire), encoding="utf-8")
+    before = _snapshot_tree(workspace.jobs_dir / JOB)
+
+    repo.load_job(JOB)
+    inspection = repo.inspect_job(JOB)
+
+    assert any(
+        issue.code == "job_shard_invalid"
+        and issue.logical_path == (
+            "understanding/history/round_round-001/"
+            f"result_{values[7].content_fingerprint()}.json"
+        )
+        for issue in inspection.entry.issues
+    )
+    assert not inspection.entry.healthy
+    assert _snapshot_tree(workspace.jobs_dir / JOB) == before
+
+
+def test_valid_orphan_history_without_tasks_remains_healthy_and_loadable(tmp_path):
+    workspace, repo, claim, values, task = seeded(tmp_path)
+    finish(repo, claim, task, values)
+    repo.archive_round_understanding(JOB, task.round_id, values[7].content_fingerprint(), claim)
+    (workspace.jobs_dir / JOB / "tasks/round_round-001.json").unlink()
+
+    assert repo.load_job(JOB).manifest.job_id == JOB
+    assert repo.inspect_job(JOB).entry.healthy
+
+
+def test_non_hidden_unknown_task_entry_is_inspected(tmp_path):
+    workspace, repo, _, _, _ = _seed(tmp_path)
+    target = workspace.jobs_dir / JOB / "tasks/README.txt"
+    target.write_text("diagnostic residue", encoding="utf-8")
+
+    assert repo.load_job(JOB).manifest.job_id == JOB
+    inspection = repo.inspect_job(JOB)
+
+    assert any(
+        issue.code in {"job_path_escape", "job_shard_invalid"}
+        and issue.logical_path == "tasks/README.txt"
+        for issue in inspection.entry.issues
+    )
+    assert not inspection.entry.healthy
+
+
 def test_initialize_canonical_subset_and_crash_recovery(tmp_path, monkeypatch):
     workspace, repo, claim, values, task = seeded(tmp_path)
     second_round = replace(values[0].rounds.rounds[0], round_id="round-002", time_range=type(values[0].rounds.rounds[0].time_range)(8_000_000, 9_000_000))
