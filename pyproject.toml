@@ -22,6 +22,7 @@ all = ["demoparser2>=0.41", "pyogg>=0.6.1a1", "faster-whisper>=1.1", "Pillow>=10
 [project.scripts]
 cs2pov = "cs2pov.cli.commands:main"
 cs2pov-wizard = "cs2pov.cli.wizard:main"
+cs2pov-web = "cs2pov.web.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cs2pov"]

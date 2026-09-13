@@ -101,6 +101,8 @@ Demo 微秒，微秒到 SRT 毫秒采用明确的半毫秒向上取整。玩家�
 
 本阶段新增 `docs/PHASE_2D5_ACCEPTANCE.zh.md`，明确自动验收与线上 smoke 的边界。当前本地定向门禁为 `9 passed`，全量回归为 `2359 passed, 30 skipped`，独立 E2E、golden 等价性脚本、repository hygiene、状态/领域回放、compileall、Ruff 和 diffcheck 均通过。PR #29 的两组 Ubuntu 3.11/3.12/3.13 与 Windows 3.12 门禁全部通过，并已合并为 `c80ea35f6d3efe8de67206a55da87b993b5c90b7`；合并后 master CI `34754024410` 四平台全部成功。真实线上账号、额度、限流策略、模型质量、真实 Demo 解析、视频成片和旧 Job 自动迁移不纳入自动化门禁。
 
+**后续入口：** 02D 已闭环；下一阶段按 [02E 本地管理界面基础与查询层计划](2026-09-13-local-web-application-surface.md) 继续交付 M1 的本地 API/Web 能力。
+
 ## 阶段报告规则
 
 每个子阶段完成后报告：已实现的用户可见能力、仍未实现的计划项、验证结果、已知限制和下一阶段入口。未通过门禁或存在未解决的阻断问题时，不进入下一子阶段。

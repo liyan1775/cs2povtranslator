@@ -249,6 +249,19 @@ workspace Pipeline DemoAsset E2E passed: auto-import, reference-only jobs, resum
 
 该 E2E 只运行到 `prepare_input`，不需要 CS2、GPU、真实 Demo、ASR、LLM 或 API。
 CI 在 Ubuntu Python 3.11/3.12/3.13 和 Windows Python 3.12 的同一测试矩阵中运行它。
+# 本地管理界面查询测试（02E-1）
+
+运行下面的定向测试可以验证当前版本 Job 查询投影和本地 WSGI API：
+
+```powershell
+py -3.12 -m pytest -o addopts= tests/test_web_query_v1.py tests/test_web_http_v1.py -q
+```
+
+测试覆盖工作区诊断、DemoAsset 列表、健康与损坏 Job 隔离、Job 事件、回合数据按
+Demo 时间排序、稳定错误结构、无绝对路径和可访问页面骨架。测试直接调用 WSGI
+应用，并额外使用真实文件系统仓储创建一个当前版本 Job；不需要启动端口、CS2、GPU、
+真实 Demo、ASR、LLM 或 API。
+
 # 02C-A 回合任务状态回放
 
 `py -3.12 scripts/check_new_job_state.py` 在独立进程中重放三回合状态序列：
