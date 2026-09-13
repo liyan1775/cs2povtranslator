@@ -53,6 +53,30 @@ new job repository replay passed
 明确不验收 v0.x 或跨 schema 版本加载。运行本重放不需要 CS2、GPU、模型、网络
 或 API，也尚未声称已经实现按回合翻译调度。
 
+## 回合编排与进程恢复回放（02C-B）
+
+运行下面的检查可以验证任务落盘、writer claim、崩溃后接管、可复用成功结果、
+反序 worker 完成、规范回合排序和最终 Draft 组合：
+
+```powershell
+py -3.12 scripts/check_round_orchestration.py
+```
+
+检查器会启动独立的 producer、恢复 consumer 和最终验证 consumer。producer 以
+固定退出码模拟进程崩溃并留下活动 claim；恢复前的列表、查看、检查和抢占尝试
+必须保持只读且拒绝写入；租约过期后才允许新会话接管。成功结果不会因为另一个
+回合恢复而重新调用 worker，同级损坏 Job 也不会阻断健康 Job。通过时标准输出
+只有：
+
+```text
+round orchestration replay passed
+```
+
+对应测试为 `tests/test_round_orchestration_replay.py`。调度器的并行、重试、取消
+和心跳边界由 `test_round_scheduler_parallel_v1.py` 与
+`test_round_scheduler_recovery_v1.py` 覆盖；这些测试使用注入时钟和异步 worker，
+不依赖真实 provider 或墙上时间等待。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

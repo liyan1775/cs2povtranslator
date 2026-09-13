@@ -2,7 +2,7 @@
 
 > **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
 
-**Status (2026-09-06):** Implementation started after 02C-A merged through PR #22 (`373d556`); its eight PR checks and post-merge CI run `34019305517` passed, as confirmed by the coordinator. Task 1 storage is assigned to Sagan. Task 2 worker port is implemented locally with 32 contract cases and 60 focused tests passing, plus scoped Ruff. Tasks 3–7 and B integration remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
+**Status (2026-09-13):** 02C-A is merged through PR #22 (`373d556`), with all eight PR checks and post-merge CI run `34019305517` passing. Tasks 1–6 of 02C-B are implemented on the active feature branch: strict task persistence, the privacy-minimal worker port, durable coordination, bounded scheduling, retries, cancellation, claim heartbeats, and process-level recovery replay. Task 7 final verification, independent review, CI, and merge remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
 
 **Goal:** Persist round tasks and run them with bounded parallelism, deterministic retries, cancellation, crash recovery, immediate successful checkpoints, and stable aggregation without requiring a real model API.
 
@@ -37,6 +37,8 @@
 - Create focused tests per unit plus one real-process replay.
 
 ### Task 1: Strict claim-fenced round task persistence
+
+**Delivery (2026-09-13):** Implemented in `dbc8286` with review corrections in `1cc105c`. Task shards, invocation history, result archival, read-only inspection, partial initialization recovery, and claim fencing are covered by the repository and claim suites.
 
 **Execution decisions (2026-09-06, approved by coordinator):** These decisions supersede conflicting completeness/current-input wording below; they do not authorize schema changes.
 
@@ -92,7 +94,7 @@ def archive_round_understanding(
 ) -> None: ...
 ```
 
-- [ ] **Step 1: Write failing repository tests**
+- [x] **Step 1: Write failing repository tests**
 
 Cover exact path/content identity, canonical timeline order, idempotent partial initialization, CAS replacement, invocation merging, Understanding history archival, stale/foreign claim fencing, safe read-only loads, schema/JSON corruption isolation, symlink/junction rejection, and concurrent process writers. Representative test:
 
@@ -113,7 +115,7 @@ Inject a crash after publishing the first task, rerun initialization, and prove 
 
 Before a succeeded task is superseded, `archive_round_understanding` copies its validated current document to `understanding/history/round_<round_id>/result_<result_fingerprint>.json`. An existing identical archive is reused; different bytes/content at that logical identity fail. No invalidation deletes the archive.
 
-- [ ] **Step 2: Run and verify red**
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_job_repository_round_tasks_v1.py -q
@@ -121,7 +123,7 @@ py -3.12 -m pytest tests/test_job_repository_round_tasks_v1.py -q
 
 Expected: missing repository methods/module.
 
-- [ ] **Step 3: Implement focused task codecs**
+- [x] **Step 3: Implement focused task codecs**
 
 `job_task_documents.py` owns:
 
@@ -144,7 +146,7 @@ def validate_succeeded_task_result(
 
 Canonical order is timeline round order, never filename or completion order. A succeeded task must reference the production `RoundUnderstandingDocument.content_fingerprint()` for the same round; non-succeeded tasks must not claim a current result. Add `JobPaths.round_understanding_history(round_id, result_fingerprint)` for `understanding/history/round_<round_id>/result_<sha256>.json`; historical succeeded attempts must close over a matching archived or current result.
 
-- [ ] **Step 4: Implement claim-fenced repository methods**
+- [x] **Step 4: Implement claim-fenced repository methods**
 
 Follow existing shard patterns exactly:
 
@@ -158,7 +160,7 @@ Follow existing shard patterns exactly:
 
 `load_round_tasks` opens the already existing Job write lock and reads the manifest, timeline, task filenames, and task contents inside that one read snapshot; it does not return a mixture from two cooperating writer states. Add task files and `understanding/history` files/directories to deep inspection. One corrupt task/history document marks only its Job unhealthy; sibling Jobs remain listable. Do not infer mandatory task completeness from phase alone: preserve task-free schema-v1 Jobs and valid partial initialization, with current-result authority governed by the execution decisions above.
 
-- [ ] **Step 5: Run task persistence and existing repository gates**
+- [x] **Step 5: Run task persistence and existing repository gates**
 
 ```powershell
 py -3.12 -m pytest tests/test_job_repository_round_tasks_v1.py tests/test_job_repository_catalog_v1.py tests/test_job_write_claim_v1.py tests/test_new_job_repository_replay.py -q
@@ -166,7 +168,7 @@ py -3.12 -m pytest tests/test_job_repository_round_tasks_v1.py tests/test_job_re
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```powershell
 git add src/cs2pov/storage/job_task_documents.py src/cs2pov/storage/job_repository.py src/cs2pov/storage/job_paths.py tests/test_job_repository_round_tasks_v1.py
@@ -175,7 +177,7 @@ git commit -m "feat: persist round translation tasks"
 
 ### Task 2: Typed worker port with privacy-minimal requests
 
-**Local delivery (2026-09-06):** `round_worker.py` and `test_round_worker_contract_v1.py` implemented. RED: missing module caused collection failure before implementation. Additional behavioral RED cases exposed over-rejection of valid SHA-256 digit runs and ordinary slash text/model names; both were corrected without changing domain wire. GREEN: `py -3.12 -B -m pytest tests/test_round_worker_contract_v1.py tests/test_domain_invocation_v1.py tests/test_domain_validation_v1.py -o addopts= -q` — 60 passed (32 worker contract cases), exit 0; scoped Ruff passed. No B commit or coordinator implementation is included. Detailed handoff is recorded in the local ignored Task 2 report, not the coordinator's progress ledger.
+**Delivery (2026-09-13):** `round_worker.py` and `test_round_worker_contract_v1.py` are included in `dbc8286`. RED: missing module caused collection failure before implementation. Additional behavioral RED cases exposed over-rejection of valid SHA-256 digit runs and ordinary slash text/model names; both were corrected without changing domain wire. GREEN: the worker/domain suite passes 60 cases, including 32 worker contract cases, with scoped Ruff passing. Detailed handoff is recorded in the local ignored Task 2 report.
 
 **Files:**
 - Create: `src/cs2pov/application/round_worker.py`
@@ -278,9 +280,9 @@ task_input_fingerprint = content_fingerprint({
 
 Implement `RoundWorkFailure.__init__(error, invocations=(), *, cause=None)` explicitly. The constructor validates its own types, uses only `error.message_zh` as the exception string, and attaches the optional raw cause through exception chaining rather than a serializable field. `validate_round_work_failure(request, failure)` is the request-dependent boundary: every invocation must match the request round/task ID, configuration snapshot, and `document_input_fingerprint`; duplicates or mismatches are rejected before any invocation is persisted.
 
-- [ ] **Step 4: Run tests and commit**
+- [x] **Step 4: Run tests and commit**
 
-Tests and scoped Ruff passed as recorded above; the commit remains pending and is owned by the coordinator.
+Tests and scoped Ruff passed as recorded above; the implementation is included in `dbc8286` together with the initial Task 1 storage delivery.
 
 ```powershell
 py -3.12 -m pytest tests/test_round_worker_contract_v1.py tests/test_domain_invocation_v1.py tests/test_domain_validation_v1.py -q
@@ -289,6 +291,8 @@ git commit -m "feat: define round translation worker port"
 ```
 
 ### Task 3: Job coordinator preparation, checkpoint, and reconciliation
+
+**Delivery (2026-09-13):** Implemented in `3fa3858`; invalidation and resume preflight fixes are in `51155d8`. The combined coordinator, task repository, and claim tests pass with 65 passed and 3 skipped cases.
 
 **Required integration boundary (approved 2026-09-06; not implemented by Task 2):** Inside `claim_gate`, reread the current task/attempt, full persisted transcripts and configuration before accepting a completion. Rebuild the trusted worker request, reject stale generation/attempt results, then apply the projection validator. Validate persisted transcript source relationships using the repository's authoritative language evidence. In memory merge existing invocation history with new records (identical ID/content is idempotent; different content at the same ID is an error), and call `validate_understanding_document_graph(result.document, persisted_full_transcripts, persisted_configurations, merged_invocations)` before publishing any success artifacts. The current `save_round_understanding` validates the claim and writes atomically; it does not supply this semantic preflight. Do not rely on it as a full-graph validator. Read current graph entries using Task 1's task-authority decisions so a non-authoritative stale document cannot block recovery. Preserve CAS and claim fencing through all subsequent writes.
 
@@ -326,7 +330,7 @@ class JobRoundCoordinator:
                              retry_round_ids: tuple[str, ...] = ()) -> PreparedRoundBatch: ...
 ```
 
-- [ ] **Step 1: Write failing preparation/checkpoint tests**
+- [x] **Step 1: Write failing preparation/checkpoint tests**
 
 Cover:
 
@@ -342,7 +346,7 @@ Cover:
 - cancellation checkpoint is idempotent: it leaves `PENDING` and already terminal tasks unchanged without an event, but changes `RUNNING`/`RETRY_WAIT` exactly once to `CANCELLED`, refreshes manifest progress/run status, and appends one cancellation event;
 - manifest active review/current artifacts are cleared only when the invalidation plan requires it; old files remain on disk.
 
-- [ ] **Step 2: Run and verify red**
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_job_round_coordinator_v1.py -q
@@ -350,7 +354,7 @@ py -3.12 -m pytest tests/test_job_round_coordinator_v1.py -q
 
 Expected: missing `JobRoundCoordinator`.
 
-- [ ] **Step 3: Implement preparation without starting work**
+- [x] **Step 3: Implement preparation without starting work**
 
 `prepare_translation` performs, under the caller's claim:
 
@@ -373,7 +377,7 @@ The safe invalidation protocol is intentionally conservative and idempotent:
 
 A crash after step 2 changes no authority. A crash after step 3 is safely over-invalidated; the next explicit preparation recomputes desired specs and idempotently finishes step 4. Once any task is superseded, the old review/artifacts are already non-current. Add an injected crash test at every numbered boundary and assert list/open never reports the old review or export as current after step 3.
 
-- [ ] **Step 4: Implement ordered durable checkpoints**
+- [x] **Step 4: Implement ordered durable checkpoints**
 
 For success, publish in this recoverable order while verifying the same claim at each repository mutation:
 
@@ -407,7 +411,7 @@ def next_persisted_timestamp(now: datetime, *latest_values: str) -> str:
 
 Use the maximum relevant persisted timestamp: task transitions include current task and manifest `updated_at`; manifest-only invalidation includes the current manifest and every task it summarizes. Never compute `at` before entering `claim_gate`, and never reuse an earlier coroutine's captured timestamp. Reject naive clocks and overflow as stable `job_timestamp_invalid` without writing.
 
-- [ ] **Step 5: Implement explicit resume reconciliation**
+- [x] **Step 5: Implement explicit resume reconciliation**
 
 `reconcile_for_resume` is a write operation under a newly acquired claim. It:
 
@@ -417,7 +421,7 @@ Use the maximum relevant persisted timestamp: task transitions include current t
 - treats a missing/corrupt claimed result as a stable repository error, never silent rerun;
 - reconstructs manifest progress/run status from task truth and emits one reconciliation event.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```powershell
 py -3.12 -m pytest tests/test_job_round_coordinator_v1.py tests/test_job_repository_round_tasks_v1.py tests/test_job_write_claim_v1.py -q
@@ -426,6 +430,8 @@ git commit -m "feat: coordinate durable round checkpoints"
 ```
 
 ### Task 4: Bounded parallel scheduler with completion-order independence
+
+**Delivery (2026-09-13):** Implemented in `4f1617c`. The scheduler uses bounded `TaskGroup` execution, claim-gated durable checkpoints, stable timeline ordering, and safe worker-error projection. Focused scheduler and coordinator tests pass.
 
 **Files:**
 - Create: `src/cs2pov/application/round_scheduler.py`
@@ -456,7 +462,7 @@ class RoundScheduler:
                   retry_round_ids: tuple[str, ...] = ()) -> RoundBatchReport: ...
 ```
 
-- [ ] **Step 1: Write failing concurrency and ordering tests**
+- [x] **Step 1: Write failing concurrency and ordering tests**
 
 Use an async fake worker with per-round gates/counters. Prove:
 
@@ -470,7 +476,7 @@ Use an async fake worker with per-round gates/counters. Prove:
 - invalid settings reject bools, zero, heartbeat not less than lease, and unreasonable limits;
 - every request uses the one selected configuration snapshot.
 
-- [ ] **Step 2: Run and verify red**
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_scheduler_parallel_v1.py -q
@@ -478,7 +484,7 @@ py -3.12 -m pytest tests/test_round_scheduler_parallel_v1.py -q
 
 Expected: missing scheduler module.
 
-- [ ] **Step 3: Implement structured bounded concurrency**
+- [x] **Step 3: Implement structured bounded concurrency**
 
 Use `asyncio.TaskGroup` and `asyncio.Semaphore(settings.max_concurrency)`. The scheduler acquires one `JobWriteSession`, calls coordinator preparation, and starts one coroutine per runnable request. Each coroutine:
 
@@ -516,11 +522,11 @@ Use a nested structured-concurrency protocol for active cancellation. Store the 
 
 Each round coroutine tracks whether `mark_running` completed. Cancellation before that point leaves durable `PENDING` untouched. Cancellation while awaiting the worker or a retry sleep enters `finally`, acquires `claim_gate`, rereads `session.claim`, and calls `checkpoint_cancellation`. If success and cancellation race, `claim_gate` plus the coordinator's terminal-state no-op guarantees exactly one durable terminal transition/event. Heartbeat/claim failure takes precedence: when claim health is lost, do not attempt a cancellation write using the old claim.
 
-- [ ] **Step 4: Return canonical reports and aggregation inputs**
+- [x] **Step 4: Return canonical reports and aggregation inputs**
 
 Load final tasks through the repository after all child coroutines settle and return them in Demo timeline order. `completion_order` is explicitly non-authoritative diagnostics. The scheduler does not build Draft/Reviewed timelines; it only makes deterministic inputs available to the existing production aggregator.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_scheduler_parallel_v1.py tests/test_job_round_coordinator_v1.py -q
@@ -530,6 +536,8 @@ git commit -m "feat: schedule bounded parallel round work"
 
 ### Task 5: Retry waits, cancellation, and claim heartbeats
 
+**Delivery (2026-09-13):** Implemented in `f42fbf6`. The scheduler now resumes persisted retry windows, uses process-safe attempt identifiers, preserves queued work on cancellation, checkpoints active cancellation while the claim is healthy, and stops the batch on heartbeat failure. Eleven scheduler recovery and parallelism tests pass.
+
 **Files:**
 - Modify: `src/cs2pov/application/round_scheduler.py`
 - Create: `tests/test_round_scheduler_recovery_v1.py`
@@ -538,7 +546,7 @@ git commit -m "feat: schedule bounded parallel round work"
 - Adds injected dependencies to `RoundScheduler.__init__`: `clock`, `sleep`, `attempt_id_factory`.
 - Preserves Task 4 public `run` signature.
 
-- [ ] **Step 1: Write deterministic retry/heartbeat/cancel tests**
+- [x] **Step 1: Write deterministic retry/heartbeat/cancel tests**
 
 Use a fake clock and awaitable sleeper; do not sleep wall-clock time. Prove:
 
@@ -551,7 +559,7 @@ Use a fake clock and awaitable sleeper; do not sleep wall-clock time. Prove:
 - setting `cancel_event` prevents queued `PENDING` tasks from starting and leaves them `PENDING`, cancels in-flight `RUNNING` tasks to `CANCELLED`, cancels `RETRY_WAIT` without rewriting its closed failed attempt, and leaves successes untouched;
 - no retry path changes configuration snapshot/model/provider.
 
-- [ ] **Step 2: Run and verify red**
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_scheduler_recovery_v1.py -q
@@ -559,19 +567,19 @@ py -3.12 -m pytest tests/test_round_scheduler_recovery_v1.py -q
 
 Expected: retry/cancel/heartbeat assertions fail.
 
-- [ ] **Step 3: Implement injected time and retries**
+- [x] **Step 3: Implement injected time and retries**
 
 `clock()` returns an aware UTC datetime; `sleep(delay_seconds)` is awaitable. On a `RoundWorkFailure`, checkpoint through the coordinator. If the new task is `RETRY_WAIT`, await exactly until `next_retry_at`, then restart that same task after checking cancellation and claim health.
 
 Do not catch `BaseException`. Preserve `asyncio.CancelledError`, but use a `finally` path to call `checkpoint_cancellation` for an actually started task while the claim is still healthy. A coroutine cancelled before `mark_running` performs no task write, so its durable state remains `PENDING` for an explicit later resume.
 
-- [ ] **Step 4: Implement one heartbeat coroutine per run**
+- [x] **Step 4: Implement one heartbeat coroutine per run**
 
 Run a sibling heartbeat loop in the outer `TaskGroup`. Until `batch_done` is set, it waits for the first of the heartbeat interval and `batch_done`; on each interval it enters `claim_gate`, calls `session.heartbeat()`, and publishes failure to the scheduler. Validate `heartbeat_interval_us * 2 < claim_lease_us` so one delayed tick does not immediately expire ownership.
 
 Stop the heartbeat before releasing the write session. If claim health is lost, no later completion may be checkpointed with the old claim.
 
-- [ ] **Step 5: Run scheduler tests and commit**
+- [x] **Step 5: Run scheduler tests and commit**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_scheduler_parallel_v1.py tests/test_round_scheduler_recovery_v1.py tests/test_job_write_claim_v1.py -q
@@ -580,6 +588,8 @@ git commit -m "feat: recover retries cancellations and writer leases"
 ```
 
 ### Task 6: Same-version process restart and deterministic aggregation gate
+
+**Delivery (2026-09-13):** Implemented the three-process replay in the new fixture, checker, and replay test. The producer exits with code 73 while retaining its claim, the recovery consumer verifies read-only refusal before expiry and takeover after expiry, reuses round-002, completes round-001/003 in reverse order, and the final consumer validates the language graph, Draft ordering, and sibling isolation. The checker passed five consecutive runs.
 
 **Files:**
 - Create: `tests/golden/fixtures/new_round_orchestration_v1.json`
@@ -590,7 +600,7 @@ git commit -m "feat: recover retries cancellations and writer leases"
 - Consumes: production repository, coordinator, scheduler, worker port, and existing Understanding/Draft validators.
 - Produces exact stdout `round orchestration replay passed`.
 
-- [ ] **Step 1: Write the failing real-process replay test**
+- [x] **Step 1: Write the failing real-process replay test**
 
 The checker creates one temporary workspace and runs these separate spawned Python processes:
 
@@ -605,7 +615,7 @@ No process receives a real API key, endpoint, Demo, audio, video, CS2, or GPU.
 
 Assert the producer's exact exit code, the continued presence and original run ID of the stale claim, pre-expiry refusal, post-expiry takeover with a different run ID, archival/removal of the old active claim, and absence of a claim after the resumed session releases normally. Use injected repository clocks rather than wall-clock sleeps.
 
-- [ ] **Step 2: Run and verify red**
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_orchestration_replay.py -q
@@ -613,11 +623,11 @@ py -3.12 -m pytest tests/test_round_orchestration_replay.py -q
 
 Expected: missing checker.
 
-- [ ] **Step 3: Implement the fixture and checker**
+- [x] **Step 3: Implement the fixture and checker**
 
 Store only anonymous IDs, relative logical paths, canonical timestamps, deterministic fake delays/errors, and exact expected fingerprints. Use production codecs/validators/state transitions; the checker must not recreate their algorithms.
 
-- [ ] **Step 4: Run the replay repeatedly**
+- [x] **Step 4: Run the replay repeatedly**
 
 ```powershell
 1..5 | ForEach-Object { py -3.12 scripts/check_round_orchestration.py }
@@ -625,7 +635,7 @@ Store only anonymous IDs, relative logical paths, canonical timestamps, determin
 
 Expected: five identical success lines, no flakes or leftover writer claim.
 
-- [ ] **Step 5: Commit Task 6**
+- [x] **Step 5: Commit Task 6**
 
 ```powershell
 git add tests/golden/fixtures/new_round_orchestration_v1.json scripts/check_round_orchestration.py tests/test_round_orchestration_replay.py
@@ -634,12 +644,14 @@ git commit -m "test: gate round orchestration recovery"
 
 ### Task 7: Documentation, complete verification, independent review, and GitHub merge
 
+**Delivery (in progress, 2026-09-13):** Architecture, testing, and golden-fixture documentation now describe the 02C-B runtime boundary and replay command. Local focused verification has passed; full verification, final independent review, and GitHub handoff remain pending.
+
 **Files:**
 - Modify: `docs/ARCHITECTURE.zh.md`
 - Modify: `docs/TESTING_GUIDE.zh.md`
 - Modify: `tests/golden/README.zh.md`
 
-- [ ] **Step 1: Document the operational boundary for non-programmers**
+- [x] **Step 1: Document the operational boundary for non-programmers**
 
 Explain in plain Chinese:
 
