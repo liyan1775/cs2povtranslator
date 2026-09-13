@@ -204,3 +204,11 @@ worker 只接收当前回合的最小语音投影和安全配置快照，不接�
 列表、查看和检查仍是只读操作；继续、重试和取消才会取得新的 writer claim。
 02C-B 的进程回放只使用匿名合成数据，不接入真实模型、API、CS2、GPU、Web UI 或
 视频录制。
+
+## 现有管线端口化接入（02D-1）
+
+02D-1 新增 `application.pipeline_ports` 作为旧版 Demo 解析器与当前版本领域时间线之间的适配边界。`LegacyDemoParserPort` 只调用既有解析器的描述和回合解析能力，再将结果转换为 `DemoDescriptor`、`RoundCollection`、`TimeAnchor` 和 `DemoTimeline`；它不写入 `ArtifactStore` 或旧版 `PipelineManifest`。
+
+旧解析器返回的浮点秒只在适配层存在。当前版本对象使用整数 Demo 微秒；有完整 tick 边界的回合生成 `demo_tick` 锚点并保留规范回合 ID，没有可靠 tick 边界的回合使用明确的 estimated/fallback 置信度，不伪造锚点。`CurrentJobTimelineApplicationService` 先完成解析和领域校验，再创建新版 Job，并通过 `FileSystemJobRepository` 的 claim 原子保存时间线和推进阶段。
+
+这一阶段只接入 Demo 描述和回合时间线。语音活动、ASR、理解翻译、字幕导出以及真实 provider 仍按 02D-2 至 02D-5 逐步接入；旧版 `PipelineEngine` 继续使用原有文件格式和入口。
