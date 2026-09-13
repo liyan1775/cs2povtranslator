@@ -96,7 +96,9 @@ class LegacyDemoParserPort:
     ) -> DemoTimeline:
         path = _require_demo_path(demo_path)
         asset_id = _require_asset_id(demo_asset_id)
-        tick_rate = _require_positive_seconds(min_duration_seconds, "min_duration_seconds")
+        minimum_round_duration = _require_nonnegative_seconds(
+            min_duration_seconds, "min_duration_seconds"
+        )
         fallback_end = _require_positive_seconds(fallback_end_time, "fallback_end_time")
 
         try:
@@ -113,7 +115,7 @@ class LegacyDemoParserPort:
                 path,
                 tick_rate=float(rate.value),
                 fallback_end_time=fallback_end,
-                min_duration_seconds=tick_rate,
+                min_duration_seconds=minimum_round_duration,
             )
             return _build_timeline(asset_id, info, legacy_rounds, rate)
         except PipelinePortError:
@@ -216,6 +218,15 @@ def _convert_rounds(
                 "pipeline_rounds_invalid",
                 "回合的 tick 边界不完整。",
                 "请检查解析器输出；不完整的 tick 边界不能进入当前时间线。",
+                "rounds",
+            )
+        if value.start_tick is not None and (
+            type(value.start_tick) is not int or type(value.end_tick) is not int
+        ):
+            raise PipelinePortError(
+                "pipeline_rounds_invalid",
+                "回合的 tick 边界类型无效。",
+                "请检查 Demo 回合事件后重试。",
                 "rounds",
             )
         if value.start_tick is not None and value.end_tick <= value.start_tick:
@@ -354,6 +365,12 @@ def _require_positive_seconds(value: object, path: str) -> float:
     return float(value)
 
 
+def _require_nonnegative_seconds(value: object, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) < 0:
+        raise PipelinePortError("pipeline_parameter_invalid", "时间参数无效。", "请提供非负数秒数后重试。", path)
+    return float(value)
+
+
 def _finite(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
@@ -373,7 +390,10 @@ def _ceil_fraction(value: Fraction) -> int:
 
 
 def _safe_identifier(value: str) -> str:
-    normalized = "".join(char if char.isalnum() or char in "._-" else "-" for char in value).strip(".-")
+    normalized = "".join(
+        char if char.isascii() and (char.isalnum() or char in ".-_") else "-"
+        for char in value
+    ).strip(".-")
     return normalized[:128] or "legacy-parser"
 
 
@@ -392,10 +412,18 @@ class CurrentJobTimelineApplicationService:
         *,
         claim_lease_us: int = 60_000_000,
     ) -> None:
-        if not callable(getattr(repository, "create_job", None)) or not callable(
-            getattr(repository, "acquire_write", None)
-        ):
+        required_methods = (
+            "create_job",
+            "acquire_write",
+            "save_demo_timeline",
+            "load_job",
+            "replace_manifest",
+            "load_demo_timeline",
+        )
+        if any(not callable(getattr(repository, name, None)) for name in required_methods):
             raise TypeError("repository 不符合当前 Job 仓储接口。")
+        if not callable(getattr(repository, "clock", None)):
+            raise TypeError("repository 必须提供可调用的 clock。")
         if type(claim_lease_us) is not int or claim_lease_us <= 0:
             raise ValueError("claim_lease_us 必须为正整数。")
         self.repository = repository
