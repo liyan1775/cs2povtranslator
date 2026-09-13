@@ -182,6 +182,12 @@ class RoundScheduler:
                         if not task.done():
                             task.cancel()
                     return
+                for task in pending:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
                 if sleeper in finished:
                     try:
                         sleeper.result()
@@ -191,12 +197,6 @@ class RoundScheduler:
                             if not task.done():
                                 task.cancel()
                         return
-                for task in pending:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
                 if batch_done.is_set():
                     return
                 try:
