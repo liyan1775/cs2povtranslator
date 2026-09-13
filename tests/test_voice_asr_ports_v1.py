@@ -112,6 +112,15 @@ def _job(tmp_path: Path):
     return workspace, repository, request, source
 
 
+def _write_test_audio(path: Path, sample_count: int = 72_000) -> Path:
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(24_000)
+        handle.writeframes(b"\0\0" * sample_count)
+    return path
+
+
 def _streams(tmp_path: Path) -> tuple[VoiceStream, ...]:
     return (
         VoiceStream(
@@ -119,7 +128,7 @@ def _streams(tmp_path: Path) -> tuple[VoiceStream, ...]:
             "Alpha",
             2,
             24_000,
-            tmp_path / "alpha.wav",
+            _write_test_audio(tmp_path / "alpha.wav"),
             (
                 VoicePacket(0, 24_000, TimeRange(1_000_000, 2_000_000)),
                 VoicePacket(24_000, 48_000, TimeRange(2_000_000, 3_000_000)),
@@ -163,7 +172,7 @@ def test_voice_projection_keeps_overlapping_players_as_independent_activities(tm
             "Bravo",
             3,
             24_000,
-            tmp_path / "bravo.wav",
+            _write_test_audio(tmp_path / "bravo.wav"),
             (VoicePacket(0, 24_000, TimeRange(1_000_000, 2_000_000)),),
         ),
     )
@@ -232,6 +241,14 @@ def test_current_job_voice_asr_persists_reopenable_language_graph(tmp_path: Path
     graph = repository.load_language_graph(request.job_id)
     assert len(graph.transcripts) == 2
     assert len(graph.invocations) == 2
+    media = repository.load_audio_media(request.job_id)
+    assert len(media) == 1
+    assert media[0].player_id == "player-a"
+    assert (
+        workspace.jobs_dir
+        / request.job_id
+        / media[0].relative_path
+    ).is_file()
 
 
 def test_one_failed_round_does_not_checkpoint_sibling_round(tmp_path: Path):
@@ -252,13 +269,14 @@ def test_one_failed_round_does_not_checkpoint_sibling_round(tmp_path: Path):
 
 def test_speechless_round_is_persisted_as_an_empty_transcript(tmp_path: Path):
     workspace, repository, request, source = _job(tmp_path)
+    audio = _write_test_audio(tmp_path / "alpha.wav")
     streams = (
         VoiceStream(
             "player-a",
             "Alpha",
             2,
             24_000,
-            tmp_path / "alpha.wav",
+            audio,
             (VoicePacket(0, 24_000, TimeRange(1_000_000, 2_000_000)),),
         ),
     )
@@ -275,13 +293,14 @@ def test_speechless_round_is_persisted_as_an_empty_transcript(tmp_path: Path):
 
 def test_unassigned_activity_is_persisted_separately(tmp_path: Path):
     workspace, repository, request, source = _job(tmp_path)
+    audio = _write_test_audio(tmp_path / "alpha.wav")
     streams = (
         VoiceStream(
             "player-a",
             "Alpha",
             2,
             24_000,
-            tmp_path / "alpha.wav",
+            audio,
             (VoicePacket(0, 24_000, TimeRange(21_000_000, 22_000_000)),),
         ),
     )

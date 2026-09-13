@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import hashlib
 import math
+import os
 from pathlib import Path
 from typing import Protocol
 import wave
@@ -21,6 +23,7 @@ from cs2pov.domain.invocation import (
 )
 from cs2pov.domain.job import JobPhase
 from cs2pov.domain.job_state import advance_job_phase
+from cs2pov.domain.media import AudioMediaReference
 from cs2pov.domain.timebase import SourceClock, TimeAnchor, TimeRange
 from cs2pov.domain.timeline import DemoTimeline
 from cs2pov.domain.transcript import TranscriptCue
@@ -274,6 +277,7 @@ class CurrentJobVoiceAsrApplicationService:
             "acquire_write",
             "save_demo_timeline",
             "save_voice_activities",
+            "save_audio_media",
             "register_model_configuration",
             "save_task_invocations",
             "save_transcript_round",
@@ -339,6 +343,7 @@ class CurrentJobVoiceAsrApplicationService:
                 "请检查语音提取适配器后重试。",
                 "voice",
             )
+        media_references, media_sources = _audio_media_inputs(extraction.streams)
 
         initial_phase = opened.manifest.phase
         if initial_phase is JobPhase.TIMELINE_READY:
@@ -438,6 +443,12 @@ class CurrentJobVoiceAsrApplicationService:
                         "请重新打开 Job 后重试。",
                         "voice/activities.jsonl",
                     )
+            self.repository.save_audio_media(
+                job_id,
+                media_references,
+                media_sources,
+                session.claim,
+            )
             self.repository.register_model_configuration(
                 job_id,
                 asr_configuration,
@@ -496,6 +507,53 @@ class CurrentJobVoiceAsrApplicationService:
             failed_unassigned,
             tuple(sorted(errors)),
         )
+
+
+def _audio_media_inputs(
+    streams: tuple[VoiceStream, ...],
+) -> tuple[tuple[AudioMediaReference, ...], dict[str, Path]]:
+    references: list[AudioMediaReference] = []
+    sources: dict[str, Path] = {}
+    for stream in streams:
+        try:
+            source = stream.audio_path if isinstance(stream.audio_path, Path) else Path(stream.audio_path)
+            state = os.lstat(source)
+            if not os.path.isfile(source) or os.path.islink(source):
+                raise ValueError("audio source must be a regular file")
+            with wave.open(str(source), "rb") as audio:
+                if audio.getnchannels() != 1 or audio.getsampwidth() != 2:
+                    raise ValueError("audio source must be mono 16-bit PCM")
+                sample_rate = audio.getframerate()
+                sample_count = audio.getnframes()
+            if state.st_size <= 0:
+                raise ValueError("audio source is empty")
+            digest = hashlib.sha256()
+            with source.open("rb") as audio:
+                while True:
+                    chunk = audio.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            media_id = f"player-{hashlib.sha256(stream.player_id.encode('utf-8')).hexdigest()[:32]}"
+            reference = AudioMediaReference(
+                media_id,
+                stream.player_id,
+                f"voice/audio/{media_id}.wav",
+                digest.hexdigest(),
+                sample_rate,
+                sample_count,
+            )
+        except (OSError, TypeError, ValueError, wave.Error) as exc:
+            raise PipelinePortError(
+                "pipeline_voice_result_invalid",
+                "语音流音频无法持久化到当前 Job。",
+                "请检查语音文件格式和工作区缓存后重试。",
+                "voice/audio",
+            ) from exc
+        references.append(reference)
+        sources[reference.media_id] = source
+    ordered = tuple(sorted(references, key=lambda item: item.media_id))
+    return ordered, sources
 
 
 def build_voice_projection(

@@ -98,6 +98,14 @@ class JobPaths:
         return self.job_dir / "voice"
 
     @property
+    def voice_audio_dir(self) -> Path:
+        return self.voice_dir / "audio"
+
+    @property
+    def voice_media(self) -> Path:
+        return self.voice_dir / "media.json"
+
+    @property
     def voice_activities(self) -> Path:
         return self.voice_dir / "activities.jsonl"
 
@@ -181,6 +189,9 @@ class JobPaths:
 
     def round_transcript(self, round_id: str) -> Path:
         return self.transcript_dir / f"round_{require_path_identifier(round_id, 'round_id')}.jsonl"
+
+    def voice_audio(self, media_id: str) -> Path:
+        return self.voice_audio_dir / f"{require_path_identifier(media_id, 'media_id')}.wav"
 
     def unassigned_transcript(self) -> Path:
         return self.transcript_dir / "unassigned.jsonl"
