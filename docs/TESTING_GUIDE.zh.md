@@ -91,6 +91,20 @@ py -3.12 -m pytest -o addopts= tests/test_pipeline_ports_v1.py -q
 解析失败不创建半成品 Job，以及新 Job 的 `timeline/` 文件发布。旧版管线回归仍由
 原有测试套件覆盖。
 
+## 语音活动与 ASR 端口测试（02D-2）
+
+运行下面的测试可以验证旧版语音提取结果、压缩音频样本锚点、语音活动、ASR cue、调用
+指纹和新版 Job 语言图之间的引用闭包：
+
+```powershell
+py -3.12 -m pytest -o addopts= tests/test_voice_asr_ports_v1.py -q
+```
+
+测试使用合成语音包和 fake ASR，不需要 demoparser2、faster-whisper、模型下载或真实
+Demo。它覆盖重叠玩家活动、无回合归属、跨静音来源拒绝、单回合失败隔离、Job 重开后
+语言图读取，以及旧版 WAV/包清单到当前版本样本范围的转换。真实模型 smoke 仍属于
+后续验收阶段，不作为本阶段门禁。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

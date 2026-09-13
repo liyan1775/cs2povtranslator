@@ -212,3 +212,11 @@ worker 只接收当前回合的最小语音投影和安全配置快照，不接�
 旧解析器返回的浮点秒只在适配层存在。当前版本对象使用整数 Demo 微秒；有完整 tick 边界的回合生成 `demo_tick` 锚点并保留规范回合 ID，没有可靠 tick 边界的回合使用明确的 estimated/fallback 置信度，不伪造锚点。`CurrentJobTimelineApplicationService` 先完成解析和领域校验，再创建新版 Job，并通过 `FileSystemJobRepository` 的 claim 原子保存时间线和推进阶段。
 
 这一阶段只接入 Demo 描述和回合时间线。语音活动、ASR、理解翻译、字幕导出以及真实 provider 仍按 02D-2 至 02D-5 逐步接入；旧版 `PipelineEngine` 继续使用原有文件格式和入口。
+
+## 语音活动与 ASR 端口化接入（02D-2）
+
+02D-2 新增 `application.voice_asr_ports`，把旧版 Opus 语音提取结果转换为当前版本的压缩音频样本锚点和 `VoiceActivityCue`。WAV、包清单和 ASR 临时切片只存在于工作区缓存；新版 Job 只保存 `timeline/time_anchors.jsonl`、`voice/activities.jsonl` 以及逐回合转录文件，不把旧版 `ArtifactStore` 当作持久权威。
+
+每个语音活动使用一个独立的 ASR 窗口。来源样本、Demo 微秒、回合引用、语音活动引用和 ASR 调用指纹在写入前完成闭合校验；跨静音的来源范围、未知玩家、越界样本和不连续映射会被拒绝。无回合归属的 cue 进入 `transcript/unassigned.jsonl`，无语音回合使用空转录文件表示。单个活动失败时，所属回合不发布转录检查点，已经完成的其他回合继续保留；只有所有活动结果闭合时 Job 才从 `VOICE_READY` 推进到 `TRANSCRIBED`。
+
+`LegacyVoiceExtractorPort` 复用现有 Demo 语音解码器，`LegacyFasterWhisperPort` 复用现有 faster-whisper 适配器。模型配置快照和调用记录由 `FileSystemJobRepository` 写入，应用层负责 claim、配置注册、逐回合发布和语言图重开校验。
