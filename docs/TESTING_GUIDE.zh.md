@@ -135,6 +135,24 @@ Draft/Reviewed 文本选择、玩家/队伍范围、内容哈希登记、Job 重
 `test_subtitle_policy_v050.py` 覆盖。测试使用合成新版 Job，不访问真实 Demo、ASR、
 LLM 或视频工具；真实 provider、真实 Demo 和金标准双跑留在 02D-5。
 
+## 本地 Web 复核与音频媒体测试（02E-1、02E-2）
+
+运行下面的定向测试可以验证本地查询 API、复核投影、只读页面、当前 Job 音频清单和
+受控媒体响应：
+
+```powershell
+py -3.12 -m pytest -o addopts= -q `
+  tests/test_domain_media_v1.py `
+  tests/test_web_query_v1.py `
+  tests/test_web_http_v1.py `
+  tests/test_voice_asr_ports_v1.py
+```
+
+测试覆盖媒体引用的工作区相对路径、WAV 内容哈希和元数据、清单与文件集合一致性、
+Job 重开后的媒体读取、Cue 时间范围、未知媒体 ID 拒绝、完整音频响应、单字节范围
+响应和无效范围处理。测试使用合成音频，不需要真实 Demo、ASR、LLM 或浏览器；浏览器
+级复核流程仍属于 02E-4 的验收范围。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

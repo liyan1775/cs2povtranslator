@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterable
+import os
 from urllib.parse import unquote
 
-from .query import CurrentJobWebQueryError, CurrentJobWebQueryService
+from .query import (
+    CurrentJobWebMediaFile,
+    CurrentJobWebQueryError,
+    CurrentJobWebQueryService,
+)
 
 
 _INDEX_HTML = """<!doctype html>
@@ -104,7 +109,7 @@ _REVIEW_HTML = """<!doctype html>
     <p id="media-status" data-testid="media-status" class="muted">正在检查音频试听状态……</p>
     <table data-testid="review-cues" aria-label="回合复核内容">
       <thead>
-        <tr><th scope="col">时间</th><th scope="col">原始 ASR</th><th scope="col">解释与翻译</th><th scope="col">依据</th><th scope="col">复核状态</th></tr>
+        <tr><th scope="col">时间</th><th scope="col">音频</th><th scope="col">原始 ASR</th><th scope="col">解释与翻译</th><th scope="col">依据</th><th scope="col">复核状态</th></tr>
       </thead>
       <tbody id="review-cue-list"></tbody>
     </table>
@@ -127,8 +132,31 @@ _REVIEW_HTML = """<!doctype html>
       for (const item of items) {
         const row = document.createElement('tr');
         row.dataset.cueId = item.cue_id;
+        const audio = document.createElement('td');
+        if (item.media?.status === 'ready') {
+          const player = document.createElement('audio');
+          player.controls = true;
+          player.preload = 'none';
+          player.src = item.media.url;
+          player.dataset.startSeconds = item.media.start_seconds ?? '';
+          player.dataset.endSeconds = item.media.end_seconds ?? '';
+          player.setAttribute('aria-label', `播放 ${item.cue_id} 音频`);
+          player.addEventListener('play', () => {
+            const start = Number(player.dataset.startSeconds);
+            if (Number.isFinite(start)) player.currentTime = start;
+          });
+          player.addEventListener('timeupdate', () => {
+            const end = Number(player.dataset.endSeconds);
+            if (Number.isFinite(end) && player.currentTime >= end) player.pause();
+          });
+          audio.append(player);
+        } else {
+          audio.textContent = item.media?.message_zh || '不可用';
+          audio.className = 'muted';
+        }
         row.append(
           textCell(`${item.start_us ?? '—'}–${item.end_us ?? '—'}`),
+          audio,
           textCell(item.asr_original),
           textCell(item.understanding ? `${item.understanding.interpreted_source}\n${item.understanding.translated_zh}` : null),
           textCell(item.understanding?.evidence?.join('；')),
@@ -139,7 +167,7 @@ _REVIEW_HTML = """<!doctype html>
       if (!items.length) {
         const row = document.createElement('tr');
         const cell = textCell('当前回合没有可复核 Cue。');
-        cell.colSpan = 5;
+        cell.colSpan = 6;
         row.append(cell);
         list.append(row);
       }
@@ -202,6 +230,15 @@ class CurrentJobWebApplication:
         if page is not None:
             return self._respond_bytes(200, "text/html; charset=utf-8", page, start_response, method == "HEAD")
         try:
+            media = self._media_parts(path)
+            if media is not None:
+                return self._respond_media(
+                    media[0],
+                    media[1],
+                    environ,
+                    start_response,
+                    head=method == "HEAD",
+                )
             payload = self._route(path)
             return self._respond(200, payload, start_response, head=method == "HEAD")
         except CurrentJobWebQueryError as exc:
@@ -239,6 +276,115 @@ class CurrentJobWebApplication:
             "请检查访问路径后重试。",
             status=404,
         )
+
+    @staticmethod
+    def _media_parts(path: str) -> tuple[str, str] | None:
+        parts = tuple(unquote(part) for part in path.split("/") if part)
+        if len(parts) == 6 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "media":
+            return parts[3], parts[5]
+        return None
+
+    def _respond_media(
+        self,
+        job_id: str,
+        media_id: str,
+        environ: dict[str, object],
+        start_response: Callable,
+        *,
+        head: bool,
+    ) -> Iterable[bytes]:
+        media = self.query_service.media_file(job_id, media_id)
+        if not isinstance(media, CurrentJobWebMediaFile):
+            raise CurrentJobWebQueryError(
+                "media_query_invalid",
+                "音频媒体查询结果无效。",
+                "请检查当前版本仓储后重试。",
+                status=500,
+            )
+        try:
+            stream = media.path.open("rb")
+            size = os.fstat(stream.fileno()).st_size
+        except OSError as exc:
+            raise CurrentJobWebQueryError(
+                "media_unavailable",
+                "当前音频媒体暂时不可用。",
+                "请重新运行语音阶段或检查 Job 诊断。",
+                status=409,
+            ) from exc
+
+        range_value = environ.get("HTTP_RANGE")
+        byte_range = self._parse_range(range_value, size)
+        if range_value is not None and byte_range is None:
+            stream.close()
+            start_response(
+                "416 Range Not Satisfiable",
+                [
+                    ("Content-Type", "application/json; charset=utf-8"),
+                    ("Content-Range", f"bytes */{size}"),
+                    ("Content-Length", "0"),
+                ],
+            )
+            return []
+
+        if byte_range is None:
+            start, end = 0, size - 1
+            status = "200 OK"
+        else:
+            start, end = byte_range
+            status = "206 Partial Content"
+        length = end - start + 1
+        stream.seek(start)
+        headers = [
+            ("Content-Type", media.reference.mime_type),
+            ("Content-Length", str(length)),
+            ("Accept-Ranges", "bytes"),
+        ]
+        if byte_range is not None:
+            headers.append(("Content-Range", f"bytes {start}-{end}/{size}"))
+        start_response(status, headers)
+        if head:
+            stream.close()
+            return []
+
+        def chunks():
+            remaining = length
+            try:
+                while remaining:
+                    chunk = stream.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+            finally:
+                stream.close()
+
+        return chunks()
+
+    @staticmethod
+    def _parse_range(value: object, size: int) -> tuple[int, int] | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value.startswith("bytes=") or "," in value:
+            return None
+        raw = value[len("bytes=") :].strip()
+        if "-" not in raw or size <= 0:
+            return None
+        start_raw, end_raw = raw.split("-", 1)
+        try:
+            if not start_raw:
+                suffix = int(end_raw)
+                if suffix <= 0:
+                    return None
+                start, end = max(0, size - suffix), size - 1
+            else:
+                start = int(start_raw)
+                end = size - 1 if not end_raw else int(end_raw)
+                if start < 0 or end < start or start >= size:
+                    return None
+                end = min(end, size - 1)
+            return start, end
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _page(path: str) -> bytes | None:

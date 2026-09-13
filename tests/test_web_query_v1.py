@@ -384,7 +384,7 @@ def test_query_service_projects_workspace_assets_jobs_and_rounds(tmp_path):
     ]
     assert review["review"]["items"][0]["decision"]["action"] == "accept"
     assert review["review"]["items"][1]["decision"]["action"] == "edit"
-    assert review["media"]["status"] == "pending_boundary"
+    assert review["media"]["status"] == "unavailable"
 
 
 def test_query_service_rejects_unknown_round_with_stable_error(tmp_path):

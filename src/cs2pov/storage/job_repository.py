@@ -12,11 +12,13 @@ import re
 import shutil
 import stat
 import sys
+import wave
 from uuid import UUID, uuid4
 
 from cs2pov.domain.errors import DomainSchemaError
 from cs2pov.domain.fingerprint import content_fingerprint
 from cs2pov.domain.job_tasks import RoundTaskStatus, RoundTranslationTask
+from cs2pov.domain.media import AudioMediaManifest, AudioMediaReference
 from cs2pov.domain.job import (
     CreateJobRequest,
     FinalArtifactEntry,
@@ -95,6 +97,7 @@ from .job_events import (
     read_event_journal,
 )
 from .job_shards import (
+    AUDIO_MEDIA_PARSER,
     DEMO_DESCRIPTOR_PARSER,
     DRAFT_TIMELINE_PARSER,
     MODEL_CONFIGURATION_PARSER,
@@ -192,6 +195,7 @@ _OPTIONAL_EXACT_FILES = (
     "timeline/rounds.json",
     "timeline/time_anchors.jsonl",
     "voice/activities.jsonl",
+    "voice/media.json",
     "transcript/unassigned.jsonl",
     "final/timelines/draft.json",
     "final/timelines/reviewed.json",
@@ -224,6 +228,47 @@ def _repository_error(
     if cause is not None:
         error.__cause__ = cause
     return error
+
+
+def _audio_file_metadata(path: Path) -> tuple[str, int, int]:
+    state = os.lstat(path)
+    if _is_link_or_reparse(state) or not stat.S_ISREG(state.st_mode):
+        raise ValueError("audio file must be a regular file")
+    with wave.open(str(path), "rb") as stream:
+        if stream.getnchannels() != 1 or stream.getsampwidth() != 2:
+            raise ValueError("audio file must be mono 16-bit PCM")
+        sample_rate = stream.getframerate()
+        sample_count = stream.getnframes()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest(), sample_rate, sample_count
+
+
+def _copy_audio_file(source: Path, target: Path) -> None:
+    source_state = os.lstat(source)
+    if _is_link_or_reparse(source_state) or not stat.S_ISREG(source_state.st_mode):
+        raise ValueError("audio source must be a regular file")
+    with source.open("rb") as input_stream, target.open("xb") as output_stream:
+        while True:
+            chunk = input_stream.read(1024 * 1024)
+            if not chunk:
+                break
+            output_stream.write(chunk)
+        output_stream.flush()
+        os.fsync(output_stream.fileno())
+    current_state = os.lstat(source)
+    if (
+        _is_link_or_reparse(current_state)
+        or not stat.S_ISREG(current_state.st_mode)
+        or (current_state.st_dev, current_state.st_ino)
+        != (source_state.st_dev, source_state.st_ino)
+    ):
+        raise OSError("audio source changed during copy")
 
 
 def _is_link_or_reparse(result: os.stat_result) -> bool:
@@ -1247,6 +1292,166 @@ class FileSystemJobRepository:
             raise self._invalid_shard_input(
                 "语音活动文件关系无效。", "voice/activities.jsonl", exc
             ) from exc
+
+    def save_audio_media(
+        self,
+        job_id: str,
+        media: tuple[AudioMediaReference, ...],
+        sources: Mapping[str, Path],
+        claim: JobWriteClaim,
+    ) -> None:
+        try:
+            manifest = AudioMediaManifest(tuple(media))
+        except (DomainSchemaError, TypeError, ValueError) as exc:
+            raise self._invalid_shard_input(
+                "音频媒体清单无效。", "voice/media.json", exc
+            ) from exc
+        if not isinstance(sources, Mapping):
+            raise TypeError("sources must be a mapping")
+        expected_ids = {item.media_id for item in manifest.items}
+        if set(sources) != expected_ids:
+            raise self._invalid_shard_input(
+                "音频媒体来源与清单不一致。",
+                "voice/media.json",
+            )
+        if not isinstance(claim, JobWriteClaim):
+            raise TypeError("claim must be a JobWriteClaim")
+
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(
+            paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
+        ) as locked_file:
+            self._assert_write_lock_locked(paths, locked_file)
+            self._verify_claim_locked(paths, claim)
+            try:
+                paths.voice_audio_dir.mkdir(parents=True, exist_ok=True)
+                self._assert_safe_directory_chain(
+                    paths.voice_audio_dir,
+                    logical_path="voice/audio",
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
+            except JobRepositoryError:
+                raise
+            except OSError as exc:
+                raise _repository_error(
+                    "job_write_failed",
+                    "无法创建 Job 音频目录。",
+                    "请检查工作区权限和磁盘空间。",
+                    "voice/audio",
+                    exc,
+                ) from exc
+
+            existing = None
+            media_state = _lstat_optional(paths.voice_media, logical_path="voice/media.json")
+            if media_state is not None:
+                existing = read_strict_json(
+                    paths.voice_media,
+                    logical_path="voice/media.json",
+                    parser=AUDIO_MEDIA_PARSER,
+                )
+                if existing != manifest:
+                    raise self._invalid_shard_input(
+                        "同一 Job 的音频媒体清单已经存在不同内容。",
+                        "voice/media.json",
+                    )
+
+            staging = paths.voice_audio_dir / f".media-{uuid4().hex}.staging"
+            published: list[Path] = []
+            manifest_published = existing is not None
+            try:
+                staging.mkdir(exist_ok=False)
+                self._assert_safe_directory_chain(
+                    staging,
+                    logical_path="voice/audio",
+                    missing_code="job_shard_missing",
+                    invalid_code="job_shard_invalid",
+                )
+                for item in manifest.items:
+                    source = sources[item.media_id]
+                    if not isinstance(source, Path):
+                        source = Path(source)
+                    source_digest, source_rate, source_count = _audio_file_metadata(source)
+                    if (
+                        source_digest != item.content_sha256
+                        or source_rate != item.sample_rate
+                        or source_count != item.sample_count
+                    ):
+                        raise self._invalid_shard_input(
+                            "音频来源内容与媒体清单不一致。",
+                            f"voice/audio/{item.media_id}.wav",
+                        )
+                    staged = staging / f"{item.media_id}.wav"
+                    _copy_audio_file(source, staged)
+                    staged_digest, staged_rate, staged_count = _audio_file_metadata(staged)
+                    if (
+                        staged_digest != item.content_sha256
+                        or staged_rate != item.sample_rate
+                        or staged_count != item.sample_count
+                    ):
+                        raise self._invalid_shard_input(
+                            "音频暂存内容与媒体清单不一致。",
+                            f"voice/audio/{item.media_id}.wav",
+                        )
+                    target = paths.voice_audio(item.media_id)
+                    target_state = _lstat_optional(
+                        target,
+                        logical_path=f"voice/audio/{item.media_id}.wav",
+                    )
+                    if target_state is not None:
+                        self._assert_safe_regular(
+                            target,
+                            logical_path=f"voice/audio/{item.media_id}.wav",
+                            missing_code="job_shard_missing",
+                            invalid_code="job_shard_invalid",
+                        )
+                        target_digest, target_rate, target_count = _audio_file_metadata(target)
+                        if (
+                            target_digest != item.content_sha256
+                            or target_rate != item.sample_rate
+                            or target_count != item.sample_count
+                        ):
+                            raise self._invalid_shard_input(
+                                "现有音频内容与媒体清单不一致。",
+                                f"voice/audio/{item.media_id}.wav",
+                            )
+                        staged.unlink()
+                    else:
+                        os.replace(staged, target)
+                        published.append(target)
+
+                if existing is None:
+                    atomic_write_json(
+                        paths.voice_media,
+                        manifest,
+                        logical_path="voice/media.json",
+                        serializer=lambda value: value.to_dict(),
+                        parser=AUDIO_MEDIA_PARSER,
+                    )
+                    manifest_published = True
+            except JobRepositoryError:
+                if not manifest_published:
+                    for target in published:
+                        target.unlink(missing_ok=True)
+                raise
+            except (OSError, TypeError, ValueError, wave.Error) as exc:
+                if not manifest_published:
+                    for target in published:
+                        target.unlink(missing_ok=True)
+                raise _repository_error(
+                    "job_write_failed",
+                    "无法持久化 Job 音频媒体。",
+                    "请检查音频文件、工作区权限和磁盘空间。",
+                    "voice/media.json",
+                    exc,
+                ) from exc
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def load_audio_media(self, job_id: str) -> tuple[AudioMediaReference, ...]:
+        opened = self.load_job(job_id)
+        return self._read_audio_media(opened.paths).items
 
     def register_model_configuration(
         self,
@@ -3155,6 +3360,9 @@ class FileSystemJobRepository:
         ) is not None:
             capture(lambda: self._read_voice_activities(paths, required=True))
 
+        if _lstat_optional(paths.voice_media, logical_path="voice/media.json") is not None:
+            capture(lambda: self._read_audio_media(paths))
+
         capture(lambda: self._configuration_index(paths, manifest))
 
         def inspect_invocations() -> None:
@@ -3520,6 +3728,63 @@ class FileSystemJobRepository:
             raise self._invalid_shard_input(
                 "语音活动文件关系无效。", "voice/activities.jsonl", exc
             ) from exc
+
+    def _read_audio_media(self, paths: JobPaths) -> AudioMediaManifest:
+        state = _lstat_optional(paths.voice_media, logical_path="voice/media.json")
+        if state is None:
+            return AudioMediaManifest(())
+        manifest = read_strict_json(
+            paths.voice_media,
+            logical_path="voice/media.json",
+            parser=AUDIO_MEDIA_PARSER,
+        )
+        try:
+            self._assert_safe_directory_chain(
+                paths.voice_audio_dir,
+                logical_path="voice/audio",
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            children = tuple(os.scandir(paths.voice_audio_dir))
+        except JobRepositoryError:
+            raise
+        except OSError as exc:
+            raise self._invalid_shard_input(
+                "无法读取 Job 音频目录。", "voice/audio", exc
+            ) from exc
+
+        expected_names = {f"{item.media_id}.wav" for item in manifest.items}
+        actual_names = {
+            child.name for child in children if not child.name.startswith(".")
+        }
+        if actual_names != expected_names:
+            raise self._invalid_shard_input(
+                "音频文件集合与媒体清单不一致。", "voice/audio"
+            )
+        for item in manifest.items:
+            logical_path = f"voice/audio/{item.media_id}.wav"
+            target = paths.voice_audio(item.media_id)
+            self._assert_safe_regular(
+                target,
+                logical_path=logical_path,
+                missing_code="job_shard_missing",
+                invalid_code="job_shard_invalid",
+            )
+            try:
+                digest, sample_rate, sample_count = _audio_file_metadata(target)
+            except (OSError, ValueError, wave.Error) as exc:
+                raise self._invalid_shard_input(
+                    "音频文件格式无效。", logical_path, exc
+                ) from exc
+            if (
+                digest != item.content_sha256
+                or sample_rate != item.sample_rate
+                or sample_count != item.sample_count
+            ):
+                raise self._invalid_shard_input(
+                    "音频文件内容与媒体清单不一致。", logical_path
+                )
+        return manifest
 
     def _read_transcript_file(
         self,

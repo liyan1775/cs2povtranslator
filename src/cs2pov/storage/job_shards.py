@@ -5,6 +5,7 @@ from cs2pov.domain.invocation import (
     ModelConfigurationSnapshot,
     ModelInvocationRecord,
 )
+from cs2pov.domain.media import AudioMediaManifest
 from cs2pov.domain.review import (
     DraftCommsTimeline,
     ReviewRevisionManifest,
@@ -23,6 +24,10 @@ from .atomic_documents import schema_aware_parser
 VOICE_ACTIVITY_PARSER = schema_aware_parser(
     VoiceActivityCue.from_dict,
     expectations=("",),
+)
+AUDIO_MEDIA_PARSER = schema_aware_parser(
+    AudioMediaManifest.from_dict,
+    expectations=("", "/items/*"),
 )
 MODEL_CONFIGURATION_PARSER = schema_aware_parser(
     ModelConfigurationSnapshot.from_dict,
