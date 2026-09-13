@@ -105,6 +105,21 @@ Demo。它覆盖重叠玩家活动、无回合归属、跨静音来源拒绝、�
 语言图读取，以及旧版 WAV/包清单到当前版本样本范围的转换。真实模型 smoke 仍属于
 后续验收阶段，不作为本阶段门禁。
 
+## 理解翻译与回合调度测试（02D-3）
+
+运行下面的测试可以验证旧版 LLM 返回到当前版本理解翻译文档的转换，以及从 Job 配置
+快照启动回合调度：
+
+```powershell
+py -3.12 -m pytest -o addopts= tests/test_translation_ports_v1.py -q
+```
+
+测试覆盖 dry-run、跳过翻译、旧版 `translations` 返回形状、模型快照传递、provider
+错误的稳定映射、原始错误细节隔离、调用指纹、理解文档闭合、Job 重开和完成阶段推进。
+测试使用 fake provider，不访问真实 API；并发、逆序完成、取消、重试和心跳的调度边界
+由既有 `test_round_scheduler_parallel_v1.py` 与 `test_round_scheduler_recovery_v1.py`
+继续覆盖。真实 provider、限流行为和金标准双跑留在 02D-5。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

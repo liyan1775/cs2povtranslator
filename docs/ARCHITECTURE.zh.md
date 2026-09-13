@@ -220,3 +220,11 @@ worker 只接收当前回合的最小语音投影和安全配置快照，不接�
 每个语音活动使用一个独立的 ASR 窗口。来源样本、Demo 微秒、回合引用、语音活动引用和 ASR 调用指纹在写入前完成闭合校验；跨静音的来源范围、未知玩家、越界样本和不连续映射会被拒绝。无回合归属的 cue 进入 `transcript/unassigned.jsonl`，无语音回合使用空转录文件表示。单个活动失败时，所属回合不发布转录检查点，已经完成的其他回合继续保留；只有所有活动结果闭合时 Job 才从 `VOICE_READY` 推进到 `TRANSCRIBED`。
 
 `LegacyVoiceExtractorPort` 复用现有 Demo 语音解码器，`LegacyFasterWhisperPort` 复用现有 faster-whisper 适配器。模型配置快照和调用记录由 `FileSystemJobRepository` 写入，应用层负责 claim、配置注册、逐回合发布和语言图重开校验。
+
+## 理解翻译与回合调度接入（02D-3）
+
+02D-3 新增 `application.translation_ports`，将 02C-B 的隐私最小化 `RoundWorkRequest` 交给现有 OpenAI-compatible LLM 适配器，并把结构化返回转换成 `RoundUnderstandingDocument`、`UnderstandingResult` 和 `ModelInvocationRecord`。模型名称、超时和翻译模式来自当前 Job 已登记的 `ModelConfigurationSnapshot`；访问令牌由 provider 边界持有，不进入 Job、任务请求或领域错误。
+
+`LegacyRoundTranslationWorker` 支持旧接口常用的 `translations` 返回形状，同时补齐理解来源、置信度、证据和 warning 字段。`dry_run` 与跳过翻译会生成可审计的占位结果；缺少 provider、服务配置错误、服务繁忙、网络故障和返回格式错误分别映射为稳定的 `RoundTaskError`，原始异常只保留在内存因果链中。重试由既有 `RoundScheduler` 根据任务历史和固定的配置快照执行，不在重试之间静默更换模型或 provider。
+
+`CurrentJobTranslationApplicationService` 只允许从 `CONTEXT_READY` 或 `UNDERSTANDING_TRANSLATING` 启动，先读取已登记配置，再使用 claim-fenced coordinator 和有界并发 scheduler。回合结果按完成顺序立即保存，但最终任务、理解文档、调用记录和 Job 阶段仍按 Demo 回合规范顺序与完整数据图校验；取消、进程恢复、显式重试和逆序完成继续沿用 02C-B 的状态契约。字幕导出、Draft timeline 和真实 Demo/模型双跑仍属于 02D-4 至 02D-5。
