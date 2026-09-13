@@ -62,4 +62,5 @@ py -3.12 scripts/check_new_job_repository.py
 修改依据是原空 artifact index 无法验证生产清理行为，具体期望由独立语义断言固定，
 不从运行结果批量生成。主协调器已独立确认该回放测试 8 passed、旧 golden 15 passed；
 A 最终全量已由 Sagan 确认 2233 passed、28 skipped；Task 5 脚本/fixture/CI 已提交于
-`3c8d25c`，文档提交及远程集成待完成，GitHub 尚未推送，详见 [A 交付记录](../../docs/superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。
+`3c8d25c`，已随 PR #22 合并为 `373d556`；主协调器确认全部 8 个 PR checks 及
+post-merge CI `34019305517` completed/success，详见 [A 交付记录](../../docs/superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。

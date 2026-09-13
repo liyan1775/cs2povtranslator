@@ -5,7 +5,7 @@ import stat
 from pathlib import Path
 
 from cs2pov.domain.job import FinalArtifactKind
-from cs2pov.domain.schema import require_path_identifier, require_artifact_relative_path
+from cs2pov.domain.schema import require_path_identifier, require_artifact_relative_path, require_sha256
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.errors import WorkspacePathOutsideRootError
 
@@ -187,6 +187,14 @@ class JobPaths:
 
     def round_understanding(self, round_id: str) -> Path:
         return self.understanding_dir / f"round_{require_path_identifier(round_id, 'round_id')}.json"
+
+    def round_understanding_history(self, round_id: str, result_fingerprint: str) -> Path:
+        round_id = require_path_identifier(round_id, "round_id")
+        result_fingerprint = require_sha256(result_fingerprint, "result_fingerprint")
+        parent = self.understanding_dir / "history" / f"round_{round_id}"
+        self._assert_safe_existing_components(parent)
+        self._assert_inside(parent)
+        return parent / f"result_{result_fingerprint}.json"
 
     def review_revision(self, review_id: str) -> Path:
         return self.review_revisions_dir / f"review_{require_path_identifier(review_id, 'review_id')}"

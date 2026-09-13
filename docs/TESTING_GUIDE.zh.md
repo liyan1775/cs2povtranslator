@@ -182,7 +182,8 @@ CI 在 Ubuntu Python 3.11/3.12/3.13 和 Windows Python 3.12 的同一测试矩�
 [A 交付清单](superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)；
 Sagan 最终全量为 2233 passed、28 skipped，95.87 秒，exit 0；全部 16 个
 changed/untracked Python 文件 Ruff、compileall、diffcheck 通过，计划扫描无匹配。
-GitHub 尚未推送，远程 CI 与合并验收待完成。
+主协调器确认 A 已经 PR #22 合并为 `373d556`，PR 全部 8 checks 通过，
+post-merge CI `34019305517` completed/success。B 的测试与集成证据单独登记。
 
 相关测试位于 `test_domain_job_tasks_v1.py`、`test_domain_job_task_state_v1.py`、
 `test_domain_job_state_v1.py`、`test_domain_invalidation_v1.py` 和

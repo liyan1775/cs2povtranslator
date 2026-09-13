@@ -2,7 +2,7 @@
 
 > **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
 
-**Status (2026-09-05):** Planned; implementation starts after 02C-A is merged. Provider-specific integration belongs to task 5.3 of the overall plan.
+**Status (2026-09-06):** Implementation started after 02C-A merged through PR #22 (`373d556`); its eight PR checks and post-merge CI run `34019305517` passed, as confirmed by the coordinator. Task 1 storage is assigned to Sagan. Task 2 worker port is implemented locally with 32 contract cases and 60 focused tests passing, plus scoped Ruff. Tasks 3–7 and B integration remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
 
 **Goal:** Persist round tasks and run them with bounded parallelism, deterministic retries, cancellation, crash recovery, immediate successful checkpoints, and stable aggregation without requiring a real model API.
 
@@ -37,6 +37,15 @@
 - Create focused tests per unit plus one real-process replay.
 
 ### Task 1: Strict claim-fenced round task persistence
+
+**Execution decisions (2026-09-06, approved by coordinator):** These decisions supersede conflicting completeness/current-input wording below; they do not authorize schema changes.
+
+- A read with no task shards returns `()`. An existing partial task set is a valid timeline-ordered subset, enabling recovery from interrupted initialization. Unknown or duplicate round IDs and filename/content mismatch remain invalid. An initialization request describes the complete intended timeline set; existing disk contents may be partial.
+- Historical tasks may load after transcript/configuration changes. Validate live input/configuration closure when introducing a new task generation or authorizing reuse, rather than rejecting every old generation on read. CAS must preserve immutable attempt history; closing the current attempt is a legal transition, replacing or truncating closed history is not.
+- A non-`SUCCEEDED` task never authorizes a residual on-disk Understanding document. When task shards exist, only `SUCCEEDED` tasks authorize current Understanding graph entries. Files left by interrupted checkpoints or supersession remain diagnostic evidence, not current results.
+- Historical successful attempts close over the matching current or archived document, result fingerprint, configuration and invocation references. Do not validate historical documents against the latest transcripts; absence of the original transcript snapshot does not authorize claiming full historical source revalidation.
+- Same schema-v1 Jobs without any task shards retain the existing language-graph read behavior, including the existing repository replay. This is absence-compatible reading within the same wire format, not schema migration. An empty/partial task read alone does not imply translation completion.
+- Preserve existing claim fencing by owning run identity and live lease under the OS lock. Do not introduce full claim-object equality that would reject the owner's pre-heartbeat claim solely because the lease representation was refreshed.
 
 **Files:**
 - Create: `src/cs2pov/storage/job_task_documents.py`
@@ -98,7 +107,7 @@ assert json.loads(
 ) == task_001.to_dict()
 ```
 
-Require `initialize_round_tasks` to load the persisted Demo timeline and reject missing/extra/duplicate round IDs. `load_round_tasks` is read-only and rejects a task whose filename, `round_id`, `task_id`, configuration reference, or input fingerprint closure is invalid.
+Require `initialize_round_tasks` to load the persisted Demo timeline and reject missing/extra/duplicate round IDs in the requested full batch. `load_round_tasks` is read-only, permits an absent/partial disk set, and rejects invalid filename/round/task identity or dangling configuration references. Existing generations may have old input fingerprints; newly introduced generations and reuse authorization must validate the live input closure.
 
 Inject a crash after publishing the first task, rerun initialization, and prove the identical first task is reused while missing tasks are created. Existing different content must fail closed. Prove `merge_task_invocations` atomically reads/merges/rewrites the canonical JSONL set under one lock, is idempotent for identical invocation IDs, and rejects a duplicate ID with different content.
 
@@ -147,7 +156,7 @@ Follow existing shard patterns exactly:
 - round/task filename/content mismatch maps to `job_shard_invalid` with a logical `tasks/round_<id>.json` path;
 - never create a lock, claim, task, or directory from a read method.
 
-`load_round_tasks` opens the already existing Job write lock and reads the manifest, timeline, task filenames, and task contents inside that one read snapshot; it does not return a mixture from two cooperating writer states. Add task files and `understanding/history` files/directories to deep inspection. One corrupt task/history document marks only its Job unhealthy; sibling Jobs remain listable. Do not make task files mandatory for phases earlier than `CONTEXT_READY`.
+`load_round_tasks` opens the already existing Job write lock and reads the manifest, timeline, task filenames, and task contents inside that one read snapshot; it does not return a mixture from two cooperating writer states. Add task files and `understanding/history` files/directories to deep inspection. One corrupt task/history document marks only its Job unhealthy; sibling Jobs remain listable. Do not infer mandatory task completeness from phase alone: preserve task-free schema-v1 Jobs and valid partial initialization, with current-result authority governed by the execution decisions above.
 
 - [ ] **Step 5: Run task persistence and existing repository gates**
 
@@ -165,6 +174,8 @@ git commit -m "feat: persist round translation tasks"
 ```
 
 ### Task 2: Typed worker port with privacy-minimal requests
+
+**Local delivery (2026-09-06):** `round_worker.py` and `test_round_worker_contract_v1.py` implemented. RED: missing module caused collection failure before implementation. Additional behavioral RED cases exposed over-rejection of valid SHA-256 digit runs and ordinary slash text/model names; both were corrected without changing domain wire. GREEN: `py -3.12 -B -m pytest tests/test_round_worker_contract_v1.py tests/test_domain_invocation_v1.py tests/test_domain_validation_v1.py -o addopts= -q` — 60 passed (32 worker contract cases), exit 0; scoped Ruff passed. No B commit or coordinator implementation is included. Detailed handoff is recorded in the local ignored Task 2 report, not the coordinator's progress ledger.
 
 **Files:**
 - Create: `src/cs2pov/application/round_worker.py`
@@ -208,23 +219,25 @@ class RoundTranslationWorker(Protocol):
     async def translate(self, request: RoundWorkRequest) -> RoundWorkResult: ...
 ```
 
-- [ ] **Step 1: Write failing request/result closure tests**
+- [x] **Step 1: Write failing request/result closure tests**
 
-Prove the request contains only the selected round's privacy-minimal cues and non-secret configuration snapshot. `RoundWorkCue` carries no `player_id`, source stream/clock/range, anchor/voice IDs, ASR invocation ID, Steam identity, path, endpoint, or secret. Map speakers to deterministic Job-local tokens (`speaker-001`, `speaker-002`, …) by first appearance within the round. Current schema v1 requires `task_id == round_id` to match the existing production invocation/Understanding validator. Reject mismatched IDs, incorrect document/task fingerprints, absolute paths, secret-shaped keys, and a result whose round/input/invocation/configuration closure fails production validators.
+Prove the request contains only the selected round's privacy-minimal cues and non-secret configuration snapshot. `RoundWorkCue` carries no `player_id`, source stream/clock/range, anchor/voice IDs, ASR invocation ID, Steam identity, path, endpoint, or secret. Neither request nor cue retains hidden full-evidence references or callbacks. Map speakers to deterministic round-local tokens (`speaker-001`, `speaker-002`, …) by first appearance after sorting cues by `(start_us, end_us, cue_id)`; tokens make no cross-round identity promise. Preserve Demo-global integer microseconds. Current schema v1 requires `task_id == round_id`. Reject mismatched IDs, incorrect task fingerprints, absolute paths and secret-shaped keys. Result validation checks only facts available from this projection; final production graph closure belongs to the coordinator before persistence.
 
-Prove an empty target-team round may return a valid empty `RoundUnderstandingDocument` with `invocations=()`.
+Prove a round whose complete persisted cue set is empty may return a valid empty `RoundUnderstandingDocument` with `invocations=()`. The worker cannot filter a nonempty authoritative set to manufacture empty success; no new team filter is introduced.
 
-For a non-empty result, require exactly one successful invocation referenced by the document and every `UnderstandingResult`; its `task_id` equals the round/task ID and its configuration/request/response fingerprints pass the existing production graph validator. Retry/failure invocation history may contain additional records, but they are not allowed to masquerade as the successful document invocation.
+For a non-empty result, require exactly one authoritative invocation referenced by the document and every `UnderstandingResult`. `ModelInvocationRecord` has no success/failure status; do not add one or infer it for diagnostic records. Require exact cue coverage/order and unchanged `asr_original`; document round/configuration/input must match the request. Every newly returned invocation must have a unique ID and match the request task/configuration/document hash. The authoritative response hash is `content_fingerprint({"round_id": request.round_id, "results": [r.to_dict() for r in document.results]})`. Additional diagnostic records are allowed but their response contents cannot be revalidated without their payloads. Prior-generation history remains repository-owned and is not treated as newly returned records.
 
-- [ ] **Step 2: Run and verify red**
+Include a compatibility test where only a full-source reference changes: the projection stays identical, both trusted hashes change, the old-request projection check still accepts the old result, and the production graph rejects that result against changed persisted evidence. This demonstrates the boundary rather than claiming the projection proves full source provenance.
+
+- [x] **Step 2: Run and verify red**
 
 ```powershell
 py -3.12 -m pytest tests/test_round_worker_contract_v1.py -q
 ```
 
-Expected: import failure for `round_worker`.
+Expected: import failure for `round_worker`. Confirmed on 2026-09-06 before implementation (exit 2); the subsequent worker suite passed.
 
-- [ ] **Step 3: Implement the narrow protocol and validation factories**
+- [x] **Step 3: Implement the narrow protocol and validation factories**
 
 Construct requests/results only through factories:
 
@@ -246,7 +259,7 @@ def validate_round_work_failure(
 ) -> None: ...
 ```
 
-Recompute two distinct fingerprints; do not accept either from the caller without verification:
+The trusted application-side builder receives the complete persisted transcripts, selects all cues of the requested round, rejects duplicate cue IDs, and computes two distinct fingerprints. Full evidence remains local to the builder and is not retained by the returned request. Reuse the existing canonical field names and sort order:
 
 ```python
 document_input_fingerprint = content_fingerprint({
@@ -259,11 +272,15 @@ task_input_fingerprint = content_fingerprint({
 })
 ```
 
-`RoundUnderstandingDocument.input_fingerprint` and the successful invocation request fingerprint continue to use `document_input_fingerprint`, preserving the existing production graph contract. `RoundTranslationTask.input_fingerprint` uses `task_input_fingerprint`, so model/prompt/knowledge changes invalidate the task even when transcripts are unchanged. The worker receives only the hashes and privacy-minimal cues, not the full transcript source evidence. `RoundWorkFailure` exposes only a typed safe error; raw exception details stay in `__cause__`, not durable payloads.
+`RoundUnderstandingDocument.input_fingerprint` and the authoritative invocation request fingerprint continue to use `document_input_fingerprint`, preserving the existing production graph contract. The builder verifies the selected snapshot and requires the computed task hash to equal `RoundTranslationTask.input_fingerprint`. Direct request construction validates structure and the relationship between document/configuration/task hashes, but cannot verify the document hash's full-evidence origin. The worker must use the supplied document hash directly when constructing a `ModelInvocationRecord`; hashing the projected transport request with `from_payloads` would change the existing wire semantics. Configuration changes affect the task hash even when transcripts are unchanged.
+
+`validate_round_work_result` performs projection checks only; it must not fabricate a `TranscriptCue` to call the full graph validator. The worker receives only the two hashes, minimal cues and safe configuration. `RoundWorkFailure` exposes only a typed safe error; raw exception details stay in `__cause__`, not durable payloads. These port dataclasses are application values, not a new durable schema.
 
 Implement `RoundWorkFailure.__init__(error, invocations=(), *, cause=None)` explicitly. The constructor validates its own types, uses only `error.message_zh` as the exception string, and attaches the optional raw cause through exception chaining rather than a serializable field. `validate_round_work_failure(request, failure)` is the request-dependent boundary: every invocation must match the request round/task ID, configuration snapshot, and `document_input_fingerprint`; duplicates or mismatches are rejected before any invocation is persisted.
 
 - [ ] **Step 4: Run tests and commit**
+
+Tests and scoped Ruff passed as recorded above; the commit remains pending and is owned by the coordinator.
 
 ```powershell
 py -3.12 -m pytest tests/test_round_worker_contract_v1.py tests/test_domain_invocation_v1.py tests/test_domain_validation_v1.py -q
@@ -272,6 +289,8 @@ git commit -m "feat: define round translation worker port"
 ```
 
 ### Task 3: Job coordinator preparation, checkpoint, and reconciliation
+
+**Required integration boundary (approved 2026-09-06; not implemented by Task 2):** Inside `claim_gate`, reread the current task/attempt, full persisted transcripts and configuration before accepting a completion. Rebuild the trusted worker request, reject stale generation/attempt results, then apply the projection validator. Validate persisted transcript source relationships using the repository's authoritative language evidence. In memory merge existing invocation history with new records (identical ID/content is idempotent; different content at the same ID is an error), and call `validate_understanding_document_graph(result.document, persisted_full_transcripts, persisted_configurations, merged_invocations)` before publishing any success artifacts. The current `save_round_understanding` validates the claim and writes atomically; it does not supply this semantic preflight. Do not rely on it as a full-graph validator. Read current graph entries using Task 1's task-authority decisions so a non-authoritative stale document cannot block recovery. Preserve CAS and claim fencing through all subsequent writes.
 
 **Files:**
 - Create: `src/cs2pov/application/job_coordinator.py`
@@ -357,6 +376,8 @@ A crash after step 2 changes no authority. A crash after step 3 is safely over-i
 - [ ] **Step 4: Implement ordered durable checkpoints**
 
 For success, publish in this recoverable order while verifying the same claim at each repository mutation:
+
+Precondition: complete the fresh-request, current-attempt and full persisted graph preflight described above, including the in-memory invocation merge, before step 1. Failure of that preflight publishes no successful Understanding/task authority. The task result fingerprint is the unchanged `RoundUnderstandingDocument.content_fingerprint()`.
 
 1. merge invocation records into the task's canonical JSONL history (zero new records only for a valid empty result);
 2. save the round Understanding document;

@@ -2,7 +2,7 @@
 
 > **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
 
-**Status (2026-09-06):** Tasks 1–5 implemented and implementation commits recorded; all three identified review findings closed. Final local verification passed, including 2233 tests passed and 28 skipped; documentation commit and GitHub integration remain pending, with no GitHub push yet. Completion evidence is recorded below and in the delivery milestone plan. The user has cancelled the stage pause; continue to 02C-B after integration, with Luna handling most implementation, testing and documentation.
+**Status (2026-09-06):** Delivered through PR #22, merge `373d556`. The coordinator confirmed all eight PR checks passed at HEAD `1362b139db5fbbb555ac36487cd49bc447767a42`, and post-merge CI run `34019305517` is completed/success. Tasks 1–5 and all three review corrections are integrated; local verification was 2233 passed, 28 skipped. The user has cancelled the stage pause; 02C-B has started with the existing Luna resource allocation and disjoint task ownership.
 
 **Goal:** Build the pure, current-version domain core for legal Job phase changes, durable round translation task state, retry decisions, progress summaries, and minimal downstream invalidation.
 
@@ -72,10 +72,10 @@
 - [x] 接收并登记 Sagan 最终全量结果：2233 passed、28 skipped，95.87 秒，exit 0。
 - [x] 登记全部 16 个 changed/untracked Python 文件的 Ruff、compileall、diffcheck 通过及计划扫描无匹配；后续仅在新增改动或未解决问题需要时补验。
 - [x] 实现按批次提交，主协调器已确认：legacy `adbc91d`；Task 1 `060ca96`；Task 2–3 `9aed066`；Task 4 `676c42a`；Task 5 脚本/fixture/CI `3c8d25c`。
-- [ ] 审核并提交本次交付文档；文档维护者不执行 commit。
-- [ ] 推送分支、创建 PR，并等待实际 PR HEAD 的 Ubuntu Python 3.11/3.12/3.13 与 Windows Python 3.12 检查全部通过。
-- [ ] 合并 A，核验合并提交的主线 CI，并补记 commit/PR/CI 证据。
-- [ ] A 合并后由 Luna 接续 B；B Task 1–7 当前仍未实现，其持久化、并发及恢复验收不能由 A 的合成状态回放替代。
+- [x] A 交付文档随 PR #22 完成提交集成；本次 B 工作树收尾记录不执行 git 操作。
+- [x] 主协调器确认 PR #22 的 HEAD `1362b139db5fbbb555ac36487cd49bc447767a42` 全部 8 checks 通过。
+- [x] PR #22 已合并，merge `373d556`；主协调器确认 post-merge CI `34019305517` 为 completed/success。
+- [x] A 合并后已在独立 B 工作树接续 Task 1/2；B 的持久化、并发及恢复验收仍须独立完成，不能由 A 的合成状态回放替代。
 
 ### Task 1: Strict round task, attempt, error, and retry contracts
 
@@ -645,7 +645,7 @@ Document that 02C-A is a pure state core: no workers, no filesystem task persist
 
 - [x] **Step 5: Run focused and full verification**
 
-已完成：定向测试、契约回放、golden、hygiene，以及 Sagan 最终全量 2233 passed、28 skipped 和全部 16 个 Python 文件的 Ruff、compileall、diffcheck、计划扫描均有确证，详见本文件交付记录。GitHub 尚未推送；文档提交及远程集成步骤仍待完成。
+已完成：定向测试、契约回放、golden、hygiene，以及 Sagan 最终全量 2233 passed、28 skipped 和全部 16 个 Python 文件的 Ruff、compileall、diffcheck、计划扫描均有确证，详见本文件交付记录。PR #22 及合并后 CI 已完成。
 
 ```powershell
 py -3.12 scripts/check_new_job_state.py
@@ -664,19 +664,19 @@ Expected: every command exits 0. Also run privacy/timing scans and expect no mat
 rg -n "start_time|end_time|api_key|authorization|access_token|password|https?://|steamid|steam_id" src/cs2pov/domain/job_tasks.py src/cs2pov/domain/job_task_state.py src/cs2pov/domain/job_state.py src/cs2pov/domain/invalidation.py tests/golden/fixtures/new_job_state_v1.json
 ```
 
-- [ ] **Step 6: Commit Task 5**
+- [x] **Step 6: Commit Task 5**
 
 - [x] 脚本/fixture/CI 实现批次已提交：`3c8d25c`（主协调器确认）。
-- [ ] 本步骤所列交付文档尚待提交，因此整体步骤保持未勾选。
+- [x] 本步骤所列交付文档已随 PR #22 集成。
 
 ```powershell
 git add tests/golden/fixtures/new_job_state_v1.json scripts/check_new_job_state.py tests/test_new_job_state_replay.py tests/golden/README.zh.md docs/ARCHITECTURE.zh.md docs/TESTING_GUIDE.zh.md
 git commit -m "test: gate round task state core"
 ```
 
-- [ ] **Step 7: Independent review and GitHub handoff**
+- [x] **Step 7: Independent review and GitHub handoff**
 
-部分完成：三项已接受审查问题全部闭合，独立只读复核未发现实质问题，代码已按批次提交；文档 commit、PR/CI/合并及合并后 CI 尚待完成，因此本项保持未勾选。
+已完成：三项已接受审查问题全部闭合；PR #22 的 8 checks 通过并合并为 `373d556`，post-merge CI `34019305517` completed/success。远程结果由主协调器确证，本次文档维护未执行 git 或远程操作。
 
 Request an independent review of all commits against this plan. In accordance with the user's resource allocation, use Luna for routine review and reserve the coordinating model for material unresolved risks. Resolve findings with a failing regression test first, rerun the full gate, push a feature branch, create a PR against `master`, wait for Ubuntu 3.11/3.12/3.13 and Windows 3.12 CI, merge only when green, then verify the post-merge `master` CI.
 

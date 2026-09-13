@@ -14,6 +14,8 @@ import sys
 from uuid import UUID, uuid4
 
 from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.fingerprint import content_fingerprint
+from cs2pov.domain.job_tasks import RoundTaskStatus, RoundTranslationTask
 from cs2pov.domain.job import (
     CreateJobRequest,
     FinalArtifactKind,
@@ -40,7 +42,7 @@ from cs2pov.domain.review import (
     RoundReviewDocument,
     compose_reviewed_timeline,
 )
-from cs2pov.domain.schema import require_path_identifier
+from cs2pov.domain.schema import require_path_identifier, require_sha256
 from cs2pov.domain.timeline import DemoTimeline
 from cs2pov.domain.transcript import TranscriptCue
 from cs2pov.domain.understanding import RoundUnderstandingDocument
@@ -72,6 +74,18 @@ from .atomic_documents import (
 )
 from .cross_process_lock import CrossProcessFileLock
 from .job_claim import CLAIM_INITIALIZATION_GRACE_US, JobWriteSession
+from .job_task_documents import (
+    ROUND_TASK_PARSER,
+    canonical_round_tasks,
+    invalid as task_invalid,
+    task_input_fingerprint,
+    task_path,
+    require_task_configuration,
+    validate_historical_document,
+    validate_succeeded_task_result,
+    validate_task_history,
+    validate_task_replacement,
+)
 from .job_events import (
     EVENT_LOGICAL_PATH,
     JOB_EVENT_PARSER,
@@ -1186,6 +1200,250 @@ class FileSystemJobRepository:
             for snapshot_id in opened.manifest.configuration_snapshot_ids
         )
 
+    def _round_task_ids(self, paths):
+        return self._dynamic_path_ids(
+            paths.tasks_dir, prefix="round_", suffix=".json",
+            field="round_id", logical_directory="tasks",
+        )
+
+    def _read_round_task(self, paths, round_id):
+        logical = f"tasks/round_{round_id}.json"
+        task = read_strict_json(paths.task_round(round_id), logical_path=logical, parser=ROUND_TASK_PARSER)
+        if task.round_id != round_id or task.task_id != round_id:
+            raise task_invalid(logical)
+        return task
+
+    def _read_understanding_history_locked(self, paths, configurations, invocations):
+        root = paths.understanding_dir / "history"
+        if _lstat_optional(root, logical_path="understanding/history") is None:
+            return {}
+        self._assert_safe_directory_chain(root, logical_path="understanding/history",
+                                         missing_code="job_shard_missing", invalid_code="job_shard_invalid")
+        results = {}
+        try:
+            directories = tuple(os.scandir(root))
+            for directory in directories:
+                logical_dir = f"understanding/history/{directory.name}"
+                if not directory.name.startswith("round_"):
+                    raise task_invalid(logical_dir)
+                round_id = self._persisted_path_id(directory.name[len("round_"):], "round_id")
+                self._assert_safe_directory_chain(Path(directory.path), logical_path=logical_dir,
+                                                 missing_code="job_shard_missing", invalid_code="job_shard_invalid")
+                for child in os.scandir(directory.path):
+                    if child.name.startswith(".") and child.name.endswith(".tmp"):
+                        self._assert_safe_regular(Path(child.path), logical_path=f"{logical_dir}/{child.name}",
+                                                  missing_code="job_shard_missing", invalid_code="job_shard_invalid")
+                        continue
+                    logical = f"{logical_dir}/{child.name}"
+                    match = re.fullmatch(r"result_([0-9a-f]{64})\.json", child.name)
+                    if match is None:
+                        raise task_invalid(logical)
+                    document = read_strict_json(Path(child.path), logical_path=logical, parser=ROUND_UNDERSTANDING_PARSER)
+                    if document.round_id != round_id or document.content_fingerprint() != match[1]:
+                        raise task_invalid(logical)
+                    validate_historical_document(document, configurations, invocations, logical)
+                    results[(round_id, match[1])] = document
+        except OSError as exc:
+            raise task_invalid("understanding/history") from exc
+        return results
+
+    def _round_task_context_locked(self, paths, manifest):
+        ids = self._round_task_ids(paths)
+        configurations = self._configuration_index(paths, manifest)
+        invocations = {v.invocation_id: v for v in self._read_all_invocations_locked(paths, tuple(configurations.values()))}
+        archives = self._read_understanding_history_locked(paths, configurations, invocations)
+        if not ids:
+            return (), configurations, invocations, {}, archives
+        timeline = self._read_demo_timeline(paths, expected_asset_id=manifest.demo_asset_id)
+        tasks = canonical_round_tasks(timeline, (self._read_round_task(paths, i) for i in ids), complete=False)
+        current = {
+            i: self._read_round_understanding(paths, i)
+            for i in self._dynamic_path_ids(paths.understanding_dir, prefix="round_", suffix=".json",
+                                           field="round_id", logical_directory="understanding")
+        }
+        results = dict(archives)
+        results.update({(i, d.content_fingerprint()): d for i, d in current.items()})
+        for task in tasks:
+            validate_task_history(task, configurations, invocations, results)
+            if task.status is RoundTaskStatus.SUCCEEDED:
+                document = current.get(task.round_id)
+                if document is None:
+                    raise task_invalid(task_path(task), "成功任务缺少当前结果。")
+                validate_succeeded_task_result(task, document)
+        return tasks, configurations, invocations, current, archives
+
+    def _validate_current_task_locked(self, paths, manifest, task, configurations, invocations):
+        config = require_task_configuration(task.configuration_snapshot_id, configurations, task_path(task))
+        transcript_path = paths.round_transcript(task.round_id)
+        transcripts = self._read_transcript_file(paths, task.round_id) if _lstat_optional(
+            transcript_path, logical_path=f"transcript/round_{task.round_id}.jsonl"
+        ) is not None else ()
+        timeline = self._read_demo_timeline(paths, expected_asset_id=manifest.demo_asset_id)
+        canonical_round_tasks(timeline, (task,), complete=False)
+        activities = self._read_voice_activities(paths, required=False)
+        try:
+            for cue in transcripts:
+                validate_transcript_against_timeline(cue, timeline, activities, tuple(configurations.values()), tuple(invocations.values()))
+            digest = content_fingerprint({"round_id": task.round_id, "transcript_cues": [c.to_dict() for c in transcripts]})
+            if task.input_fingerprint != task_input_fingerprint(digest, config):
+                raise task_invalid(task_path(task), "新任务输入与持久转录及配置不一致。")
+            if task.status is RoundTaskStatus.SUCCEEDED:
+                validate_understanding_document_graph(self._read_round_understanding(paths, task.round_id),
+                                                     transcripts, tuple(configurations.values()), tuple(invocations.values()))
+        except DomainSchemaError as exc:
+            raise task_invalid(task_path(task)) from exc
+
+    def _validate_task_argument(self, task):
+        if type(task) is not RoundTranslationTask:
+            raise task_invalid("tasks")
+
+    def _validate_task_digest(self, digest):
+        try:
+            require_sha256(digest, "expected_fingerprint")
+        except DomainSchemaError as exc:
+            raise task_invalid("tasks") from exc
+
+    def load_round_tasks(self, job_id: str) -> tuple[RoundTranslationTask, ...]:
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS) as locked:
+            self._assert_read_lock_locked(paths, locked)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            return self._round_task_context_locked(paths, opened.manifest)[0]
+
+    def initialize_round_tasks(self, job_id: str, tasks: tuple[RoundTranslationTask, ...],
+                               claim: JobWriteClaim) -> tuple[RoundTranslationTask, ...]:
+        if not isinstance(tasks, (tuple, list)):
+            raise task_invalid("tasks")
+        for task in tasks:
+            self._validate_task_argument(task)
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS) as locked:
+            self._assert_write_lock_locked(paths, locked)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            timeline = self._read_demo_timeline(paths, expected_asset_id=opened.manifest.demo_asset_id)
+            ordered = canonical_round_tasks(timeline, tasks)
+            previous, configurations, invocations, current, archives = self._round_task_context_locked(paths, opened.manifest)
+            existing = {t.round_id: t for t in previous}
+            results = dict(archives)
+            results.update({(i, d.content_fingerprint()): d for i, d in current.items()})
+            for task in ordered:
+                if task.round_id in existing and existing[task.round_id] != task:
+                    raise task_invalid(task_path(task), "已有任务与初始化内容不一致。", "job_task_conflict")
+                self._validate_current_task_locked(paths, opened.manifest, task, configurations, invocations)
+                # First initialization may adopt a validated existing success.
+                if task.status is RoundTaskStatus.SUCCEEDED and task.round_id not in current:
+                    document = self._read_round_understanding(paths, task.round_id)
+                    results[(task.round_id, document.content_fingerprint())] = document
+                    validate_succeeded_task_result(task, document)
+                validate_task_history(task, configurations, invocations, results)
+            for task in ordered:
+                if task.round_id not in existing:
+                    atomic_write_json(paths.task_round(task.round_id), task, logical_path=task_path(task),
+                                      serializer=lambda v: v.to_dict(), parser=ROUND_TASK_PARSER)
+            return ordered
+
+    def replace_round_task(self, job_id: str, expected_fingerprint: str,
+                           task: RoundTranslationTask, claim: JobWriteClaim) -> RoundTranslationTask:
+        self._validate_task_argument(task)
+        self._validate_task_digest(expected_fingerprint)
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS) as locked:
+            self._assert_write_lock_locked(paths, locked)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            old = self._read_round_task(paths, task.round_id)
+            if old.content_fingerprint() != expected_fingerprint:
+                raise task_invalid(task_path(task), "任务已被其他操作更新。", "job_task_conflict")
+            _, configurations, invocations, current, archives = self._round_task_context_locked(paths, opened.manifest)
+            validate_task_replacement(old, task)
+            changed = (old.input_fingerprint, old.configuration_snapshot_id) != (task.input_fingerprint, task.configuration_snapshot_id)
+            if changed or len(task.attempts) > len(old.attempts) or task.status is RoundTaskStatus.SUCCEEDED:
+                self._validate_current_task_locked(paths, opened.manifest, task, configurations, invocations)
+            if old.status is RoundTaskStatus.SUCCEEDED and (old.round_id, old.result_fingerprint) not in archives:
+                raise task_invalid(task_path(task), "替换成功任务前必须归档结果。")
+            results = dict(archives)
+            results.update({(i, d.content_fingerprint()): d for i, d in current.items()})
+            validate_task_history(task, configurations, invocations, results)
+            if task.status is RoundTaskStatus.SUCCEEDED:
+                document = current.get(task.round_id)
+                if document is None:
+                    raise task_invalid(task_path(task), "成功任务缺少当前结果。")
+                validate_succeeded_task_result(task, document)
+            atomic_write_json(paths.task_round(task.round_id), task, logical_path=task_path(task),
+                              serializer=lambda v: v.to_dict(), parser=ROUND_TASK_PARSER)
+            return task
+
+    def merge_task_invocations(self, job_id: str, task_id: str,
+                               records: tuple[ModelInvocationRecord, ...], claim: JobWriteClaim) -> tuple[ModelInvocationRecord, ...]:
+        task_id = self._persisted_path_id(task_id, "task_id")
+        logical = f"models/invocations/task_{task_id}.jsonl"
+        try:
+            supplied = canonical_task_invocations(task_id, records)
+        except DomainSchemaError as exc:
+            raise task_invalid(logical) from exc
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS) as locked:
+            self._assert_write_lock_locked(paths, locked)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            configurations = self._configuration_index(paths, opened.manifest)
+            all_records = {v.invocation_id: v for v in self._read_all_invocations_locked(paths, tuple(configurations.values()))}
+            existing = tuple(v for v in all_records.values() if v.task_id == task_id)
+            merged = {v.invocation_id: v for v in existing}
+            for record in supplied:
+                if record.configuration_snapshot_id not in configurations or (
+                    record.invocation_id in all_records and all_records[record.invocation_id] != record
+                ):
+                    raise task_invalid(logical)
+                merged[record.invocation_id] = record
+            canonical = canonical_task_invocations(task_id, tuple(merged.values()))
+            if canonical != existing:
+                atomic_write_jsonl(paths.task_invocations(task_id), canonical, logical_path=logical,
+                                   serializer=lambda v: v.to_dict(), parser=MODEL_INVOCATION_PARSER)
+            return canonical
+
+    def archive_round_understanding(self, job_id: str, round_id: str,
+                                    expected_fingerprint: str, claim: JobWriteClaim) -> None:
+        round_id = self._persisted_path_id(round_id, "round_id")
+        self._validate_task_digest(expected_fingerprint)
+        paths = self._paths_for(job_id)
+        self._validate_existing_job_dir(paths)
+        with self.lock_factory.open_existing(paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS) as locked:
+            self._assert_write_lock_locked(paths, locked)
+            self._verify_claim_locked(paths, claim)
+            opened = self._load_job_durable(job_id, write_lock_already_held=True)
+            tasks, configurations, invocations, current, archives = self._round_task_context_locked(paths, opened.manifest)
+            task = next((t for t in tasks if t.round_id == round_id), None)
+            if task is None or task.status is not RoundTaskStatus.SUCCEEDED or task.result_fingerprint != expected_fingerprint:
+                raise task_invalid(f"understanding/round_{round_id}.json", "当前成功结果已变化。", "job_task_conflict")
+            document = current[round_id]
+            validate_historical_document(document, configurations, invocations, task_path(task))
+            target = paths.round_understanding_history(round_id, expected_fingerprint)
+            logical = target.relative_to(paths.job_dir).as_posix()
+            if (round_id, expected_fingerprint) in archives:
+                if archives[(round_id, expected_fingerprint)] != document or self._read_safe_regular(target, logical) != self._read_safe_regular(paths.round_understanding(round_id), f"understanding/round_{round_id}.json"):
+                    raise task_invalid(logical, "历史结果身份已有不同内容。")
+                return
+            for directory in (target.parent.parent, target.parent):
+                if not directory.exists():
+                    directory.mkdir()
+                    _fsync_metadata_directory(directory.parent, logical_path=logical)
+            # Preserve validated bytes as well as the canonical content identity.
+            # Atomic staging adds a UUID to an already long SHA-256 filename.
+            write_target = target
+            if os.name == "nt":
+                absolute = str(target.absolute())
+                if not absolute.startswith("\\\\?\\"):
+                    absolute = "\\\\?\\UNC\\" + absolute[2:] if absolute.startswith("\\\\") else "\\\\?\\" + absolute
+                write_target = Path(absolute)
+            atomic_write_bytes(write_target, self._read_safe_regular(paths.round_understanding(round_id), f"understanding/round_{round_id}.json"),
+                               logical_path=logical)
+
     def save_task_invocations(
         self,
         job_id: str,
@@ -1437,6 +1695,19 @@ class FileSystemJobRepository:
         ) as locked_file:
             self._assert_write_lock_locked(paths, locked_file)
             self._verify_claim_locked(paths, claim)
+            if self._round_task_ids(paths):
+                opened = self._load_job_durable(job_id, write_lock_already_held=True)
+                tasks, _, _, current, archives = self._round_task_context_locked(paths, opened.manifest)
+                previous = current.get(round_id)
+                if previous is not None and previous != document:
+                    digest = previous.content_fingerprint()
+                    if any(
+                        t.round_id == round_id and any(a.result_fingerprint == digest for a in t.attempts)
+                        for t in tasks
+                    ) and (round_id, digest) not in archives:
+                        raise task_invalid(logical_path, "覆盖成功结果前必须归档。")
+                    if any(t.round_id == round_id and t.status is RoundTaskStatus.SUCCEEDED for t in tasks):
+                        raise task_invalid(logical_path, "覆盖结果前必须先撤销任务成功授权。")
             atomic_write_json(
                 paths.round_understanding(round_id),
                 document,
@@ -2583,6 +2854,12 @@ class FileSystemJobRepository:
                         paths.write_lock, timeout_ms=_WRITE_LOCK_TIMEOUT_MS
                     ) as locked_file:
                         self._assert_read_lock_locked(paths, locked_file)
+                        # The earlier manifest was read before waiting for this lock.
+                        _, manifest, _ = self._read_job_core(paths, job_id)
+                        try:
+                            self._round_task_context_locked(paths, manifest)
+                        except JobRepositoryError as exc:
+                            self._append_issue(issues, exc.to_issue())
                         for issue in self._inspect_language_shards(paths, manifest):
                             self._append_issue(issues, issue)
                         for issue in self._inspect_review_shards(paths, manifest):
@@ -2754,6 +3031,16 @@ class FileSystemJobRepository:
         manifest: JobManifest,
     ) -> tuple[JobIssue, ...]:
         issues: list[JobIssue] = []
+        task_managed = bool(self._round_task_ids(paths))
+        draft_authorized = (
+            manifest.active_review_id is not None
+            or any(a.kind is FinalArtifactKind.TIMELINE for a in manifest.final_artifacts)
+            or manifest.phase not in {
+                JobPhase.CREATED, JobPhase.TIMELINE_READY, JobPhase.VOICE_READY,
+                JobPhase.TRANSCRIBED, JobPhase.CONTEXT_READY,
+                JobPhase.UNDERSTANDING_TRANSLATING, JobPhase.UNDERSTOOD_TRANSLATED,
+            }
+        )
 
         def capture(operation) -> bool:
             try:
@@ -2811,6 +3098,9 @@ class FileSystemJobRepository:
         )
         if draft_state is not None:
             def inspect_draft() -> None:
+                if task_managed and not draft_authorized:
+                    self._read_draft_timeline(paths, expected_asset_id=manifest.demo_asset_id)
+                    return
                 language = self._read_language_graph_locked(paths, manifest)
                 self._read_validated_draft_locked(paths, manifest, language)
 
@@ -2822,6 +3112,9 @@ class FileSystemJobRepository:
         )
         if reviewed_state is not None:
             def inspect_reviewed() -> None:
+                if task_managed and manifest.active_review_id is None:
+                    self._read_reviewed_timeline(paths, expected_asset_id=manifest.demo_asset_id)
+                    return
                 language = self._read_language_graph_locked(paths, manifest)
                 draft = self._read_validated_draft_locked(
                     paths, manifest, language
@@ -3253,6 +3546,11 @@ class FileSystemJobRepository:
             if round_id in understanding_ids
         )
 
+        if self._round_task_ids(paths):
+            tasks = self._round_task_context_locked(paths, manifest)[0]
+            authorized = {t.round_id for t in tasks if t.status is RoundTaskStatus.SUCCEEDED}
+            documents = tuple(d for d in documents if d.round_id in authorized)
+
         try:
             for activity in activities:
                 validate_voice_activity_against_timeline(activity, timeline)
@@ -3412,8 +3710,9 @@ class FileSystemJobRepository:
         *,
         logical_directory: str,
         expected_review_id: str,
-        timeline: DemoTimeline,
-        draft: DraftCommsTimeline,
+        timeline: DemoTimeline | None,
+        draft: DraftCommsTimeline | None,
+        historical: bool = False,
     ) -> ReviewRevisionBundle:
         try:
             state = os.lstat(directory)
@@ -3497,6 +3796,19 @@ class FileSystemJobRepository:
             )
             for round_id in revision.round_ids
         )
+        for round_id, document in zip(revision.round_ids, documents):
+            if (
+                document.round_id != round_id
+                or document.review_id != revision.review_id
+                or document.source_draft_fingerprint != revision.source_draft_fingerprint
+            ):
+                raise task_invalid(f"{logical_directory}/round_{round_id}.json")
+        if historical:
+            decision_ids = [d.decision_id.casefold() for doc in documents for d in doc.decisions]
+            cue_ids = [d.cue_id.casefold() for doc in documents for d in doc.decisions]
+            if len(set(decision_ids)) != len(decision_ids) or len(set(cue_ids)) != len(cue_ids):
+                raise task_invalid(logical_directory)
+            return ReviewRevisionBundle(revision, documents)
         return self._validate_review_bundle(
             timeline,
             draft,
@@ -3511,6 +3823,12 @@ class FileSystemJobRepository:
         manifest: JobManifest,
         review_id: str,
     ) -> ReviewRevisionBundle:
+        if self._round_task_ids(paths) and review_id != manifest.active_review_id:
+            return self._read_review_revision_directory(
+                paths.review_revision(review_id),
+                logical_directory=f"review/revisions/review_{review_id}",
+                expected_review_id=review_id, timeline=None, draft=None, historical=True,
+            )
         language = self._read_language_graph_locked(paths, manifest)
         draft = self._read_validated_draft_locked(paths, manifest, language)
         return self._read_review_revision_directory(

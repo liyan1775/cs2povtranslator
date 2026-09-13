@@ -1,6 +1,6 @@
 # CS2 POV Translator 模块化重构实施计划
 
-- 状态：实施中；阶段 0–1、02A、02B 已合并；当前实施 02C-A
+- 状态：实施中；阶段 0–1、02A、02B、02C-A 已合并；当前实施 02C-B
 - 日期：2026-08-30
 - 最近核验：2026-09-05
 - 依据：[架构设计](2026-08-30-understanding-translation-architecture-design.zh.md)
@@ -695,4 +695,4 @@ Playwright 在 Web 发起任务
 
 两个初始阻塞项均已解除。基线审计见 `docs/baseline/BASELINE_AUDIT.zh.md`；02A、02B 与 02C 计划分别已由 PR #18、#20、#21 合并。2026-09-05 核验远程主线为 `add39a8`，对应四项跨平台矩阵检查通过。
 
-2026-09-06：02C-A Task 1–5 已实现并按批次提交代码，三项审查问题已闭合，定向验证与独立复核通过；Sagan 最终全量 2233 passed、28 skipped，完整本地门禁通过，GitHub 尚未推送，文档 commit/PR/CI 集成待完成。详细证据见 [A 交付记录](../superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。02C-A 合并后按既定资源分工继续 02C-B；B 尚未实现。每个实现批次仍须通过本地验证、独立审查、PR CI 和合并提交 CI。里程碑结束必须报告已实现的用户行为、验证证据和未交付边界。
+2026-09-06：02C-A 已通过 PR #22 合并为 `373d556`；主协调器确认 PR 全部 8 checks 及 post-merge CI `34019305517` completed/success。三项审查问题已闭合；Sagan 最终全量 2233 passed、28 skipped，完整本地门禁通过。详细证据见 [A 交付记录](../superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。02C-B 已在独立工作树接续 Task 1/2；后续协调器、并发、恢复及 B 集成尚待完成。每个实现批次仍须通过本地验证、独立审查、PR CI 和合并提交 CI。里程碑结束必须报告已实现的用户行为、验证证据和未交付边界。
