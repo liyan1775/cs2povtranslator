@@ -24,6 +24,7 @@ from cs2pov.domain.job import (
     JobPhase,
     JobRunStatus,
 )
+from cs2pov.domain.invocation import ModelCapability
 from cs2pov.domain.job_state import (
     advance_job_phase,
     derive_round_progress,
@@ -167,7 +168,7 @@ class JobRoundCoordinator:
     @staticmethod
     def _configuration(configurations, snapshot_id):
         try:
-            return next(value for value in configurations if value.snapshot_id == snapshot_id)
+            value = next(value for value in configurations if value.snapshot_id == snapshot_id)
         except StopIteration as exc:
             raise JobRepositoryError(
                 "job_shard_invalid",
@@ -175,6 +176,81 @@ class JobRoundCoordinator:
                 "请使用已登记的理解翻译配置。",
                 "models/snapshots",
             ) from exc
+        if value.capability is not ModelCapability.UNDERSTANDING_TRANSLATION:
+            raise JobRepositoryError(
+                "job_shard_invalid",
+                "模型配置快照不存在或能力不匹配。",
+                "请使用已登记的理解翻译配置。",
+                "models/snapshots",
+            )
+        return value
+
+    def _preflight_invalidation(
+        self, opened, affected, specs_by_id, existing_by_id, configuration
+    ):
+        if configuration.capability is not ModelCapability.UNDERSTANDING_TRANSLATION:
+            raise JobRepositoryError(
+                "job_shard_invalid",
+                "模型配置快照能力不匹配。",
+                "请使用已登记的理解翻译配置。",
+                "models/snapshots",
+            )
+        for round_id in affected:
+            old = existing_by_id[round_id]
+            if old.status is RoundTaskStatus.RUNNING:
+                raise _conflict("运行中的任务必须先结束后才能失效。")
+            try:
+                supersede_task(
+                    old,
+                    spec=specs_by_id[round_id],
+                    at=self._next_at(old.updated_at, opened.manifest.updated_at),
+                )
+            except (DomainSchemaError, TypeError, ValueError) as exc:
+                raise _conflict("任务失效前置条件不满足。") from exc
+
+    def _preflight_resume(self, job_id, tasks, retry_ids):
+        if not isinstance(retry_ids, set):
+            raise JobRepositoryError(
+                "job_task_conflict",
+                "恢复任务列表格式无效。",
+                "请重新指定要重试的回合。",
+                "tasks",
+            )
+        known_ids = {task.round_id for task in tasks}
+        if not retry_ids.issubset(known_ids):
+            raise JobRepositoryError(
+                "job_task_conflict",
+                "恢复任务列表包含未知回合。",
+                "请从当前 Job 状态中选择要重试的回合。",
+                "tasks",
+            )
+        _, _, _, configurations, invocations, transcripts = self._load_evidence(job_id)
+        for task in tasks:
+            if task.status is not RoundTaskStatus.SUCCEEDED:
+                continue
+            document = self.repository.load_round_understanding(job_id, task.round_id)
+            if (
+                task.result_fingerprint != document.content_fingerprint()
+                or task.configuration_snapshot_id
+                != document.model_configuration_snapshot_id
+            ):
+                raise JobRepositoryError(
+                    "job_shard_invalid",
+                    "成功任务缺少匹配的理解翻译结果。",
+                    "请恢复结果文件后再继续。",
+                    f"understanding/round_{task.round_id}.json",
+                )
+            try:
+                validate_understanding_document_graph(
+                    document, transcripts, configurations, invocations
+                )
+            except DomainSchemaError as exc:
+                raise JobRepositoryError(
+                    "job_shard_invalid",
+                    "成功任务的完整数据图无效。",
+                    "请恢复结果文件后再继续。",
+                    f"understanding/round_{task.round_id}.json",
+                ) from exc
 
     @staticmethod
     def _document_digest(round_value: Round, transcripts) -> str:
@@ -408,6 +484,15 @@ class JobRoundCoordinator:
                 != spec.configuration_snapshot_id
             )
         )
+
+        if affected:
+            self._preflight_invalidation(
+                opened,
+                affected,
+                {spec.round_id: spec for spec in specs},
+                existing_by_id,
+                configuration,
+            )
 
         for spec in specs:
             old = existing_by_id.get(spec.round_id)
@@ -672,7 +757,17 @@ class JobRoundCoordinator:
         retry_round_ids: tuple[str, ...] = (),
     ) -> PreparedRoundBatch:
         tasks = self.repository.load_round_tasks(job_id)
+        if not isinstance(retry_round_ids, (tuple, list)) or any(
+            not isinstance(value, str) for value in retry_round_ids
+        ):
+            raise JobRepositoryError(
+                "job_task_conflict",
+                "恢复任务列表格式无效。",
+                "请重新指定要重试的回合。",
+                "tasks",
+            )
         retry_ids = set(retry_round_ids)
+        self._preflight_resume(job_id, tasks, retry_ids)
         for task in tasks:
             current = task
             if current.status is RoundTaskStatus.RUNNING:
