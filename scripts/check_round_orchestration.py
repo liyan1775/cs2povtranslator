@@ -25,7 +25,13 @@ from cs2pov.application.round_scheduler import RoundScheduler, RoundSchedulerSet
 from cs2pov.application.round_worker import RoundWorkResult
 from cs2pov.domain.fingerprint import content_fingerprint
 from cs2pov.domain.invocation import ModelInvocationRecord
-from cs2pov.domain.job import CreateJobRequest, JobDemoSource, JobWriteClaim
+from cs2pov.domain.job import (
+    CreateJobRequest,
+    JobDemoSource,
+    JobPhase,
+    JobWriteClaim,
+)
+from cs2pov.domain.job_state import advance_job_phase
 from cs2pov.domain.job_tasks import RetryPolicy
 from cs2pov.domain.understanding import RoundUnderstandingDocument, UnderstandingResult
 from cs2pov.domain.validation import compose_draft_timeline
@@ -132,6 +138,24 @@ def _seed(root: Path) -> None:
     repository.save_unassigned_transcript(
         job["job_id"], tuple(value for value in domain.transcripts if value.round_id is None), claim
     )
+    for phase in (
+        JobPhase.TIMELINE_READY,
+        JobPhase.VOICE_READY,
+        JobPhase.TRANSCRIBED,
+        JobPhase.CONTEXT_READY,
+    ):
+        current = repository.load_job(job["job_id"])
+        advanced = advance_job_phase(
+            current.manifest,
+            phase,
+            at=fixed_clock().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        )
+        repository.replace_manifest(
+            job["job_id"],
+            current.manifest.content_fingerprint(),
+            advanced,
+            claim,
+        )
     session.release()
     source = JobDemoSource(
         imported.asset_id,
@@ -261,7 +285,9 @@ async def _consumer(root: Path, job_id: str) -> None:
     )
     before_busy_check = _tree_snapshot(job_root)
     live_repository.list_jobs()
-    live_repository.inspect_job(job_id)
+    inspection = live_repository.inspect_job(job_id)
+    if inspection.entry.effective_run_status.value != "running":
+        raise ValueError("read-only inspection did not expose the active run")
     if _tree_snapshot(job_root) != before_busy_check:
         raise ValueError("read-only inspection mutated the Job tree")
     try:

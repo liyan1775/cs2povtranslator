@@ -224,6 +224,14 @@ class JobRoundCoordinator:
                 "请从当前 Job 状态中选择要重试的回合。",
                 "tasks",
             )
+        invalid_retry_ids = {
+            task.round_id
+            for task in tasks
+            if task.round_id in retry_ids
+            and task.status not in {RoundTaskStatus.FAILED, RoundTaskStatus.CANCELLED}
+        }
+        if invalid_retry_ids:
+            raise _conflict("只有失败或取消的回合可以显式重试。")
         _, _, _, configurations, invocations, transcripts = self._load_evidence(job_id)
         for task in tasks:
             if task.status is not RoundTaskStatus.SUCCEEDED:

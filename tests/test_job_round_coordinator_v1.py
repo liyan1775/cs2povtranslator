@@ -13,7 +13,13 @@ from cs2pov.application.job_coordinator import (
 )
 from cs2pov.domain.job import JobPhase, JobRunStatus
 from cs2pov.domain.job_task_state import start_task, succeed_task
-from cs2pov.domain.job_tasks import RoundTaskSpec, RoundTaskStatus, RoundTranslationTask
+from cs2pov.domain.job_tasks import (
+    RetryPolicy,
+    RoundTaskError,
+    RoundTaskSpec,
+    RoundTaskStatus,
+    RoundTranslationTask,
+)
 from cs2pov.storage.job_errors import JobRepositoryError
 from test_job_repository_language_shards_v1 import (
     _persist_closed_language_graph,
@@ -79,7 +85,7 @@ def _prepare_context(repository, claim, values):
 
 
 def test_prepare_builds_privacy_minimal_requests_and_reuses_success(tmp_path):
-    workspace, repository, clock, claim, values, coordinator = _coordinator(tmp_path)
+    workspace, repository, _, claim, values, coordinator = _coordinator(tmp_path)
     # The closed fixture already contains the source graph, but no task shard.
     batch = coordinator.prepare_translation(
         "job-language", configuration_snapshot_id=values[5].snapshot_id, claim=claim
@@ -214,3 +220,51 @@ def test_resume_preflights_all_successes_before_rewriting_running_tasks(
 
     assert _snapshot_tree(workspace.jobs_dir / "job-language") == before
     assert real_load_tasks("job-language")[0].status is RoundTaskStatus.RUNNING
+
+
+@pytest.mark.parametrize("status", ("pending", "succeeded", "retry_wait"))
+def test_resume_rejects_explicit_retry_for_non_retryable_status(tmp_path, status):
+    workspace, repository, _, claim, values, coordinator = _coordinator(tmp_path)
+    batch = coordinator.prepare_translation(
+        "job-language", configuration_snapshot_id=values[5].snapshot_id, claim=claim
+    )
+    if status == "succeeded":
+        running = coordinator.mark_running(
+            batch.tasks[0], attempt_id="attempt-001", claim=claim
+        )
+        coordinator.checkpoint_success(
+            running,
+            __import__(
+                "cs2pov.application.round_worker", fromlist=["RoundWorkResult"]
+            ).RoundWorkResult(values[7], (values[6],)),
+            claim=claim,
+        )
+    elif status == "retry_wait":
+        running = coordinator.mark_running(
+            batch.tasks[0], attempt_id="attempt-001", claim=claim
+        )
+        from cs2pov.application.round_worker import RoundWorkFailure
+
+        coordinator.checkpoint_failure(
+            running,
+            RoundWorkFailure(
+                RoundTaskError(
+                    "provider_busy",
+                    "服务繁忙。",
+                    "本回合未完成。",
+                    "请稍后重试。",
+                    True,
+                    1_000_000,
+                )
+            ),
+            policy=RetryPolicy(2, 1_000_000, 8_000_000),
+            claim=claim,
+        )
+    before = _snapshot_tree(workspace.jobs_dir / "job-language")
+
+    with pytest.raises(JobRepositoryError, match="只有失败或取消"):
+        coordinator.reconcile_for_resume(
+            "job-language", claim=claim, retry_round_ids=("round-001",)
+        )
+
+    assert _snapshot_tree(workspace.jobs_dir / "job-language") == before
