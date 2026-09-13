@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "fixture_id": "new-round-orchestration-v1",
+  "repository_fixture": "tests/golden/fixtures/new_job_repository_v1.json",
+  "domain_fixture": "tests/golden/fixtures/new_domain_contract_v1.json",
+  "job_id": "job-history-001",
+  "expected": {
+    "producer_status": "running",
+    "consumer_status": "succeeded",
+    "round_ids": ["round-001", "round-002", "round-003"],
+    "recovered_attempts": 1,
+    "completion_order_size": 2,
+    "producer_exit_code": 73,
+    "pre_expiry_error": "job_write_busy",
+    "recovered_attempt_id": "attempt-producer-001",
+    "reused_round_id": "round-002",
+    "completion_order": ["round-003", "round-001"]
+  }
+}

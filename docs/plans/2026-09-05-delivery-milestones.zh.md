@@ -14,7 +14,7 @@
 | 基线、工作区、DemoAsset 与旧管线引用 | 已合并 | 基线审计；PR #12–#16 等历史批次 |
 | 02A 领域契约与统一时间轴 | 已合并 | PR #18 |
 | 02B 当前版本 Job 仓储与历史读取 | 已合并 | PR #20 |
-| 02C-A/02C-B 详细设计 | 设计已合并；A 实现待集成、B 未开始 | PR #21；实现状态见下表 |
+| 02C-A/02C-B 详细设计 | 设计已合并；A 已交付、B 实施中 | 设计 PR #21；A 实现 PR #22，merge `373d556` |
 
 2026-09-05 接手核验：远程 `master=add39a8`；对应工作树内容全量测试 974 passed、28 skipped，领域契约回放、Job 仓储跨进程回放、旧版金标准与仓库卫生检查通过。跳过项不作为功能验收证据。
 
@@ -30,15 +30,17 @@
 
 | 项目 | 状态 | 验证 |
 |---|---|---|
-| 接手续接与计划校准 | 文档已更新，待集成 | 基线同步至 add39a8；交付依赖与验收层级已校准 |
-| 自动命名测试确定性及占用释放竞态 | 本地验证通过，已提交 `adbc91d`，待集成 | 确定性失败复现后修复；相关回归 73 passed、1 skipped |
-| 02C-A Task 1–5 | 已实现并提交代码，最终本地验证通过；文档提交待完成，GitHub 尚未推送 | 主协调器独立确认 new_state 测试 8 passed；new_domain_contract、new_job_repository、new_job_state、golden 15 passed、hygiene、compile 均通过；Sagan 最终 `py -3.12 -m pytest -o addopts= -q`：2233 passed、28 skipped，95.87 秒，exit 0；全部 16 个 changed/untracked Python 文件 Ruff、compileall、diffcheck 通过，计划扫描无匹配 |
-| 02C-A 独立审查及 GitHub 集成 | 三项审查问题已闭合；文档 commit/PR/CI 集成待完成 | invocation refs 保留、中文相邻路径及 17 位数字隐私校验、产物清理回放已修正；隐私回归 36 RED 后相关测试 153 passed；独立 42 项引用边界与 190 个 phase rewind 组合复核通过 |
-| 02C-B Task 1–7 | 未开始 | 依赖 02C-A 合并 |
+| 接手续接与计划校准 | 已随 A 集成 | 基线同步至 add39a8；交付依赖与验收层级已校准 |
+| 自动命名测试确定性及占用释放竞态 | `adbc91d` 已随 PR #22 集成 | 确定性失败复现后修复；相关回归 73 passed、1 skipped |
+| 02C-A Task 1–5 | 已交付；PR #22，merge `373d556` | 主协调器独立确认 new_state 测试 8 passed；new_domain_contract、new_job_repository、new_job_state、golden 15 passed、hygiene、compile 均通过；Sagan 最终 `py -3.12 -m pytest -o addopts= -q`：2233 passed、28 skipped，95.87 秒，exit 0；全部 16 个 changed/untracked Python 文件 Ruff、compileall、diffcheck 通过，计划扫描无匹配 |
+| 02C-A 独立审查及 GitHub 集成 | 三项审查问题已闭合，PR 及合并后 CI 均通过 | invocation refs 保留、中文相邻路径及 17 位数字隐私校验、产物清理回放已修正；隐私回归 36 RED 后相关测试 153 passed；独立 42 项引用边界与 190 个 phase rewind 组合复核通过；PR HEAD `1362b139db5fbbb555ac36487cd49bc447767a42` 全部 8 checks 通过，post-merge CI `34019305517` completed/success（主协调器确证） |
+| 02C-B Task 1 | Sagan 实施中，结果待核验 | 仓储空/部分任务集合、历史授权与 live-lease 裁决已写入 B 计划 |
+| 02C-B Task 2 | 本地实现与针对性验证完成，待审查/提交集成 | worker 契约 32 项；联合 invocation/validation 测试 60 passed，定向 Ruff 通过；完整持久化图校验是 Task 3 待实施前置条件 |
+| 02C-B Task 3–7 | 待实施 | 协调器、调度、恢复及 B 集成尚未验收 |
 
-A 的详细实施清单、验证来源及待 commit/CI 项见 [02C-A 交付记录](../superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。定向测试计数与独立内存复核数量不可相加作为全量验收计数；当前记录不表示 A 已合并或 B 已实现。
+A 的详细实施清单及 commit/CI 证据见 [02C-A 交付记录](../superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。定向测试计数与独立内存复核数量不可相加作为全量验收计数；A 已完成交付，B 仅按上表记录实际进度。
 
-主协调器确认的 A 实现提交：Task 1 `060ca96`；Task 2–3 `9aed066`；Task 4 `676c42a`；Task 5 脚本/fixture/CI `3c8d25c`。本次交付文档尚待单独提交。
+主协调器确认的 A 实现提交：Task 1 `060ca96`；Task 2–3 `9aed066`；Task 4 `676c42a`；Task 5 脚本/fixture/CI `3c8d25c`。A 文档已随 PR #22 集成，本次 B 阶段文档更新由协调器另行提交。
 
 ## 3. 并行准备：真实理解翻译评测
 

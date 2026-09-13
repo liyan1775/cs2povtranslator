@@ -52,6 +52,22 @@ py -3.12 scripts/check_new_job_repository.py
 由 `scripts/check_new_job_state.py` 通过生产状态函数进行重放。修改夹具预期必须说明
 契约变更依据，不得仅为消除失败重新生成。该夹具验证状态策略，实际并行与跨进程任务恢复由 02C-B 的独立回放验收。
 
+`new_round_orchestration_v1.json` 固定 02C-B 的进程编排验收：producer 在保留
+round-001 为 running、提交 round-002 成功结果后模拟崩溃，恢复 consumer 在租约
+过期后接管并只运行 round-001 与 round-003，最终 consumer 校验完整语言图、Draft
+cue 顺序和损坏同级 Job 的隔离。夹具只保存匿名回合 ID、固定时刻、任务尝试 ID 和
+规范完成顺序，不保存真实 Demo、模型调用内容、API 密钥或机器路径。
+
+使用以下命令执行：
+
+```powershell
+py -3.12 scripts/check_round_orchestration.py
+```
+
+该检查由多个真实 Python 子进程完成，并且顶层成功输出固定为
+`round orchestration replay passed`。它与 02C-A 的状态回放和 02B 的仓储回放
+互补，不能替代真实 provider、字幕渲染或 POV 录制验收。
+
 2026-09-06 审查修正补足了失效清理覆盖：回放通过合法生产 phase 转换到
 `COMPLETED_WITH_VIDEO`，附加 timeline、subtitle、green_screen、video 四类合成
 `FinalArtifactEntry`，不创建媒体文件。翻译配置失效清空四类当前引用和 active review；
@@ -62,4 +78,5 @@ py -3.12 scripts/check_new_job_repository.py
 修改依据是原空 artifact index 无法验证生产清理行为，具体期望由独立语义断言固定，
 不从运行结果批量生成。主协调器已独立确认该回放测试 8 passed、旧 golden 15 passed；
 A 最终全量已由 Sagan 确认 2233 passed、28 skipped；Task 5 脚本/fixture/CI 已提交于
-`3c8d25c`，文档提交及远程集成待完成，GitHub 尚未推送，详见 [A 交付记录](../../docs/superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。
+`3c8d25c`，已随 PR #22 合并为 `373d556`；主协调器确认全部 8 个 PR checks 及
+post-merge CI `34019305517` completed/success，详见 [A 交付记录](../../docs/superpowers/plans/2026-09-03-round-task-state-core.md#delivery-record--2026-09-06)。
