@@ -31,7 +31,15 @@ from cs2pov.domain.understanding import (
     RoundUnderstandingDocument,
     UnderstandingResult,
 )
-from cs2pov.domain.review import DraftCommsCue, DraftCommsTimeline
+from cs2pov.domain.review import (
+    DraftCommsCue,
+    DraftCommsTimeline,
+    ReviewAction,
+    ReviewDecision,
+    ReviewRevisionManifest,
+    RoundReviewDocument,
+)
+from cs2pov.storage.job_repository import ReviewRevisionBundle
 from cs2pov.storage.job_events import EventJournalRead
 from cs2pov.workspace.paths import WorkspacePaths
 from cs2pov.workspace.service import WorkspaceService
@@ -143,6 +151,47 @@ def _job_fixture():
             DraftCommsCue.from_transcript_and_understanding(cue_late, result_late),
         ),
     )
+    review = ReviewRevisionBundle(
+        ReviewRevisionManifest(
+            "review-001",
+            draft.content_fingerprint(),
+            NOW,
+            ("round-001",),
+        ),
+        (
+            RoundReviewDocument(
+                "review-001",
+                "round-001",
+                draft.content_fingerprint(),
+                (
+                    ReviewDecision(
+                        "decision-early",
+                        "cue-early",
+                        draft.cues[0].understanding_result_fingerprint,
+                        ReviewAction.ACCEPT,
+                        NOW,
+                        "tester",
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    ReviewDecision(
+                        "decision-late",
+                        "cue-late",
+                        draft.cues[1].understanding_result_fingerprint,
+                        ReviewAction.EDIT,
+                        NOW,
+                        "tester",
+                        "clarify wording",
+                        None,
+                        None,
+                        "修正翻译",
+                    ),
+                ),
+            ),
+        ),
+    )
     source = JobDemoSource(
         ASSET_ID,
         f"library/demos/{ASSET_ID}/asset.json",
@@ -161,7 +210,7 @@ def _job_fixture():
         JobRunStatus.SUCCEEDED,
         RoundProgressSummary(2, 2, 0, 0),
         ("snapshot-translation",),
-        None,
+        "review-001",
         (),
     )
     entry = JobCatalogEntry(
@@ -199,7 +248,7 @@ def _job_fixture():
         ),
         False,
     )
-    return timeline, cue_early, cue_late, document, draft, entry, inspection
+    return timeline, cue_early, cue_late, document, draft, review, entry, inspection
 
 
 class _FakeDemoAssets:
@@ -226,6 +275,7 @@ class _FakeJobs:
             self.cue_late,
             self.document,
             self.draft,
+            self.review,
             self.entry,
             self.inspection,
         ) = _job_fixture()
@@ -279,6 +329,10 @@ class _FakeJobs:
     def load_draft_timeline(self, job_id):
         return self.draft
 
+    def load_review_revision(self, job_id, review_id):
+        assert review_id == "review-001"
+        return self.review
+
 
 def _service(tmp_path: Path) -> CurrentJobWebQueryService:
     paths = WorkspacePaths(tmp_path / "workspace")
@@ -320,6 +374,17 @@ def test_query_service_projects_workspace_assets_jobs_and_rounds(tmp_path):
         "cue-late",
     ]
     assert round_detail["draft"][0]["translated_zh"] == "早期翻译"
+
+    review = service.review("job-web", "round-001")
+    assert review["review"]["status"] == "active"
+    assert review["review"]["pending_count"] == 0
+    assert [item["cue_id"] for item in review["review"]["items"]] == [
+        "cue-early",
+        "cue-late",
+    ]
+    assert review["review"]["items"][0]["decision"]["action"] == "accept"
+    assert review["review"]["items"][1]["decision"]["action"] == "edit"
+    assert review["media"]["status"] == "pending_boundary"
 
 
 def test_query_service_rejects_unknown_round_with_stable_error(tmp_path):

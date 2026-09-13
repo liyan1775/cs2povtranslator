@@ -250,6 +250,98 @@ class CurrentJobWebQueryService:
             "review": review,
         }
 
+    def review(self, job_id: str, round_id: str) -> dict[str, object]:
+        """Return the cue-oriented read model used by the review page.
+
+        The durable shards remain the source of truth. This projection only
+        joins them for presentation and keeps the original ASR alongside the
+        model result, Draft value, and current review decision.
+        """
+        detail = self.round(job_id, round_id)
+        transcripts = {
+            value["cue_id"]: value for value in detail["transcripts"]
+        }
+        understanding = detail["understanding"] or {}
+        results = {
+            value["cue_id"]: value for value in understanding.get("results", [])
+        }
+        drafts = {value["cue_id"]: value for value in detail["draft"]}
+        review_document = detail["review"] or {}
+        decisions = {
+            value["cue_id"]: value
+            for value in review_document.get("decisions", [])
+        }
+
+        cue_ids = set(transcripts) | set(results) | set(drafts) | set(decisions)
+
+        def item_key(cue_id: str) -> tuple[int, int, str]:
+            transcript = transcripts.get(cue_id)
+            draft = drafts.get(cue_id)
+            value = transcript or draft or {}
+            return (
+                int(value.get("start_us", 2**63)),
+                int(value.get("end_us", 2**63)),
+                cue_id,
+            )
+
+        items: list[dict[str, object]] = []
+        for cue_id in sorted(cue_ids, key=item_key):
+            transcript = transcripts.get(cue_id)
+            result = results.get(cue_id)
+            draft = drafts.get(cue_id)
+            decision = decisions.get(cue_id)
+            source = transcript or draft or result or {}
+            risk_flags: list[str] = []
+            if result is None:
+                risk_flags.append("understanding_missing")
+            elif float(result.get("confidence", 1.0)) < 0.7:
+                risk_flags.append("low_confidence")
+            if result and result.get("warnings"):
+                risk_flags.append("has_warnings")
+            if decision is None:
+                risk_flags.append("review_pending")
+            items.append(
+                {
+                    "cue_id": cue_id,
+                    "round_id": round_id,
+                    "player_id": source.get("player_id"),
+                    "start_us": source.get("start_us"),
+                    "end_us": source.get("end_us"),
+                    "asr_original": (
+                        transcript or result or draft or {}
+                    ).get("asr_original"),
+                    "asr_confidence": None
+                    if transcript is None
+                    else transcript.get("confidence"),
+                    "understanding": result,
+                    "draft": draft,
+                    "decision": decision,
+                    "risk_flags": risk_flags,
+                }
+            )
+        pending_count = sum(item["decision"] is None for item in items)
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "round": detail["round"],
+            "review": {
+                "status": "active" if review_document else "not_started",
+                "review_id": review_document.get("review_id"),
+                "source_draft_fingerprint": review_document.get(
+                    "source_draft_fingerprint"
+                ),
+                "decision_count": len(decisions),
+                "completed_count": len(items) - pending_count,
+                "pending_count": pending_count,
+                "items": items,
+            },
+            "media": {
+                "status": "pending_boundary",
+                "message_zh": "当前版本尚未提供受控的音频媒体引用。",
+                "suggestion_zh": "完成媒体引用设计后再启用音频试听。",
+            },
+        }
+
     def _require_job(self, job_id: str) -> JobInspection:
         try:
             inspection = self._jobs_repository.inspect_job(job_id)

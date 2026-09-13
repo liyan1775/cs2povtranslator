@@ -43,6 +43,11 @@ def test_http_api_returns_json_for_health_and_job_routes(tmp_path: Path):
     assert status == "200 OK"
     assert json.loads(body)["round"]["round_id"] == "round-001"
 
+    status, headers, body = _call(app, "/api/v1/jobs/job-web/rounds/round-001/review")
+    assert status == "200 OK"
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert json.loads(body)["review"]["items"][1]["decision"]["action"] == "edit"
+
 
 def test_http_api_has_stable_errors_and_accessible_index(tmp_path: Path):
     app = CurrentJobWebApplication(_service(tmp_path))
@@ -62,7 +67,15 @@ def test_http_api_has_stable_errors_and_accessible_index(tmp_path: Path):
     assert 'aria-live="polite"' in html
     assert "刷新 Job" in html
 
+    status, headers, body = _call(app, "/jobs/job-web/rounds/round-001/review")
+    assert status == "200 OK"
+    assert headers["Content-Type"] == "text/html; charset=utf-8"
+    review_html = body.decode("utf-8")
+    assert 'data-testid="review-page"' in review_html
+    assert 'data-testid="review-cues"' in review_html
+    assert 'data-testid="media-status"' in review_html
+    assert "/api/v1/jobs/" in review_html
+
     status, _, body = _call(app, "/api/v1/unknown")
     assert status == "404 Not Found"
     assert json.loads(body)["error"]["code"] == "route_not_found"
-
