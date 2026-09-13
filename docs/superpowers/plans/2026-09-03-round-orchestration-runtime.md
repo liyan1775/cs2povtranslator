@@ -2,7 +2,7 @@
 
 > **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
 
-**Status (2026-09-13):** 02C-A is merged through PR #22 (`373d556`), with all eight PR checks and post-merge CI run `34019305517` passing. Tasks 1–6 of 02C-B are implemented on the active feature branch: strict task persistence, the privacy-minimal worker port, durable coordination, bounded scheduling, retries, cancellation, claim heartbeats, and process-level recovery replay. Task 7 final verification, independent review, CI, and merge remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
+**Status (2026-09-13):** 02C-A is merged through PR #22 (`373d556`), with all eight PR checks and post-merge CI run `34019305517` passing. Tasks 1–6 of 02C-B are implemented on the active feature branch: strict task persistence, the privacy-minimal worker port, durable coordination, bounded scheduling, retries, cancellation, claim heartbeats, and process-level recovery replay. Task 7 local verification and independent review are complete; GitHub CI, merge, and post-merge proof remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
 
 **Goal:** Persist round tasks and run them with bounded parallelism, deterministic retries, cancellation, crash recovery, immediate successful checkpoints, and stable aggregation without requiring a real model API.
 
@@ -644,7 +644,7 @@ git commit -m "test: gate round orchestration recovery"
 
 ### Task 7: Documentation, complete verification, independent review, and GitHub merge
 
-**Delivery (in progress, 2026-09-13):** Architecture, testing, and golden-fixture documentation now describe the 02C-B runtime boundary and replay command. Local focused verification has passed; full verification, final independent review, and GitHub handoff remain pending.
+**Delivery (in progress, 2026-09-13):** Architecture, testing, and golden-fixture documentation now describe the 02C-B runtime boundary and replay command. Full local verification and independent review have passed; GitHub CI, merge, and post-merge proof remain pending.
 
 **Files:**
 - Modify: `docs/ARCHITECTURE.zh.md`
@@ -662,7 +662,7 @@ Explain in plain Chinese:
 - list/view/inspect are read-only, while resume/retry/cancel are explicit writes;
 - provider-specific rate limits/default “stable/balanced/fast” presets, API switching UI, Playwright UI E2E, knowledge approval, and real POV recording are later modules.
 
-- [ ] **Step 2: Run focused and full local verification**
+- [x] **Step 2: Run focused and full local verification**
 
 ```powershell
 py -3.12 -m compileall -q src scripts tests
@@ -690,14 +690,14 @@ Privacy/timing scan must produce no output:
 rg -n "start_time|end_time|api_key|authorization|access_token|password|https?://|steamid|steam_id" src/cs2pov/domain/job_tasks.py src/cs2pov/application/round_worker.py src/cs2pov/application/job_coordinator.py src/cs2pov/application/round_scheduler.py tests/golden/fixtures/new_round_orchestration_v1.json
 ```
 
-- [ ] **Step 3: Commit documentation**
+- [x] **Step 3: Commit documentation**
 
 ```powershell
 git add docs/ARCHITECTURE.zh.md docs/TESTING_GUIDE.zh.md tests/golden/README.zh.md
 git commit -m "docs: explain round orchestration recovery"
 ```
 
-- [ ] **Step 4: Independent review**
+- [x] **Step 4: Independent review**
 
 Ask an independent reviewer, normally Luna under the user's resource allocation, to review state legality, claim fencing, cross-file crash points, task/result closure, async cancellation, retry timing, no-write reads, Windows junction behavior, and test realism. Escalate material unresolved risks to the coordinating model. Resolve every accepted finding with a red regression first and rerun the complete gate.
 
