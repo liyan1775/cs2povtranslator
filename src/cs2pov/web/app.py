@@ -5,6 +5,20 @@ from collections.abc import Callable, Iterable
 import os
 from urllib.parse import unquote
 
+from cs2pov.application.pipeline_ports import CurrentJobTimelineApplicationService
+from cs2pov.application.review_ports import (
+    CurrentJobReviewApplicationService,
+    ReviewPortError,
+)
+from cs2pov.application.subtitle_ports import (
+    CurrentJobSubtitleApplicationService,
+    SubtitlePortError,
+)
+from cs2pov.domain.errors import DomainSchemaError
+from cs2pov.domain.job import CreateJobRequest, JobDemoSource
+from cs2pov.storage.demo_asset_repository import DemoAssetRepositoryError
+from cs2pov.storage.job_errors import JobRepositoryError
+
 from .query import (
     CurrentJobWebMediaFile,
     CurrentJobWebQueryError,
@@ -201,21 +215,54 @@ def _json_bytes(payload: object) -> bytes:
 class CurrentJobWebApplication:
     """Small WSGI application for the loopback-only local manager."""
 
-    def __init__(self, query_service: CurrentJobWebQueryService) -> None:
+    def __init__(
+        self,
+        query_service: CurrentJobWebQueryService,
+        *,
+        review_service: CurrentJobReviewApplicationService | None = None,
+        subtitle_service: CurrentJobSubtitleApplicationService | None = None,
+        timeline_service: CurrentJobTimelineApplicationService | None = None,
+        translation_service: object | None = None,
+    ) -> None:
         if not isinstance(query_service, CurrentJobWebQueryService):
             raise TypeError("query_service 必须是 CurrentJobWebQueryService。")
         self.query_service = query_service
+        self._review_application = review_service
+        self._subtitle_application = subtitle_service
+        self._timeline_application = timeline_service
+        self._translation_application = translation_service
+
+    def _review_service(self) -> CurrentJobReviewApplicationService:
+        if self._review_application is None:
+            self._review_application = CurrentJobReviewApplicationService(
+                self.query_service.repository
+            )
+        return self._review_application
+
+    def _subtitle_service(self) -> CurrentJobSubtitleApplicationService:
+        if self._subtitle_application is None:
+            self._subtitle_application = CurrentJobSubtitleApplicationService(
+                self.query_service.repository
+            )
+        return self._subtitle_application
+
+    def _timeline_service(self) -> CurrentJobTimelineApplicationService:
+        if self._timeline_application is None:
+            self._timeline_application = CurrentJobTimelineApplicationService(
+                self.query_service.repository
+            )
+        return self._timeline_application
 
     def __call__(self, environ: dict[str, object], start_response: Callable) -> Iterable[bytes]:
         method = str(environ.get("REQUEST_METHOD", "GET")).upper()
-        if method not in {"GET", "HEAD"}:
+        if method not in {"GET", "HEAD", "POST"}:
             return self._respond(
                 405,
                 {"ok": False, "error": self._error_payload(
                     CurrentJobWebQueryError(
                         "method_not_allowed",
-                        "当前接口只支持读取请求。",
-                        "请使用 GET 请求访问本地管理界面。",
+                        "当前接口不支持此请求方法。",
+                        "读取接口请使用 GET；写入接口请使用 POST。",
                         status=405,
                     )
                 )},
@@ -223,10 +270,10 @@ class CurrentJobWebApplication:
                 head=method == "HEAD",
             )
         path = str(environ.get("PATH_INFO", "/")) or "/"
-        if path == "/":
+        if path == "/" and method in {"GET", "HEAD"}:
             body = _INDEX_HTML.encode("utf-8")
             return self._respond_bytes(200, "text/html; charset=utf-8", body, start_response, method == "HEAD")
-        page = self._page(path)
+        page = self._page(path) if method in {"GET", "HEAD"} else None
         if page is not None:
             return self._respond_bytes(200, "text/html; charset=utf-8", page, start_response, method == "HEAD")
         try:
@@ -239,10 +286,24 @@ class CurrentJobWebApplication:
                     start_response,
                     head=method == "HEAD",
                 )
-            payload = self._route(path)
+            if method == "POST":
+                payload = self._write_route(path, self._request_json(environ))
+            else:
+                payload = self._route(path)
             return self._respond(200, payload, start_response, head=method == "HEAD")
         except CurrentJobWebQueryError as exc:
             return self._respond(exc.status, {"ok": False, "error": self._error_payload(exc)}, start_response, head=method == "HEAD")
+        except (ReviewPortError, SubtitlePortError, JobRepositoryError, DemoAssetRepositoryError) as exc:
+            web_error = self._application_error(exc)
+            return self._respond(web_error.status, {"ok": False, "error": self._error_payload(web_error)}, start_response, head=method == "HEAD")
+        except (DomainSchemaError, TypeError, ValueError) as exc:
+            web_error = CurrentJobWebQueryError(
+                getattr(exc, "code", "request_invalid"),
+                getattr(exc, "message", "请求数据无效。"),
+                getattr(exc, "action", "请修正请求后重试。"),
+                status=400,
+            )
+            return self._respond(web_error.status, {"ok": False, "error": self._error_payload(web_error)}, start_response, head=method == "HEAD")
         except Exception:
             exc = CurrentJobWebQueryError(
                 "web_internal_error",
@@ -266,6 +327,8 @@ class CurrentJobWebApplication:
             return self.query_service.job(parts[3])
         if len(parts) == 5 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "events":
             return self.query_service.events(parts[3])
+        if len(parts) == 5 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "exports":
+            return self.query_service.exports(parts[3])
         if len(parts) == 7 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "rounds" and parts[6] == "review":
             return self.query_service.review(parts[3], parts[5])
         if len(parts) == 6 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "rounds":
@@ -276,6 +339,210 @@ class CurrentJobWebApplication:
             "请检查访问路径后重试。",
             status=404,
         )
+
+    def _write_route(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        parts = tuple(unquote(part) for part in path.split("/") if part)
+        if parts == ("api", "v1", "jobs"):
+            return self._create_job(payload)
+        if len(parts) == 5 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "review":
+            report = self._review_service().confirm_all(
+                parts[3],
+                reviewer_label=payload.get("reviewer_label", "local-user"),
+                reason=payload.get("reason"),
+                reviewed_at=payload.get("reviewed_at"),
+                expected_manifest_fingerprint=payload.get("expected_manifest_fingerprint"),
+            )
+            return {"ok": True, "review": report.to_dict()}
+        if len(parts) == 7 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "rounds" and parts[6] == "review":
+            job_id, round_id = parts[3], parts[5]
+            if payload.get("mode") in {"confirm", "confirm_round"}:
+                report = self._review_service().confirm_round(
+                    job_id,
+                    round_id,
+                    reviewer_label=payload.get("reviewer_label", "local-user"),
+                    reason=payload.get("reason"),
+                    reviewed_at=payload.get("reviewed_at"),
+                    expected_manifest_fingerprint=payload.get("expected_manifest_fingerprint"),
+                )
+            else:
+                if "cue_id" not in payload or "action" not in payload:
+                    raise CurrentJobWebQueryError(
+                        "request_invalid",
+                        "单条复核请求缺少 Cue 或动作。",
+                        "请提供 cue_id 和 action。",
+                        status=400,
+                    )
+                report = self._review_service().submit_decision_values(
+                    job_id,
+                    cue_id=payload["cue_id"],
+                    round_id=round_id,
+                    action=payload["action"],
+                    reviewer_label=payload.get("reviewer_label", "local-user"),
+                    reason=payload.get("reason"),
+                    reviewed_at=payload.get("reviewed_at"),
+                    decision_id=payload.get("decision_id"),
+                    revised_start_us=payload.get("revised_start_us"),
+                    revised_end_us=payload.get("revised_end_us"),
+                    revised_interpreted_source=payload.get("revised_interpreted_source"),
+                    revised_translated_zh=payload.get("revised_translated_zh"),
+                    expected_manifest_fingerprint=payload.get("expected_manifest_fingerprint"),
+                )
+            return {"ok": True, "review": report.to_dict()}
+        if len(parts) == 6 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "exports" and parts[5] == "subtitles":
+            return self._export_subtitles(parts[3], payload)
+        if len(parts) == 5 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "export":
+            return self._export_subtitles(parts[3], payload)
+        if len(parts) == 6 and parts[:3] == ("api", "v1", "jobs") and parts[4] == "tasks":
+            return self._task_control(parts[3], parts[5], payload)
+        raise CurrentJobWebQueryError(
+            "route_not_found",
+            "找不到本地写入接口。",
+            "请检查访问路径后重试。",
+            status=404,
+        )
+
+    def _create_job(self, payload: dict[str, object]) -> dict[str, object]:
+        job_id = self._required_text(payload, "job_id")
+        display_name = self._required_text(payload, "display_name")
+        asset_id = self._required_text(payload, "demo_asset_id")
+        inspection = self.query_service.demo_assets.inspect_asset(asset_id)
+        if not getattr(inspection, "ok", False):
+            raise CurrentJobWebQueryError(
+                "demo_asset_unavailable",
+                "当前 Demo 素材不可用于创建 Job。",
+                "请先修复 Demo 素材完整性后重试。",
+                status=409,
+            )
+        asset = inspection.asset
+        source_ref = asset.to_ref()
+        request = CreateJobRequest(
+            job_id,
+            display_name,
+            JobDemoSource(
+                source_ref.asset_id,
+                source_ref.asset_manifest_relative_path,
+                asset.display_name,
+            ),
+        )
+        demo_path = self.query_service.demo_assets.resolve_asset(source_ref)
+        self._timeline_service().create_job_with_timeline(
+            request,
+            demo_path,
+            min_duration_seconds=payload.get("min_duration_seconds", 10.0),
+            fallback_end_time=payload.get("fallback_end_time", 1.0),
+        )
+        return {"ok": True, **self.query_service.job(job_id)}
+
+    def _export_subtitles(self, job_id: str, payload: dict[str, object]) -> dict[str, object]:
+        report = self._subtitle_service().export(
+            job_id,
+            source=payload.get("source", "draft"),
+            preset=payload.get("preset", "editing"),
+            export_scope=payload.get("export_scope", "all"),
+            selected_player_id=payload.get("selected_player_id"),
+            selected_team_number=payload.get("selected_team_number"),
+            bilingual_format=payload.get("bilingual_format", "label"),
+        )
+        return {
+            "ok": True,
+            "export": {
+                "job_id": report.job_id,
+                "source": report.source,
+                "preset": report.preset,
+                "artifacts": [entry.to_dict() for entry in report.artifacts],
+                "manifest": report.job.manifest.to_dict(),
+            },
+        }
+
+    def _task_control(
+        self, job_id: str, operation: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        service = self._translation_application
+        method = getattr(service, operation, None) if service is not None else None
+        if not callable(method):
+            raise CurrentJobWebQueryError(
+                "task_service_unavailable",
+                "当前本地服务尚未配置任务执行器。",
+                "请通过应用启动配置注入翻译执行器后重试。",
+                status=503,
+            )
+        if operation == "resume":
+            result = method(
+                job_id,
+                configuration_snapshot_id=self._required_text(
+                    payload, "configuration_snapshot_id"
+                ),
+                retry_round_ids=tuple(payload.get("retry_round_ids", ())),
+            )
+        else:
+            result = method(job_id)
+        if hasattr(result, "to_dict") and callable(result.to_dict):
+            result = result.to_dict()
+        elif hasattr(result, "manifest"):
+            result = {"job": result.manifest.to_dict()}
+        return {"ok": True, "task": result}
+
+    @staticmethod
+    def _required_text(payload: dict[str, object], key: str) -> str:
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise CurrentJobWebQueryError(
+                "request_invalid",
+                f"请求缺少有效的 {key}。",
+                f"请提供 {key} 后重试。",
+                status=400,
+            )
+        return value.strip()
+
+    @staticmethod
+    def _request_json(environ: dict[str, object]) -> dict[str, object]:
+        stream = environ.get("wsgi.input")
+        if not hasattr(stream, "read"):
+            raise CurrentJobWebQueryError(
+                "request_invalid",
+                "请求体不可读取。",
+                "请使用 JSON 请求体后重试。",
+                status=400,
+            )
+        raw_length = environ.get("CONTENT_LENGTH")
+        try:
+            length = int(raw_length) if raw_length else None
+            if length is not None and length < 0:
+                raise ValueError
+            raw = stream.read(length) if length is not None else stream.read()
+            value = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        except (UnicodeDecodeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise CurrentJobWebQueryError(
+                "request_invalid",
+                "请求体不是有效 JSON。",
+                "请发送 UTF-8 编码的 JSON 对象。",
+                status=400,
+            ) from exc
+        if not isinstance(value, dict):
+            raise CurrentJobWebQueryError(
+                "request_invalid",
+                "请求体必须是 JSON 对象。",
+                "请将请求参数放在 JSON 对象中。",
+                status=400,
+            )
+        return value
+
+    @staticmethod
+    def _application_error(exc: BaseException) -> CurrentJobWebQueryError:
+        if isinstance(exc, CurrentJobWebQueryError):
+            return exc
+        code = getattr(exc, "code", "write_failed")
+        message = getattr(exc, "message_zh", "本地写入操作失败。")
+        suggestion = getattr(exc, "suggestion_zh", "请重新读取当前 Job 后重试。")
+        status = getattr(exc, "status", None)
+        if not isinstance(status, int):
+            if code in {"job_not_found", "demo_asset_not_found", "cue_not_found", "round_not_found"}:
+                status = 404
+            elif code in {"job_write_busy", "job_manifest_conflict", "pipeline_job_changed"}:
+                status = 409
+            else:
+                status = 400
+        return CurrentJobWebQueryError(code, message, suggestion, status=status)
 
     @staticmethod
     def _media_parts(path: str) -> tuple[str, str] | None:
@@ -398,11 +665,11 @@ class CurrentJobWebApplication:
         return html.encode("utf-8")
 
     @staticmethod
-    def _error_payload(exc: CurrentJobWebQueryError) -> dict[str, object]:
+    def _error_payload(exc: object) -> dict[str, object]:
         return {
-            "code": exc.code,
-            "message_zh": exc.message_zh,
-            "suggestion_zh": exc.suggestion_zh,
+            "code": getattr(exc, "code", "web_error"),
+            "message_zh": getattr(exc, "message_zh", "本地管理服务发生错误。"),
+            "suggestion_zh": getattr(exc, "suggestion_zh", "请稍后重试。"),
         }
 
     @staticmethod
@@ -423,6 +690,7 @@ class CurrentJobWebApplication:
             404: "Not Found",
             405: "Method Not Allowed",
             409: "Conflict",
+            503: "Service Unavailable",
             500: "Internal Server Error",
         }.get(status, "Error")
         start_response(

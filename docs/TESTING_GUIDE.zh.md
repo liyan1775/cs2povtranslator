@@ -135,14 +135,16 @@ Draft/Reviewed 文本选择、玩家/队伍范围、内容哈希登记、Job 重
 `test_subtitle_policy_v050.py` 覆盖。测试使用合成新版 Job，不访问真实 Demo、ASR、
 LLM 或视频工具；真实 provider、真实 Demo 和金标准双跑留在 02D-5。
 
-## 本地 Web 复核与音频媒体测试（02E-1、02E-2）
+## 本地 Web 主流程测试（02E-1 至 02E-3）
 
-运行下面的定向测试可以验证本地查询 API、复核投影、只读页面、当前 Job 音频清单和
-受控媒体响应：
+运行下面的定向测试可以验证本地查询 API、复核投影、复核写入、导出状态、当前 Job
+音频清单和受控媒体响应：
 
 ```powershell
 py -3.12 -m pytest -o addopts= -q `
   tests/test_domain_media_v1.py `
+  tests/test_job_repository_review_v1.py `
+  tests/test_review_ports_v1.py `
   tests/test_web_query_v1.py `
   tests/test_web_http_v1.py `
   tests/test_voice_asr_ports_v1.py

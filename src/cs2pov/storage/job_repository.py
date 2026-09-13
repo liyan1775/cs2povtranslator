@@ -44,7 +44,6 @@ from cs2pov.domain.review import (
     ReviewRevisionManifest,
     ReviewedCommsTimeline,
     RoundReviewDocument,
-    compose_reviewed_timeline,
 )
 from cs2pov.domain.schema import require_path_identifier, require_sha256
 from cs2pov.domain.timeline import DemoTimeline
@@ -4126,13 +4125,23 @@ class FileSystemJobRepository:
                 round_cues = tuple(
                     cue for cue in draft.cues if cue.round_id == document.round_id
                 )
-                selected_draft = DraftCommsTimeline(
-                    draft.demo_asset_id,
-                    draft.timebase,
-                    draft.input_fingerprint,
-                    round_cues,
-                )
-                compose_reviewed_timeline(selected_draft, document.decisions)
+                cue_by_id = {cue.cue_id: cue for cue in round_cues}
+                for decision in document.decisions:
+                    cue = cue_by_id.get(decision.cue_id)
+                    if cue is None:
+                        raise DomainSchemaError(
+                            "review_decision_invalid",
+                            "复核决策引用了当前回合之外的 Cue。",
+                            "请从当前回合的待复核 Cue 中提交决策。",
+                            "decisions.cue_id",
+                        )
+                    if decision.source_result_fingerprint != cue.understanding_result_fingerprint:
+                        raise DomainSchemaError(
+                            "domain_fingerprint_mismatch",
+                            "复核决策引用了不同版本的理解结果。",
+                            "请刷新当前 Job 后基于最新 Draft 重新提交。",
+                            "decisions.source_result_fingerprint",
+                        )
                 decision_ids.extend(
                     decision.decision_id for decision in document.decisions
                 )

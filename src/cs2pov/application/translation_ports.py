@@ -22,7 +22,7 @@ from cs2pov.domain.invocation import (
     ModelInvocationRecord,
 )
 from cs2pov.domain.job import JobPhase
-from cs2pov.domain.job_tasks import RoundTaskError
+from cs2pov.domain.job_tasks import RoundTaskError, RoundTaskStatus
 from cs2pov.domain.understanding import (
     RoundUnderstandingDocument,
     UnderstandingResult,
@@ -652,3 +652,33 @@ class CurrentJobTranslationApplicationService:
                 retry_round_ids=retry_round_ids,
             )
         )
+
+    def resume(
+        self,
+        job_id: str,
+        *,
+        configuration_snapshot_id: str,
+        retry_round_ids: tuple[str, ...] = (),
+    ) -> RoundBatchReport:
+        """Resume durable task state and continue the existing scheduler run."""
+        return self.run(
+            job_id,
+            configuration_snapshot_id=configuration_snapshot_id,
+            retry_round_ids=retry_round_ids,
+        )
+
+    def cancel(self, job_id: str):
+        """Checkpoint cancellation for all currently running or retrying rounds."""
+        coordinator = JobRoundCoordinator(
+            self.repository,
+            clock=self.clock,
+            event_id_factory=self.event_id_factory,
+        )
+        with self.repository.acquire_write(
+            job_id, lease_us=self.settings.claim_lease_us
+        ) as session:
+            tasks = self.repository.load_round_tasks(job_id)
+            for task in tasks:
+                if task.status in {RoundTaskStatus.RUNNING, RoundTaskStatus.RETRY_WAIT}:
+                    coordinator.checkpoint_cancellation(task, claim=session.claim)
+            return self.repository.load_job(job_id)

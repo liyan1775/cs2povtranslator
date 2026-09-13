@@ -23,7 +23,7 @@ def create_server(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cs2pov-web",
-        description="启动当前版本 Job 的本地只读管理界面。",
+        description="启动当前版本 Job 的本地管理界面与 API。",
     )
     parser.add_argument("--workspace", required=True, help="工作区绝对路径。")
     parser.add_argument("--host", default="127.0.0.1", help="监听地址，默认只监听本机。")

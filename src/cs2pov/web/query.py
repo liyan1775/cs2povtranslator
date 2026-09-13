@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import stat
 
-from cs2pov.domain.job import JobCatalogEntry, JobInspection
+from cs2pov.domain.job import JobCatalogEntry, JobInspection, JobPhase
 from cs2pov.domain.media import AudioMediaReference
 from cs2pov.storage.demo_asset_repository import FileSystemDemoAssetRepository
 from cs2pov.storage.job_errors import JobRepositoryError
@@ -141,6 +141,16 @@ class CurrentJobWebQueryService:
             jobs = FileSystemJobRepository(self.paths, demo_assets)
         self._jobs_repository = jobs
 
+    @property
+    def repository(self) -> object:
+        """Expose the repository to application-service adapters only."""
+        return self._jobs_repository
+
+    @property
+    def demo_assets(self) -> object:
+        """Expose the DemoAsset boundary to application-service adapters only."""
+        return self._demo_assets
+
     def _workspace_payload(self, diagnostic: WorkspaceDiagnostic) -> dict[str, object]:
         workspace_id = None
         try:
@@ -181,6 +191,62 @@ class CurrentJobWebQueryService:
         except Exception as exc:
             raise self._repository_error(exc, "无法读取 Job 列表。") from exc
         return {"ok": True, "items": [_catalog_payload(value) for value in values]}
+
+    def exports(self, job_id: str) -> dict[str, object]:
+        """Return export gates and persisted final artifact references."""
+        inspection = self._require_job(job_id)
+        manifest = inspection.manifest
+        if manifest is None:  # guarded by _require_job; keep the projection explicit
+            raise CurrentJobWebQueryError(
+                "job_not_readable",
+                "当前 Job 还不能读取导出状态。",
+                "请先修复 Job 诊断中列出的文件问题。",
+                status=409,
+            )
+        draft_available = self._optional_timeline(job_id, "draft")
+        reviewed_available = self._optional_timeline(job_id, "reviewed")
+        artifacts = []
+        for artifact in manifest.final_artifacts:
+            artifacts.append(artifact.to_dict())
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "phase": manifest.phase.value,
+            "run_status": manifest.run_status.value,
+            "gates": {
+                "draft": draft_available,
+                "reviewed": reviewed_available,
+                "reviewed_subtitle_export": reviewed_available
+                and manifest.phase
+                in {
+                    JobPhase.FINAL_TIMELINE_READY,
+                    JobPhase.SUBTITLES_EXPORTED,
+                    JobPhase.GREEN_SCREEN_RENDERED,
+                    JobPhase.COMPLETED_WITHOUT_VIDEO,
+                    JobPhase.READY_FOR_RENDER,
+                    JobPhase.RENDERING,
+                    JobPhase.VIDEO_READY,
+                    JobPhase.COMPLETED_WITH_VIDEO,
+                },
+            },
+            "artifacts": artifacts,
+        }
+
+    def _optional_timeline(self, job_id: str, source: str) -> bool:
+        loader = getattr(
+            self._jobs_repository,
+            "load_draft_timeline" if source == "draft" else "load_reviewed_timeline",
+            None,
+        )
+        if not callable(loader):
+            return False
+        try:
+            loader(job_id)
+        except Exception as exc:
+            if self._is_missing_shard(exc):
+                return False
+            raise self._repository_error(exc, "无法读取当前导出门禁状态。") from exc
+        return True
 
     def job(self, job_id: str) -> dict[str, object]:
         try:

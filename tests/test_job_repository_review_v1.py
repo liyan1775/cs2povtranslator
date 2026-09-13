@@ -190,6 +190,35 @@ def test_review_registration_checks_manifest_cas_before_creating_staging(tmp_pat
     )
 
 
+def test_review_registration_accepts_partial_decisions_for_a_round(tmp_path):
+    values = _review_values(tmp_path)
+    _, repository, claim, _, draft, _, _, _ = values
+    partial = ReviewRevisionManifest(
+        "r2",
+        draft.content_fingerprint(),
+        "2026-09-01T08:00:01.000000Z",
+        ("round-001",),
+    )
+    document = RoundReviewDocument(
+        partial.review_id,
+        "round-001",
+        draft.content_fingerprint(),
+        (),
+    )
+    repository.clock.advance()
+    bundle = repository.register_review_revision(
+        "job-language",
+        partial,
+        (document,),
+        repository.load_job("job-language").manifest.content_fingerprint(),
+        True,
+        claim,
+    )
+
+    assert bundle.round_documents == (document,)
+    assert repository.load_job("job-language").manifest.active_review_id == partial.review_id
+
+
 def test_raced_revision_directory_is_never_replaced_or_activated(
     tmp_path, monkeypatch
 ):

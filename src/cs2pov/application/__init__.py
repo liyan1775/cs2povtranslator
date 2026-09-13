@@ -27,6 +27,11 @@ from .subtitle_ports import (
     render_current_srt,
     render_current_voice_activity_srt,
 )
+from .review_ports import (
+    CurrentJobReviewApplicationService,
+    ReviewPortError,
+    ReviewWriteReport,
+)
 
 __all__ = ["ForgetWorkspaceResult", "WorkspaceApplicationService", "WorkspaceSelection",
            "WorkspaceSelectionPort", "WorkspaceSelectionPortError", "WorkspaceUseCaseError", "WorkspaceView",
@@ -49,4 +54,9 @@ __all__ += [
     "export_current_subtitle_scopes",
     "microseconds_to_srt_milliseconds", "render_current_srt",
     "render_current_voice_activity_srt",
+]
+__all__ += [
+    "CurrentJobReviewApplicationService",
+    "ReviewPortError",
+    "ReviewWriteReport",
 ]

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import hashlib
+import io
 from pathlib import Path
+from types import SimpleNamespace
 
 from cs2pov.domain.media import AudioMediaReference
 from cs2pov.storage.demo_asset_repository import FileSystemDemoAssetRepository
@@ -54,6 +56,40 @@ def test_http_api_returns_json_for_health_and_job_routes(tmp_path: Path):
     assert status == "200 OK"
     assert headers["Content-Type"] == "application/json; charset=utf-8"
     assert json.loads(body)["review"]["items"][1]["decision"]["action"] == "edit"
+
+    status, _, body = _call(app, "/api/v1/jobs/job-web/exports")
+    assert status == "200 OK"
+    exports = json.loads(body)
+    assert exports["gates"]["draft"] is True
+    assert exports["gates"]["reviewed"] is False
+
+
+def test_http_api_accepts_review_write_payload_through_application_service(tmp_path: Path):
+    class _ReviewWrites:
+        def submit_decision_values(self, job_id, **kwargs):
+            assert job_id == "job-web"
+            assert kwargs["round_id"] == "round-001"
+            return SimpleNamespace(
+                to_dict=lambda: {
+                    "job_id": job_id,
+                    "review_id": "review-new",
+                    "complete": False,
+                }
+            )
+
+    app = CurrentJobWebApplication(_service(tmp_path), review_service=_ReviewWrites())
+    payload = json.dumps(
+        {"cue_id": "cue-early", "action": "accept"}, ensure_ascii=False
+    ).encode("utf-8")
+    status, headers, body = _call(
+        app,
+        "/api/v1/jobs/job-web/rounds/round-001/review",
+        method="POST",
+        **{"wsgi.input": io.BytesIO(payload), "CONTENT_LENGTH": str(len(payload))},
+    )
+    assert status == "200 OK"
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
+    assert json.loads(body)["review"]["review_id"] == "review-new"
 
 
 def test_http_api_has_stable_errors_and_accessible_index(tmp_path: Path):
