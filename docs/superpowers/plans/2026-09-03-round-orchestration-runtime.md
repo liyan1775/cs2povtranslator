@@ -2,7 +2,7 @@
 
 > **Execution protocol:** Implement each task with failing behavioral tests, focused changes, verification and independent review under `docs/DEVELOPMENT_WORKFLOW.zh.md`. Independent modules may be delegated with disjoint write scopes. Optional agent skills are not runtime or workflow dependencies.
 
-**Status (2026-09-13):** 02C-A is merged through PR #22 (`373d556`), with all eight PR checks and post-merge CI run `34019305517` passing. Tasks 1–6 of 02C-B are implemented on the active feature branch: strict task persistence, the privacy-minimal worker port, durable coordination, bounded scheduling, retries, cancellation, claim heartbeats, and process-level recovery replay. Task 7 local verification and independent review are complete; GitHub CI, merge, and post-merge proof remain pending. Provider-specific integration belongs to task 5.3 of the overall plan.
+**Status (2026-09-13):** 02C-A is merged through PR #22 (`373d556`), with all eight PR checks and post-merge CI run `34019305517` passing. 02C-B is complete through PR #23 (`19476f1`): strict task persistence, the privacy-minimal worker port, durable coordination, bounded scheduling, retries, cancellation, claim heartbeats, process-level recovery replay, documentation, and verification are delivered. The merge commit's post-merge CI run `34744631378` passed on Ubuntu 3.11/3.12/3.13 and Windows 3.12. Provider-specific integration belongs to task 5.3 of the overall plan.
 
 **Goal:** Persist round tasks and run them with bounded parallelism, deterministic retries, cancellation, crash recovery, immediate successful checkpoints, and stable aggregation without requiring a real model API.
 
@@ -644,7 +644,7 @@ git commit -m "test: gate round orchestration recovery"
 
 ### Task 7: Documentation, complete verification, independent review, and GitHub merge
 
-**Delivery (in progress, 2026-09-13):** Architecture, testing, and golden-fixture documentation now describe the 02C-B runtime boundary and replay command. Full local verification and independent review have passed; GitHub CI, merge, and post-merge proof remain pending.
+**Delivery (complete, 2026-09-13):** Architecture, testing, and golden-fixture documentation describe the 02C-B runtime boundary and replay command. Full local verification, independent review, all pre-merge checks, the merge, and post-merge proof have passed.
 
 **Files:**
 - Modify: `docs/ARCHITECTURE.zh.md`
@@ -701,7 +701,7 @@ git commit -m "docs: explain round orchestration recovery"
 
 Ask an independent reviewer, normally Luna under the user's resource allocation, to review state legality, claim fencing, cross-file crash points, task/result closure, async cancellation, retry timing, no-write reads, Windows junction behavior, and test realism. Escalate material unresolved risks to the coordinating model. Resolve every accepted finding with a red regression first and rerun the complete gate.
 
-- [ ] **Step 5: GitHub handoff and post-merge proof**
+- [x] **Step 5: GitHub handoff and post-merge proof**
 
 Push the feature branch, create a PR against `master`, and list the deliberate non-scope in the PR body. Wait for all Ubuntu 3.11/3.12/3.13 and Windows 3.12 checks. Merge only when green, fetch `origin/master`, verify the reviewed head is an ancestor, then wait for the merge commit's own CI to pass.
 
