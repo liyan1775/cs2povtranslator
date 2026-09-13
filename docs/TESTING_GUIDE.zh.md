@@ -77,6 +77,20 @@ round orchestration replay passed
 `test_round_scheduler_recovery_v1.py` 覆盖；这些测试使用注入时钟和异步 worker，
 不依赖真实 provider 或墙上时间等待。
 
+## 现有管线 Demo/回合端口测试（02D-1）
+
+运行下面的测试可以验证旧版 Demo 解析输出到当前版本 `DemoTimeline` 的转换，以及
+新版 Job 的 claim 保护和时间线持久化：
+
+```powershell
+py -3.12 -m pytest -o addopts= tests/test_pipeline_ports_v1.py -q
+```
+
+测试使用 fake parser，不需要 demoparser2 或真实 Demo。它覆盖 tick 回合、fallback
+回合、warmup/短回合边界、浮点秒到整数微秒的确定性转换、玩家和地图元数据校验、
+解析失败不创建半成品 Job，以及新 Job 的 `timeline/` 文件发布。旧版管线回归仍由
+原有测试套件覆盖。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：
