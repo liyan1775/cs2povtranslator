@@ -120,6 +120,21 @@ py -3.12 -m pytest -o addopts= tests/test_translation_ports_v1.py -q
 由既有 `test_round_scheduler_parallel_v1.py` 与 `test_round_scheduler_recovery_v1.py`
 继续覆盖。真实 provider、限流行为和金标准双跑留在 02D-5。
 
+## 字幕导出与当前 Job 产物测试（02D-4）
+
+运行下面的测试可以验证当前 Draft/Reviewed 时间线到字幕文件的适配，以及字幕文件与
+Job manifest 的发布边界：
+
+```powershell
+py -3.12 -m pytest -o addopts= tests/test_subtitle_ports_v1.py tests/test_subtitle_job_export_v1.py -q
+```
+
+定向测试覆盖整数微秒到 SRT 毫秒的舍入、既有字幕策略、整场和逐回合 timebase、
+Draft/Reviewed 文本选择、玩家/队伍范围、内容哈希登记、Job 重开、重复产物保护和
+文件写入失败清理。旧版字幕行为继续由 `test_subtitle.py` 与
+`test_subtitle_policy_v050.py` 覆盖。测试使用合成新版 Job，不访问真实 Demo、ASR、
+LLM 或视频工具；真实 provider、真实 Demo 和金标准双跑留在 02D-5。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

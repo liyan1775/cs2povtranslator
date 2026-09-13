@@ -11,6 +11,22 @@ from .translation_ports import (
     TranslationPortError,
     TranslationProviderError,
 )
+from .subtitle_ports import (
+    CurrentSubtitleCue,
+    CurrentJobSubtitleApplicationService,
+    CurrentSubtitleExportReport,
+    CurrentVoiceActivity,
+    SubtitlePortError,
+    adapt_draft_timeline,
+    adapt_reviewed_timeline,
+    adapt_voice_activities,
+    export_current_subtitle_preset,
+    export_current_subtitle_scopes,
+    format_demo_time_srt,
+    microseconds_to_srt_milliseconds,
+    render_current_srt,
+    render_current_voice_activity_srt,
+)
 
 __all__ = ["ForgetWorkspaceResult", "WorkspaceApplicationService", "WorkspaceSelection",
            "WorkspaceSelectionPort", "WorkspaceSelectionPortError", "WorkspaceUseCaseError", "WorkspaceView",
@@ -23,4 +39,14 @@ __all__ += [
     "OpenAICompatibleTranslationProvider",
     "TranslationPortError",
     "TranslationProviderError",
+]
+__all__ += [
+    "CurrentSubtitleCue", "CurrentJobSubtitleApplicationService",
+    "CurrentSubtitleExportReport", "CurrentVoiceActivity", "SubtitlePortError",
+    "adapt_draft_timeline",
+    "adapt_reviewed_timeline", "adapt_voice_activities",
+    "export_current_subtitle_preset", "format_demo_time_srt",
+    "export_current_subtitle_scopes",
+    "microseconds_to_srt_milliseconds", "render_current_srt",
+    "render_current_voice_activity_srt",
 ]

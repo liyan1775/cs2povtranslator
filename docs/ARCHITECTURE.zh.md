@@ -228,3 +228,23 @@ worker 只接收当前回合的最小语音投影和安全配置快照，不接�
 `LegacyRoundTranslationWorker` 支持旧接口常用的 `translations` 返回形状，同时补齐理解来源、置信度、证据和 warning 字段。`dry_run` 与跳过翻译会生成可审计的占位结果；缺少 provider、服务配置错误、服务繁忙、网络故障和返回格式错误分别映射为稳定的 `RoundTaskError`，原始异常只保留在内存因果链中。重试由既有 `RoundScheduler` 根据任务历史和固定的配置快照执行，不在重试之间静默更换模型或 provider。
 
 `CurrentJobTranslationApplicationService` 只允许从 `CONTEXT_READY` 或 `UNDERSTANDING_TRANSLATING` 启动，先读取已登记配置，再使用 claim-fenced coordinator 和有界并发 scheduler。回合结果按完成顺序立即保存，但最终任务、理解文档、调用记录和 Job 阶段仍按 Demo 回合规范顺序与完整数据图校验；取消、进程恢复、显式重试和逆序完成继续沿用 02C-B 的状态契约。字幕导出、Draft timeline 和真实 Demo/模型双跑仍属于 02D-4 至 02D-5。
+
+## 字幕导出与当前版本产物登记（02D-4）
+
+02D-4 新增 `application.subtitle_ports`，把当前 Job 的 `DraftCommsTimeline` 和
+`ReviewedCommsTimeline` 适配为旧字幕策略所需的内存对象。Draft 使用模型翻译，
+Reviewed 使用复核后的最终翻译；`asr_original`、翻译文本、玩家名称和队伍信息仍保持
+独立。适配过程中可以短暂使用浮点秒调用既有策略，持久化时间始终保留为整数 Demo
+微秒。
+
+SRT 时间格式在当前适配层统一使用整数微秒到毫秒的半毫秒向上取整。整场文件使用
+`demo_global` timebase；逐回合文件按回合起点归零并登记为 `round_local`。既有
+`editing`、`review`、`compact` 和 `debug` 预设，以及 bilingual、compact、zh、
+`zh_clean`、original、debug 和 voice activity 格式继续可用。
+
+`CurrentJobSubtitleApplicationService` 负责读取语言图、生成整场和逐回合内容，并通过
+`FileSystemJobRepository.publish_final_artifacts` 发布。仓储先校验 manifest CAS、路径和
+内容哈希，再写入新文件，最后登记 `FinalArtifactEntry`；已存在的同路径不同内容不会被
+覆盖。导出准备或文件写入失败时，既有有效时间线和已登记产物保持可重新打开，新增的
+未登记文件会被清理。成功的 Reviewed 导出可将 `FINAL_TIMELINE_READY` 推进到
+`SUBTITLES_EXPORTED`；当前阶段不负责视频成片或旧 Job 自动迁移。
