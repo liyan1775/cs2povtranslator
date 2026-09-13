@@ -8,6 +8,7 @@
 - `FAQ.zh.md`：常见问题
 - `MODEL_MANAGEMENT.zh.md`：Whisper 模型缓存、大小、质量档位
 - `ASR_BENCHMARK.zh.md`：base/small/medium 等模型对比实验
+- `WEB_APPLICATION.zh.md`：02E-1 本地管理界面和查询接口
 
 ## 开发与架构
 
@@ -17,6 +18,7 @@
 - `plans/2026-08-30-understanding-translation-architecture-design.zh.md`：理解翻译与模块化重构的已确认架构设计
 - `plans/2026-08-30-understanding-translation-implementation-plan.zh.md`：分阶段实施、测试和回滚计划
 - `plans/2026-08-31-demo-asset-library-design.zh.md`：01E DemoAsset 素材库与 01E-B Pipeline 接入边界设计
+- `superpowers/plans/2026-09-13-local-web-application-surface.md`：02E 本地管理界面基础与查询层实施计划
 - `tasks/LUNA-01E-A-DEMO-ASSET-LIBRARY.zh.md`：01E-A 内容寻址素材库实施与验收计划
 - `DEVELOPMENT_WORKFLOW.zh.md`：开发工作流
 - `TESTING_GUIDE.zh.md`：测试指南
