@@ -155,6 +155,34 @@ Job 重开后的媒体读取、Cue 时间范围、未知媒体 ID 拒绝、完�
 响应和无效范围处理。测试使用合成音频，不需要真实 Demo、ASR、LLM 或浏览器；浏览器
 级复核流程仍属于 02E-4 的验收范围。
 
+## 浏览器级主流程验收（02E-4）
+
+浏览器验收使用固定版本的 Playwright Chromium 和 `pytest-playwright`，只对本地 WSGI
+服务和合成 Web Job 夹具运行，不访问真实 Demo、模型 API 或外部 provider。安装浏览器
+验收依赖并下载 Chromium：
+
+```powershell
+py -3.12 -m pip install -e ".[dev,browser]"
+py -3.12 -m playwright install chromium
+```
+
+显式设置环境变量后运行浏览器门禁；不设置该变量时，浏览器测试会在普通全量测试中
+跳过：
+
+```powershell
+$env:CS2POV_RUN_BROWSER_E2E = "1"
+py -3.12 -m pytest tests/test_web_browser_e2e.py -m e2e `
+  --browser chromium `
+  --tracing retain-on-failure `
+  --screenshot only-on-failure `
+  --output artifacts/browser-e2e
+```
+
+验收覆盖 Job 列表加载、刷新后状态恢复、回合复核页面、持久音频状态和 Reviewed 导出
+门禁查询。失败时的截图、追踪和其他 Playwright 产物写入 `artifacts/browser-e2e/`，该
+目录不进入版本库。真实 Demo、真实 provider、模型 API 配置和任务执行器仍需单独的
+真实管线验收。
+
 ## 真实 demo smoke
 
 先初始化/选择工作区；默认 Job 写入工作区 `jobs/`，模型缓存和临时音频也跟随工作区。建议先只跑前 3 个含语音回合：

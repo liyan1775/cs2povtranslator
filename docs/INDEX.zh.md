@@ -8,7 +8,7 @@
 - `FAQ.zh.md`：常见问题
 - `MODEL_MANAGEMENT.zh.md`：Whisper 模型缓存、大小、质量档位
 - `ASR_BENCHMARK.zh.md`：base/small/medium 等模型对比实验
-- `WEB_APPLICATION.zh.md`：02E-1 至 02E-3 本地管理界面、查询接口、复核写入和字幕导出入口
+- `WEB_APPLICATION.zh.md`：02E-1 至 02E-4 本地管理界面、查询接口、复核写入、字幕导出入口和浏览器主流程验收
 
 ## 开发与架构
 
